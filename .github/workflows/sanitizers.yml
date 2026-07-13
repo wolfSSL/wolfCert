@@ -1,0 +1,134 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: Sanitizers
+
+# Memory- and thread-safety runs. Slower than the PR gate (instrumented builds
+# rebuild wolfSSL and run tests 2-5x slower), so they live on a nightly cadence.
+on:
+  schedule:
+    - cron: "30 3 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: sanitizers-${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  WOLFSSL_REF: master
+
+jobs:
+  asan-ubsan:
+    name: ASan + UBSan (full ctest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ASAN_OPTIONS: halt_on_error=1:detect_leaks=1:abort_on_error=1
+      UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config python3
+      - name: Build/restore wolfSSL (full)
+        uses: ./.github/actions/build-wolfssl
+        with:
+          config: full
+          ref: ${{ env.WOLFSSL_REF }}
+          # nightly.yml owns saving the shared `full` cache; don't also save it
+          # here (concurrent scheduled runs would race on the same key).
+          save: "false"
+      - name: Build (ASan+UBSan) & test
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build \
+            -DWITH_WOLFSSL="$WOLFSSL_PREFIX" \
+            -DWOLFCERT_ENABLE_TESTS=ON \
+            -DWOLFCERT_BUILD_SHARED=OFF \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CROSSCOMPILING_EMULATOR="$PWD/scripts/ci/sigpipe-launcher.sh" \
+            -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all -g"
+          cmake --build build -j "$(nproc)"
+          ctest --test-dir build -j "$(nproc)" --output-on-failure
+
+  tsan:
+    name: ThreadSanitizer (roundtrips)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TSAN_OPTIONS: halt_on_error=1:second_deadlock_stack=1
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config python3
+      # wolfSSL must ALSO be TSAN-instrumented, else races inside it are
+      # invisible and uninstrumented-library false negatives appear.
+      - name: Build/restore wolfSSL (full-tsan)
+        uses: ./.github/actions/build-wolfssl
+        with:
+          config: full-tsan
+          ref: ${{ env.WOLFSSL_REF }}
+          save: "true"
+      - name: Build (TSAN) & run threaded integration tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build \
+            -DWITH_WOLFSSL="$WOLFSSL_PREFIX" \
+            -DWOLFCERT_ENABLE_TESTS=ON \
+            -DWOLFCERT_BUILD_SHARED=OFF \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CROSSCOMPILING_EMULATOR="$PWD/scripts/ci/sigpipe-launcher.sh" \
+            -DCMAKE_C_FLAGS="-fsanitize=thread -g -O1"
+          cmake --build build -j "$(nproc)"
+          # The roundtrip tests spin the server on a background pthread while the
+          # client drives it on the main thread -> the real concurrency surface.
+          ctest --test-dir build -j "$(nproc)" --output-on-failure \
+            -R 'roundtrip|tls_http'
+
+  valgrind:
+    name: valgrind (representative subset)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config python3 valgrind
+      - name: Build/restore wolfSSL (full)
+        uses: ./.github/actions/build-wolfssl
+        with:
+          config: full
+          ref: ${{ env.WOLFSSL_REF }}
+          save: "false"   # nightly.yml owns the shared `full` cache
+      - name: Build (no sanitizer) & run under valgrind
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build \
+            -DWITH_WOLFSSL="$WOLFSSL_PREFIX" \
+            -DWOLFCERT_ENABLE_TESTS=ON \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_CROSSCOMPILING_EMULATOR="$PWD/scripts/ci/sigpipe-launcher.sh"
+          cmake --build build -j "$(nproc)"
+          # wolfCert-focused unit tests only. The TLS/SCEP *roundtrips* drive
+          # wolfSSL's TLS + AES-NI/asm crypto through Memcheck, a well-known
+          # source of false "uninitialised value" reports (and large slowdowns);
+          # covering them here would need a wolfSSL suppression file. They are
+          # already exercised under ASan/UBSan and TSAN above.
+          rc=0
+          for bin in test_smoke test_keygen test_csr test_store test_parse_negative \
+                     test_scep_msg; do
+            path="build/tests/$bin"
+            [ -x "$path" ] || { echo "skip (not built): $bin"; continue; }
+            echo "== valgrind $bin =="
+            valgrind --leak-check=full --errors-for-leak-kinds=definite \
+              --error-exitcode=1 -q "$path" || rc=1
+          done
+          exit "$rc"

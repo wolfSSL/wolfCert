@@ -143,10 +143,17 @@ test_est_LDADD    = libwolfcert.la $(WOLFSSL_LIBS) -lpthread
 test_csr_attrs_SOURCES = tests/unit/test_csr_attrs.c
 test_csr_attrs_LDADD   = libwolfcert.la $(WOLFSSL_LIBS)
 if WOLFCERT_HAVE_SERVER
-check_PROGRAMS += test_est_roundtrip test_est_pha_roundtrip test_est_async_roundtrip \
-                  test_est_csr_attrs_roundtrip test_est_mldsa_roundtrip
+check_PROGRAMS += test_est_roundtrip test_est_tls_roundtrip test_est_mtls_roundtrip \
+                  test_est_pha_roundtrip test_est_async_roundtrip \
+                  test_est_csr_attrs_roundtrip test_est_csr_attrs_apply_roundtrip \
+                  test_est_csr_attrs_enforce test_est_chunked_robustness \
+                  test_est_pending_roundtrip test_est_mldsa_roundtrip
 test_est_roundtrip_SOURCES = tests/integration/test_est_roundtrip.c
 test_est_roundtrip_LDADD   = libwolfcert.la $(WOLFSSL_LIBS) -lpthread
+test_est_tls_roundtrip_SOURCES = tests/integration/test_est_tls_roundtrip.c
+test_est_tls_roundtrip_LDADD   = libwolfcert.la $(WOLFSSL_LIBS) -lpthread
+test_est_mtls_roundtrip_SOURCES = tests/integration/test_est_mtls_roundtrip.c
+test_est_mtls_roundtrip_LDADD   = libwolfcert.la $(WOLFSSL_LIBS) -lpthread
 test_est_mldsa_roundtrip_SOURCES = tests/integration/test_est_mldsa_roundtrip.c
 test_est_mldsa_roundtrip_LDADD   = libwolfcert.la $(WOLFSSL_LIBS) -lpthread
 test_est_pha_roundtrip_SOURCES = tests/integration/test_est_pha_roundtrip.c
@@ -155,6 +162,14 @@ test_est_async_roundtrip_SOURCES = tests/integration/test_est_async_roundtrip.c
 test_est_async_roundtrip_LDADD   = libwolfcert.la $(WOLFSSL_LIBS) -lpthread
 test_est_csr_attrs_roundtrip_SOURCES = tests/integration/test_est_csr_attrs_roundtrip.c
 test_est_csr_attrs_roundtrip_LDADD   = libwolfcert.la $(WOLFSSL_LIBS) -lpthread
+test_est_csr_attrs_apply_roundtrip_SOURCES = tests/integration/test_est_csr_attrs_apply_roundtrip.c
+test_est_csr_attrs_apply_roundtrip_LDADD   = libwolfcert.la $(WOLFSSL_LIBS) -lpthread
+test_est_csr_attrs_enforce_SOURCES = tests/integration/test_est_csr_attrs_enforce.c
+test_est_csr_attrs_enforce_LDADD   = libwolfcert.la $(WOLFSSL_LIBS) -lpthread
+test_est_chunked_robustness_SOURCES = tests/integration/test_est_chunked_robustness.c
+test_est_chunked_robustness_LDADD   = libwolfcert.la $(WOLFSSL_LIBS) -lpthread
+test_est_pending_roundtrip_SOURCES = tests/integration/test_est_pending_roundtrip.c
+test_est_pending_roundtrip_LDADD   = libwolfcert.la $(WOLFSSL_LIBS) -lpthread
 endif
 endif
 

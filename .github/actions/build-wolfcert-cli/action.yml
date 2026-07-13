@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: build-wolfcert-cli
+description: >
+  Build wolfSSL (cached, config `full`) and wolfCert with the CLIs and test
+  server enabled, then export WOLFCERT_BUILD so the interop scripts'
+  wolfcert_bin() helper resolves wolfcert-client / wolfcert-server.
+
+inputs:
+  wolfssl-ref:
+    description: "wolfSSL git ref to build"
+    required: false
+    default: master
+
+runs:
+  using: composite
+  steps:
+    - name: Install build dependencies
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential cmake pkg-config python3
+
+    - name: Build/restore wolfSSL (full)
+      uses: ./.github/actions/build-wolfssl
+      with:
+        config: full
+        ref: ${{ inputs.wolfssl-ref }}
+        save: "false"   # restore-only: nightly.yml owns the shared `full` cache
+                        # (interop's 5 jobs run concurrently and would otherwise
+                        # race to save the same key).
+
+    - name: Build wolfCert (CLIs + server)
+      shell: bash
+      run: |
+        set -euo pipefail
+        cmake -S . -B build \
+          -DWITH_WOLFSSL="$WOLFSSL_PREFIX" \
+          -DWOLFCERT_ENABLE_CLI=ON \
+          -DWOLFCERT_ENABLE_SERVER=ON
+        cmake --build build -j "$(nproc)"
+        echo "WOLFCERT_BUILD=${{ github.workspace }}/build" >> "$GITHUB_ENV"
+        # wolfCert links wolfSSL from the install prefix; make it findable at
+        # runtime for the CLI binaries the interop scripts invoke.
+        echo "LD_LIBRARY_PATH=$WOLFSSL_PREFIX/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"

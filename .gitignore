@@ -1,8 +1,9 @@
-# Build directories
-build/
-build-*/
-_build/
-out/
+# Build directories (anchored to the repo root so they don't match unrelated
+# paths such as .github/actions/build-*/).
+/build/
+/build-*/
+/_build/
+/out/
 
 # CMake
 CMakeCache.txt
@@ -61,6 +62,12 @@ cmake/wolfCertTargets.cmake
 # CLI binaries produced by either build system
 /wolfcert-client
 /wolfcert-server
+
+# CI scratch: wolfSSL sources/installs and compiler caches produced by
+# scripts/ci/build-wolfssl.sh and the workflows (never committed).
+.wolfssl-src/
+.wolfssl-install/
+.ccache/
 
 # Editors / OS
 .vscode/

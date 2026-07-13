@@ -1,0 +1,140 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: Interop
+
+# Third-party EST/SCEP interop. Best-effort: a dependency that fails to install
+# makes its script exit 77 (the automake "skip" convention wired into
+# tests/interop/lib/common.sh via need()), which we treat as a neutral pass.
+# A real interop regression (any other non-zero) fails the job.
+on:
+  schedule:
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: interop-${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  WOLFSSL_REF: master
+
+jobs:
+  # OpenSSL is always present -> a cheap lower-bound cross-check.
+  openssl:
+    name: openssl cms/pkcs7 cross-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/build-wolfcert-cli
+        with:
+          wolfssl-ref: ${{ env.WOLFSSL_REF }}
+      - name: Run openssl_cms.sh
+        run: |
+          set +e
+          bash tests/interop/openssl_cms.sh; rc=$?
+          [ "$rc" -eq 77 ] && { echo "::notice::openssl_cms skipped (dep missing)"; exit 0; }
+          exit "$rc"
+
+  micromdm-scep:
+    name: micromdm/scep
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/build-wolfcert-cli
+        with:
+          wolfssl-ref: ${{ env.WOLFSSL_REF }}
+      - name: Install micromdm scep
+        continue-on-error: true
+        run: sudo apt-get update && sudo apt-get install -y scep
+      - name: Run scep_micromdm.sh
+        run: |
+          set +e
+          bash tests/interop/scep_micromdm.sh; rc=$?
+          [ "$rc" -eq 77 ] && { echo "::notice::micromdm/scep skipped (dep missing)"; exit 0; }
+          exit "$rc"
+
+  globalsign-est:
+    name: globalsign/est
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/build-wolfcert-cli
+        with:
+          wolfssl-ref: ${{ env.WOLFSSL_REF }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "stable"
+      - name: Install globalsign est (estserver/estclient)
+        continue-on-error: true
+        run: |
+          go install github.com/globalsign/est/cmd/estserver@latest
+          go install github.com/globalsign/est/cmd/estclient@latest
+      - name: Run est_globalsign.sh
+        run: |
+          # setup-go puts binaries in $(go env GOPATH)/bin. The script uses
+          # GLOBALSIGN_EST_BIN_DIR to disambiguate from libest's same-named bins.
+          GLOBALSIGN_EST_BIN_DIR="$(go env GOPATH)/bin"
+          export GLOBALSIGN_EST_BIN_DIR
+          export PATH="$GLOBALSIGN_EST_BIN_DIR:$PATH"
+          set +e
+          bash tests/interop/est_globalsign.sh; rc=$?
+          [ "$rc" -eq 77 ] && { echo "::notice::globalsign/est skipped (dep missing)"; exit 0; }
+          exit "$rc"
+
+  libest:
+    name: cisco/libest
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/build-wolfcert-cli
+        with:
+          wolfssl-ref: ${{ env.WOLFSSL_REF }}
+      - name: Build Cisco libest from source
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y libssl-dev
+          git clone --depth 1 https://github.com/cisco/libest "$RUNNER_TEMP/libest"
+          cd "$RUNNER_TEMP/libest"
+          ./configure --prefix="$RUNNER_TEMP/libest-install" --with-ssl-dir=/usr
+          make -j "$(nproc)"
+          make install
+          echo "$RUNNER_TEMP/libest-install/bin" >> "$GITHUB_PATH"
+      - name: Run est_libest.sh
+        run: |
+          set +e
+          bash tests/interop/est_libest.sh; rc=$?
+          [ "$rc" -eq 77 ] && { echo "::notice::libest skipped (dep missing)"; exit 0; }
+          exit "$rc"
+
+  stepca:
+    name: smallstep/step-ca
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/build-wolfcert-cli
+        with:
+          wolfssl-ref: ${{ env.WOLFSSL_REF }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "stable"
+      - name: Install step-ca and step CLI
+        continue-on-error: true
+        run: |
+          go install github.com/smallstep/certificates/cmd/step-ca@latest
+          go install github.com/smallstep/cli/cmd/step@latest
+      - name: Run est_stepca.sh
+        run: |
+          gobin="$(go env GOPATH)/bin"
+          export PATH="$gobin:$PATH"
+          set +e
+          bash tests/interop/est_stepca.sh; rc=$?
+          [ "$rc" -eq 77 ] && { echo "::notice::step-ca skipped (dep missing)"; exit 0; }
+          exit "$rc"

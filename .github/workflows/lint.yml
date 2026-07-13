@@ -1,0 +1,56 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: Lint
+
+# Cheap, wolfSSL-free checks that fail fast before the expensive build matrix
+# matters: source license headers and CMake<->autoconf source-list parity.
+on:
+  # See pr.yml: push only on default branches so PR runs aren't doubled.
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+
+concurrency:
+  group: lint-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  license-headers:
+    name: GPL license headers
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check every C source opens with the GPL block
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=0
+          while IFS= read -r f; do
+            hdr="$(head -n 20 "$f")"
+            if ! grep -q "wolfSSL Inc." <<<"$hdr" \
+               || ! grep -q "GNU General Public License" <<<"$hdr"; then
+              echo "MISSING license header: $f"
+              missing=1
+            fi
+          done < <(git ls-files 'src/*.c' 'src/**/*.c' 'wolfcert/*.h' \
+                     'cli/*.c' 'tests/**/*.c' 'tests/**/*.h')
+          if [ "$missing" -ne 0 ]; then
+            echo "One or more sources lack the GPL copyright block (copy it"
+            echo "verbatim from any existing .c/.h)."
+            exit 1
+          fi
+          echo "license headers OK"
+
+  buildsystem-parity:
+    name: CMake <-> autoconf source parity
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check library source lists match
+        run: scripts/ci/check-buildsystem-parity.sh

@@ -1,0 +1,107 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: build-wolfssl
+description: >
+  Build and cache a named wolfSSL configuration for wolfCert. The install
+  prefix is cached (via actions/cache) keyed on the resolved wolfSSL commit
+  plus a hash of the exact ./configure flags, so a hit skips the whole build.
+  On pull requests the cache is restore-only; scheduled runs pass save=true to
+  (re)seed it. Exposes the install prefix as the `prefix` output and the
+  WOLFSSL_PREFIX environment variable.
+
+inputs:
+  config:
+    description: "wolfSSL config name understood by scripts/ci/build-wolfssl.sh"
+    required: true
+  ref:
+    description: "wolfSSL git ref to build (branch, tag or SHA)"
+    required: false
+    default: master
+  save:
+    description: "Save the cache after a miss (true on scheduled reseed, false on PR)"
+    required: false
+    default: "false"
+
+outputs:
+  prefix:
+    description: "Absolute path to the wolfSSL install prefix"
+    value: ${{ steps.meta.outputs.prefix }}
+  cache-hit:
+    description: "Whether the wolfSSL prefix was restored from cache"
+    value: ${{ steps.restore.outputs.cache-hit }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve flags, wolfSSL commit and cache key
+      id: meta
+      shell: bash
+      run: |
+        set -euo pipefail
+        script="${GITHUB_ACTION_PATH}/../../../scripts/ci/build-wolfssl.sh"
+        repo="${WOLFSSL_REPO:-https://github.com/wolfSSL/wolfssl.git}"
+
+        # Exact configure flags -> the single source of truth for the key.
+        flags="$("$script" --print-flags "${{ inputs.config }}")"
+
+        # Resolve the ref to a commit so a moving branch (master) refreshes the
+        # cache when upstream advances. A raw 40-hex SHA is used as-is (it
+        # cannot be ls-remote'd); for a branch/tag we REQUIRE resolution to
+        # succeed -- otherwise a transient network failure would silently fall
+        # back to the literal ref, producing a cache key that never refreshes.
+        ref='${{ inputs.ref }}'
+        if printf '%s' "$ref" | grep -Eq '^[0-9a-f]{40}$'; then
+          sha="$ref"
+        else
+          sha="$(git ls-remote "$repo" "$ref" | head -1 | awk '{print $1}')"
+          if [ -z "$sha" ]; then
+            echo "::error::could not resolve wolfSSL ref '$ref' via git ls-remote $repo" >&2
+            exit 1
+          fi
+        fi
+
+        cfg_hash="$(printf '%s\n%s\n%s\n%s\n%s\n%s\n' \
+            "$sha" "$flags" "${CC:-}" "${CFLAGS:-}" "${RUNNER_OS}" "${RUNNER_ARCH}" \
+            | sha256sum | cut -c1-16)"
+
+        prefix="${GITHUB_WORKSPACE}/.wolfssl-install/${{ inputs.config }}"
+        key="wolfssl-${RUNNER_OS}-${RUNNER_ARCH}-${{ inputs.config }}-${sha:0:12}-${cfg_hash}"
+
+        {
+          echo "prefix=$prefix"
+          echo "sha=$sha"
+          echo "key=$key"
+        } >> "$GITHUB_OUTPUT"
+
+    # Exact-key match only (no restore-keys): a stale prefix from a different
+    # wolfSSL commit or flag set would carry a valid-looking wolfssl.pc, and the
+    # idempotent build script would then short-circuit on it and silently use
+    # the wrong config. Forcing a clean rebuild on any key change avoids that.
+    - name: Restore cached wolfSSL prefix
+      id: restore
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ steps.meta.outputs.prefix }}
+        key: ${{ steps.meta.outputs.key }}
+
+    - name: Build wolfSSL (cache miss)
+      if: steps.restore.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        "${GITHUB_ACTION_PATH}/../../../scripts/ci/build-wolfssl.sh" \
+          "${{ inputs.config }}" \
+          --prefix "${{ steps.meta.outputs.prefix }}" \
+          --ref "${{ inputs.ref }}"
+
+    - name: Save wolfSSL prefix to cache (reseed)
+      if: inputs.save == 'true' && steps.restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ steps.meta.outputs.prefix }}
+        key: ${{ steps.meta.outputs.key }}
+
+    - name: Export prefix
+      shell: bash
+      run: |
+        echo "WOLFSSL_PREFIX=${{ steps.meta.outputs.prefix }}" >> "$GITHUB_ENV"
+        echo "PKG_CONFIG_PATH=${{ steps.meta.outputs.prefix }}/lib/pkgconfig:${PKG_CONFIG_PATH:-}" >> "$GITHUB_ENV"

@@ -110,6 +110,173 @@ void wolfcert_clear_error(void)
 }
 
 
+/* ---- IP literal parsing ------------------------------------------------- */
+
+/* One decimal octet, refusing an octal-ambiguous leading zero. Returns the
+ * value or -1, advancing *p. */
+static int parse_octet(const char** p)
+{
+    const char* s = *p;
+    int v = 0;
+    int n = 0;
+
+    while (n < 3 && s[n] >= '0' && s[n] <= '9') {
+        v = v * 10 + (s[n] - '0');
+        n++;
+    }
+
+    if (n == 0 || v > 255 || (n > 1 && s[0] == '0'))
+        return -1;
+
+    *p = s + n;
+    return v;
+}
+
+static int parse_ipv4(const char* s, uint8_t out[4])
+{
+    int i;
+    int v;
+
+    for (i = 0; i < 4; i++) {
+        if (i > 0) {
+            if (*s != '.')
+                return WOLFCERT_ERR_PARSE;
+            s++;
+        }
+
+        v = parse_octet(&s);
+        if (v < 0)
+            return WOLFCERT_ERR_PARSE;
+        out[i] = (uint8_t)v;
+    }
+
+    return (*s == '\0') ? WOLFCERT_OK : WOLFCERT_ERR_PARSE;
+}
+
+static int hex_digit(char c)
+{
+    if (c >= '0' && c <= '9')
+        return c - '0';
+    if (c >= 'a' && c <= 'f')
+        return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F')
+        return c - 'A' + 10;
+
+    return -1;
+}
+
+/* Is the group starting at s a dotted-quad tail rather than a hex group? */
+static int group_is_ipv4(const char* s)
+{
+    int i;
+
+    for (i = 0; s[i] != '\0' && s[i] != ':'; i++) {
+        if (s[i] == '.')
+            return 1;
+    }
+
+    return 0;
+}
+
+static int parse_ipv6(const char* s, uint8_t out[16])
+{
+    uint8_t buf[16];
+    int filled = 0;
+    int gap = -1;     /* byte offset the "::" run expands at */
+    int tail;
+    int val;
+    int n;
+    int d;
+
+    XMEMSET(buf, 0, sizeof(buf));
+
+    if (s[0] == ':') {
+        if (s[1] != ':')
+            return WOLFCERT_ERR_PARSE;
+        s += 2;
+        gap = 0;
+    }
+
+    while (*s != '\0') {
+        if (group_is_ipv4(s)) {
+            if (filled > 12 || parse_ipv4(s, buf + filled) != WOLFCERT_OK)
+                return WOLFCERT_ERR_PARSE;
+            filled += 4;
+            s += strlen(s);
+            break;
+        }
+
+        val = 0;
+        n = 0;
+        while (n < 4 && (d = hex_digit(*s)) >= 0) {
+            val = val * 16 + d;
+            s++;
+            n++;
+        }
+
+        if (n == 0 || filled > 14)
+            return WOLFCERT_ERR_PARSE;
+        buf[filled++] = (uint8_t)(val >> 8);
+        buf[filled++] = (uint8_t)(val & 0xFF);
+
+        if (*s == '\0')
+            break;
+        if (*s != ':')
+            return WOLFCERT_ERR_PARSE;
+        s++;
+
+        if (*s == ':') {
+            if (gap >= 0)
+                return WOLFCERT_ERR_PARSE;
+            gap = filled;
+            s++;
+        }
+        else if (*s == '\0') {
+            /* a trailing single colon is not a valid address */
+            return WOLFCERT_ERR_PARSE;
+        }
+    }
+
+    if (gap < 0) {
+        if (filled != 16)
+            return WOLFCERT_ERR_PARSE;
+    }
+    else {
+        if (filled >= 16)
+            return WOLFCERT_ERR_PARSE;
+
+        /* Slide the groups after "::" down to the end, zeroing the middle.
+         * Destinations run ahead of sources, so a descending walk is safe. */
+        tail = filled - gap;
+        for (d = 0; d < tail; d++)
+            buf[15 - d] = buf[filled - 1 - d];
+        for (d = gap; d < 16 - tail; d++)
+            buf[d] = 0;
+    }
+
+    XMEMCPY(out, buf, 16);
+    return WOLFCERT_OK;
+}
+
+WOLFCERT_TEST_VIS int wolfcert_parse_ip(const char* s, uint8_t out[16],
+                                        size_t* out_len)
+{
+    if (s == NULL || out == NULL || out_len == NULL)
+        return WOLFCERT_ERR_BAD_ARG;
+
+    if (parse_ipv4(s, out) == WOLFCERT_OK) {
+        *out_len = 4;
+        return WOLFCERT_OK;
+    }
+
+    if (parse_ipv6(s, out) == WOLFCERT_OK) {
+        *out_len = 16;
+        return WOLFCERT_OK;
+    }
+
+    return WOLFCERT_ERR_PARSE;
+}
+
 /* ---- internal log + error helpers -------------------------------------- */
 
 void wolfcert_logv(WolfCertLogLevel lvl, const char* module,

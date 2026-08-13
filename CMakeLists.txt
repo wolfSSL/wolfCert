@@ -38,6 +38,7 @@ option(WOLFCERT_ENABLE_SERVER  "Build the minimal EST/SCEP test server" ON)
 option(WOLFCERT_ENABLE_CLI     "Build wolfcert-client / wolfcert-server" ON)
 option(WOLFCERT_ENABLE_TESTS   "Build unit and integration tests"       OFF)
 option(WOLFCERT_ENABLE_EXAMPLES "Build example programs"                OFF)
+option(WOLFCERT_ENABLE_POSIX_STORE "Build the POSIX file storage backend" ON)
 option(WOLFCERT_WERROR         "Treat warnings as errors"               OFF)
 # Header-based configuration (the user_settings.h analogue of wolfSSL's
 # WOLFSSL_USER_SETTINGS). When ON, wolfCert does not generate or install
@@ -249,6 +250,8 @@ if(NOT WOLFCERT_USER_SETTINGS)
     _wc_opt(WOLFCERT_OPT_EST     "${WOLFCERT_ENABLE_EST}"    WOLFCERT_HAVE_EST)
     _wc_opt(WOLFCERT_OPT_SCEP    "${WOLFCERT_ENABLE_SCEP}"   WOLFCERT_HAVE_SCEP)
     _wc_opt(WOLFCERT_OPT_SERVER  "${WOLFCERT_ENABLE_SERVER}" WOLFCERT_HAVE_SERVER)
+    _wc_opt(WOLFCERT_OPT_POSIX_STORE "${WOLFCERT_ENABLE_POSIX_STORE}"
+            WOLFCERT_HAVE_POSIX_STORE)
     _wc_opt(WOLFCERT_OPT_RSA     "${WOLFCERT_HAVE_RSA}"      WOLFCERT_HAVE_RSA)
     _wc_opt(WOLFCERT_OPT_ECC     "${WOLFCERT_HAVE_ECC}"      WOLFCERT_HAVE_ECC)
     _wc_opt(WOLFCERT_OPT_ED25519 "${WOLFCERT_HAVE_ED25519}"  WOLFCERT_HAVE_ED25519)
@@ -410,4 +413,5 @@ install(FILES "${CMAKE_CURRENT_BINARY_DIR}/wolfcert.pc"
 
 message(STATUS "wolfCert ${PROJECT_VERSION}: EST=${WOLFCERT_ENABLE_EST}, "
     "SCEP=${WOLFCERT_ENABLE_SCEP}, server=${WOLFCERT_ENABLE_SERVER}, "
-    "cli=${WOLFCERT_ENABLE_CLI}, user_settings=${WOLFCERT_USER_SETTINGS}")
+    "cli=${WOLFCERT_ENABLE_CLI}, posix_store=${WOLFCERT_ENABLE_POSIX_STORE}, "
+    "user_settings=${WOLFCERT_USER_SETTINGS}")

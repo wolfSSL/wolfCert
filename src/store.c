@@ -17,6 +17,8 @@
  * along with wolfCert.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+/* For the POSIX file backend below. Must precede any system header, so it
+ * cannot be gated on WOLFCERT_HAVE_POSIX_STORE; inert when that is off. */
 #define _POSIX_C_SOURCE 200809L
 #define _DEFAULT_SOURCE
 
@@ -26,14 +28,17 @@
 
 #include <wolfssl/wolfcrypt/memory.h>
 
-#include <errno.h>
-#include <fcntl.h>
-#include <stdio.h>
 #include <string.h>
+
+#ifdef WOLFCERT_HAVE_POSIX_STORE
+#include <errno.h>
+#include <stdio.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#endif
 
 /* ================================================================== POSIX */
+#ifdef WOLFCERT_HAVE_POSIX_STORE
 
 typedef struct {
     char* root;
@@ -239,6 +244,25 @@ void wolfcert_store_posix_close(WolfCertStoreOps* ops)
 
     WOLFCERT_XFREE(ops, ops->heap);
 }
+
+#else /* !WOLFCERT_HAVE_POSIX_STORE */
+
+WolfCertStoreOps* wolfcert_store_posix_open(const char* root_dir, void* heap)
+{
+    (void)root_dir;
+    (void)heap;
+
+    WOLFCERT_ERR(WOLFCERT_ERR_UNSUPPORTED, "store",
+        "wolfCert was built without the POSIX file backend");
+    return NULL;
+}
+
+void wolfcert_store_posix_close(WolfCertStoreOps* ops)
+{
+    (void)ops;
+}
+
+#endif /* WOLFCERT_HAVE_POSIX_STORE */
 
 /* ================================================================ memory */
 

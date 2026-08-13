@@ -34,6 +34,9 @@
 @WOLFCERT_OPT_SCEP@
 @WOLFCERT_OPT_SERVER@
 
+/* ---- Platform ---- */
+@WOLFCERT_OPT_POSIX_STORE@
+
 /* ---- Key algorithms ---- */
 @WOLFCERT_OPT_RSA@
 @WOLFCERT_OPT_ECC@

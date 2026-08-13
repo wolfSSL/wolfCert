@@ -204,6 +204,18 @@ static int map_io(int n, int want)
     }
 }
 
+/* poll() only promises that one byte can move, so the transfer must never
+ * block; the wait is poll's job. Sockets the transport owns stay O_NONBLOCK. */
+static int set_nonblock(int fd)
+{
+    int fl = fcntl(fd, F_GETFL, 0);
+
+    if (fl < 0 || fcntl(fd, F_SETFL, fl | O_NONBLOCK) < 0)
+        return WOLFCERT_ERR_IO;
+
+    return WOLFCERT_OK;
+}
+
 static int posix_connect(void* ctx, const char* host, int port,
                          int timeout_ms, void** conn)
 {
@@ -215,6 +227,12 @@ static int posix_connect(void* ctx, const char* host, int port,
     fd = wolfcert_posix_connect(host, port, timeout_ms, ctx);
     if (fd < 0)
         return WOLFCERT_ERR_IO;
+
+    /* This socket is ours, so poll() can own the timeout semantics. */
+    if (set_nonblock(fd) != WOLFCERT_OK) {
+        (void)close(fd);
+        return WOLFCERT_ERR_IO;
+    }
 
     *conn = (void*)(intptr_t)fd;
     return WOLFCERT_OK;
@@ -234,14 +252,19 @@ static int posix_read(void* ctx, void* conn, uint8_t* buf, size_t len,
     if (len > INT_MAX)
         len = INT_MAX;
 
-    rc = posix_wait(fd, POLLIN, timeout_ms, WOLFCERT_ERR_WANT_READ);
-    if (rc != WOLFCERT_OK)
-        return rc;
+    for (;;) {
+        rc = posix_wait(fd, POLLIN, timeout_ms, WOLFCERT_ERR_WANT_READ);
+        if (rc != WOLFCERT_OK)
+            return rc;
 
-    /* TranslateIoReturnCode reports EINTR rather than retrying. */
-    do {
-        n = wolfIO_Recv(fd, (char*)buf, (int)len, 0);
-    } while (n == WOLFSSL_CBIO_ERR_ISR);
+        /* TranslateIoReturnCode reports EINTR rather than retrying. */
+        do {
+            n = wolfIO_Recv(fd, (char*)buf, (int)len, 0);
+        } while (n == WOLFSSL_CBIO_ERR_ISR);
+
+        if (n != WOLFSSL_CBIO_ERR_WANT_READ || timeout_ms >= 0)
+            break;
+    }
 
     return map_io(n, WOLFCERT_ERR_WANT_READ);
 }
@@ -260,13 +283,18 @@ static int posix_write(void* ctx, void* conn, const uint8_t* buf, size_t len,
     if (len > INT_MAX)
         len = INT_MAX;
 
-    rc = posix_wait(fd, POLLOUT, timeout_ms, WOLFCERT_ERR_WANT_WRITE);
-    if (rc != WOLFCERT_OK)
-        return rc;
+    for (;;) {
+        rc = posix_wait(fd, POLLOUT, timeout_ms, WOLFCERT_ERR_WANT_WRITE);
+        if (rc != WOLFCERT_OK)
+            return rc;
 
-    do {
-        n = wolfIO_Send(fd, (char*)(uintptr_t)buf, (int)len, 0);
-    } while (n == WOLFSSL_CBIO_ERR_ISR);
+        do {
+            n = wolfIO_Send(fd, (char*)(uintptr_t)buf, (int)len, 0);
+        } while (n == WOLFSSL_CBIO_ERR_ISR);
+
+        if (n != WOLFSSL_CBIO_ERR_WANT_WRITE || timeout_ms >= 0)
+            break;
+    }
 
     return map_io(n, WOLFCERT_ERR_WANT_WRITE);
 }
@@ -285,8 +313,31 @@ const WolfCertTransport wolfcert_posix_transport = {
     posix_connect, posix_read, posix_write, posix_disconnect, NULL
 };
 
-/* Adapter for the deprecated connect_cb: http.c opens the connection itself
- * and attaches this, so the byte path stays the one above. */
+/* Dial through the deprecated connect_cb, keeping every fd detail in this file.
+ * The descriptor becomes ours, so it gets the O_NONBLOCK posix_connect sets. */
+int wolfcert_legacy_connect(WolfCertConnectFn cb, void* cb_ctx,
+                            const char* host, int port, int timeout_ms,
+                            void** conn)
+{
+    int fd;
+
+    if (cb == NULL || conn == NULL)
+        return WOLFCERT_ERR_BAD_ARG;
+
+    fd = cb(host, port, timeout_ms, cb_ctx);
+    if (fd < 0)
+        return WOLFCERT_ERR_IO;
+
+    if (set_nonblock(fd) != WOLFCERT_OK) {
+        (void)close(fd);
+        return WOLFCERT_ERR_IO;
+    }
+
+    *conn = (void*)(intptr_t)fd;
+    return WOLFCERT_OK;
+}
+
+/* Byte path for a connection opened by wolfcert_legacy_connect. */
 const WolfCertTransport wolfcert_legacy_transport = {
     NULL, posix_read, posix_write, posix_disconnect, NULL
 };

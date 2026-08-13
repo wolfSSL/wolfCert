@@ -316,6 +316,9 @@ WOLFCERT_TEST_VIS int wolfcert_parse_ip(const char* s, uint8_t out[16],
 extern const WolfCertTransport wolfcert_posix_transport;
 extern const WolfCertTransport wolfcert_legacy_transport;
 int  wolfcert_transport_is_fd_backed(const WolfCertTransport* t);
+int  wolfcert_legacy_connect(WolfCertConnectFn cb, void* cb_ctx,
+                             const char* host, int port, int timeout_ms,
+                             void** conn);
 
 int  wolfcert_pem_cert_to_der(const uint8_t* pem, size_t pem_len,
                               WolfCertBuffer* out_der, void* heap);

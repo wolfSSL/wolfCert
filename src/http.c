@@ -1019,6 +1019,10 @@ int wolfcert_http_request(const WolfCertHttpRequest* req, WolfCertHttpResponse* 
     if (req == NULL || resp == NULL || req->url == NULL || req->method == NULL)
         return WOLFCERT_ERR_BAD_ARG;
 
+    if (req->connect_cb != NULL && req->transport != NULL)
+        return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "http",
+            "set either connect_cb or transport, not both");
+
     memset(resp, 0, sizeof(*resp));
     void* heap = req->heap ? req->heap : wolfcert_default_heap();
     resp->heap = heap;
@@ -1089,6 +1093,10 @@ int wolfcert_http_session_open(const WolfCertHttpSessionCfg* cfg,
 {
     if (cfg == NULL || cfg->base_url == NULL || out == NULL)
         return WOLFCERT_ERR_BAD_ARG;
+
+    if (cfg->connect_cb != NULL && cfg->transport != NULL)
+        return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "http",
+            "set either connect_cb or transport, not both");
 
     void* heap = cfg->heap ? cfg->heap : wolfcert_default_heap();
 

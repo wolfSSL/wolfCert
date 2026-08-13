@@ -455,6 +455,57 @@ static int test_request_transfer_encoding(void)
     return 0;
 }
 
+/* A complete vtable failing with a distinct code, so BAD_ARG can only come
+ * from the conflict check and not from dial()'s completeness test. */
+static int conflict_connect(void* ctx, const char* host, int port,
+                            int timeout_ms, void** conn)
+{
+    (void)ctx; (void)host; (void)port; (void)timeout_ms;
+    *conn = NULL;
+    return WOLFCERT_ERR_IO;
+}
+
+static int conflict_read(void* ctx, void* conn, uint8_t* buf, size_t len,
+                         int timeout_ms)
+{
+    (void)ctx; (void)conn; (void)buf; (void)len; (void)timeout_ms;
+    return WOLFCERT_ERR_IO;
+}
+
+static int conflict_write(void* ctx, void* conn, const uint8_t* buf,
+                          size_t len, int timeout_ms)
+{
+    (void)ctx; (void)conn; (void)buf; (void)len; (void)timeout_ms;
+    return WOLFCERT_ERR_IO;
+}
+
+static int conflict_disconnect(void* ctx, void* conn)
+{
+    (void)ctx; (void)conn;
+    return WOLFCERT_OK;
+}
+
+/* connect_cb is the deprecated spelling of transport, so a config carrying
+ * both is ambiguous and rejected before anything is dialled. */
+static int test_transport_conflict(void)
+{
+    static const WolfCertTransport t = { conflict_connect, conflict_read,
+                                         conflict_write, conflict_disconnect,
+                                         NULL };
+    WolfCertHttpRequest req = { .method = "GET", .url = "http://127.0.0.1:1/",
+                                .connect_cb = wolfcert_posix_connect,
+                                .transport = &t };
+    WolfCertHttpSessionCfg cfg = { .base_url = "http://127.0.0.1:1/",
+                                   .connect_cb = wolfcert_posix_connect,
+                                   .transport = &t };
+    WolfCertHttpResponse resp = { 0 };
+    WolfCertHttpSession* s = NULL;
+
+    REQUIRE(wolfcert_http_request(&req, &resp) == WOLFCERT_ERR_BAD_ARG);
+    REQUIRE(wolfcert_http_session_open(&cfg, &s) == WOLFCERT_ERR_BAD_ARG);
+    return 0;
+}
+
 int main(void)
 {
     REQUIRE(wolfcert_init(NULL) == WOLFCERT_OK);
@@ -469,6 +520,8 @@ int main(void)
     if (test_chunked_size_overflow())
         return 1;
     if (test_request_transfer_encoding())
+        return 1;
+    if (test_transport_conflict())
         return 1;
     wolfcert_cleanup();
     printf("OK\n");

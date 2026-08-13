@@ -54,6 +54,8 @@ const char* wolfcert_strerror(int err)
             return "would block (want read)";
         case WOLFCERT_ERR_WANT_WRITE:
             return "would block (want write)";
+        case WOLFCERT_ERR_CONN_CLOSED:
+            return "connection closed by peer";
         default:
             return "unknown error";
     }

@@ -18,19 +18,24 @@
  */
 
 /*
- * Default POSIX/BSD-sockets transport. This is the built-in implementation of
- * WolfCertConnectFn used when a config leaves connect_cb NULL. It lives in its
- * own translation unit so the core HTTP/TLS logic depends only on the connect
- * callback, and so an application targeting a platform without BSD sockets can
- * supply its own transport and leave this out of the link.
+ * Built-in POSIX/BSD-sockets WolfCertTransport, used when a config leaves
+ * `transport` NULL. It lives in its own translation unit so the core HTTP/TLS
+ * logic holds no syscalls, and so a platform without BSD sockets can supply
+ * its own transport and leave this file out of the link.
  */
 
 #define _POSIX_C_SOURCE 200809L
 #define _DEFAULT_SOURCE
 
 #include <wolfcert/http.h>
+#include <wolfcert/errors.h>
+#include "internal.h"
+
+#include <wolfssl/wolfio.h>
+#include <wolfssl/error-ssl.h>
 
 #include <errno.h>
+#include <limits.h>
 #include <fcntl.h>
 #include <netdb.h>
 #include <poll.h>
@@ -151,4 +156,142 @@ int wolfcert_posix_connect(const char* host, int port, int timeout_ms, void* ctx
 
     freeaddrinfo(res);
     return fd;
+}
+
+/* ---- WolfCertTransport instance ----------------------------------------- */
+
+/* Wait for readiness. timeout_ms follows the transport contract: 0 polls,
+ * > 0 caps the wait, < 0 blocks. `want` is what to report on a 0 timeout. */
+static int posix_wait(int fd, short events, int timeout_ms, int want)
+{
+    struct pollfd pfd;
+    int pr;
+
+    pfd.fd      = fd;
+    pfd.events  = events;
+    pfd.revents = 0;
+
+    do {
+        pr = poll(&pfd, 1, timeout_ms);
+    } while (pr < 0 && errno == EINTR);
+
+    if (pr < 0)
+        return WOLFCERT_ERR_IO;
+    if (pr == 0)
+        return (timeout_ms == 0) ? want : WOLFCERT_ERR_IO;
+
+    return WOLFCERT_OK;
+}
+
+/* wolfIO_* return CBIO codes, which carry no direction: WANT_READ and
+ * WANT_WRITE are the same value, so the caller supplies `want`. */
+static int map_io(int n, int want)
+{
+    if (n > 0)
+        return n;
+    /* wolfSSL passes a 0-length read straight through, so map it here. */
+    if (n == 0)
+        return WOLFCERT_ERR_CONN_CLOSED;
+
+    switch (n) {
+        case WOLFSSL_CBIO_ERR_WANT_READ:  /* == WANT_WRITE */
+            return want;
+        case WOLFSSL_CBIO_ERR_CONN_CLOSE:
+        case WOLFSSL_CBIO_ERR_CONN_RST:
+            return WOLFCERT_ERR_CONN_CLOSED;
+        default:
+            return WOLFCERT_ERR_IO;
+    }
+}
+
+static int posix_connect(void* ctx, const char* host, int port,
+                         int timeout_ms, void** conn)
+{
+    int fd;
+
+    if (host == NULL || conn == NULL)
+        return WOLFCERT_ERR_BAD_ARG;
+
+    fd = wolfcert_posix_connect(host, port, timeout_ms, ctx);
+    if (fd < 0)
+        return WOLFCERT_ERR_IO;
+
+    *conn = (void*)(intptr_t)fd;
+    return WOLFCERT_OK;
+}
+
+static int posix_read(void* ctx, void* conn, uint8_t* buf, size_t len,
+                      int timeout_ms)
+{
+    int fd = (int)(intptr_t)conn;
+    int rc;
+    int n;
+
+    (void)ctx;
+
+    if (buf == NULL || len == 0)
+        return WOLFCERT_ERR_BAD_ARG;
+    if (len > INT_MAX)
+        len = INT_MAX;
+
+    rc = posix_wait(fd, POLLIN, timeout_ms, WOLFCERT_ERR_WANT_READ);
+    if (rc != WOLFCERT_OK)
+        return rc;
+
+    /* TranslateIoReturnCode reports EINTR rather than retrying. */
+    do {
+        n = wolfIO_Recv(fd, (char*)buf, (int)len, 0);
+    } while (n == WOLFSSL_CBIO_ERR_ISR);
+
+    return map_io(n, WOLFCERT_ERR_WANT_READ);
+}
+
+static int posix_write(void* ctx, void* conn, const uint8_t* buf, size_t len,
+                       int timeout_ms)
+{
+    int fd = (int)(intptr_t)conn;
+    int rc;
+    int n;
+
+    (void)ctx;
+
+    if (buf == NULL || len == 0)
+        return WOLFCERT_ERR_BAD_ARG;
+    if (len > INT_MAX)
+        len = INT_MAX;
+
+    rc = posix_wait(fd, POLLOUT, timeout_ms, WOLFCERT_ERR_WANT_WRITE);
+    if (rc != WOLFCERT_OK)
+        return rc;
+
+    do {
+        n = wolfIO_Send(fd, (char*)(uintptr_t)buf, (int)len, 0);
+    } while (n == WOLFSSL_CBIO_ERR_ISR);
+
+    return map_io(n, WOLFCERT_ERR_WANT_WRITE);
+}
+
+static int posix_disconnect(void* ctx, void* conn)
+{
+    (void)ctx;
+
+    if (close((int)(intptr_t)conn) != 0)
+        return WOLFCERT_ERR_IO;
+
+    return WOLFCERT_OK;
+}
+
+const WolfCertTransport wolfcert_posix_transport = {
+    posix_connect, posix_read, posix_write, posix_disconnect, NULL
+};
+
+/* Adapter for the deprecated connect_cb: http.c opens the connection itself
+ * and attaches this, so the byte path stays the one above. */
+const WolfCertTransport wolfcert_legacy_transport = {
+    NULL, posix_read, posix_write, posix_disconnect, NULL
+};
+
+int wolfcert_transport_is_fd_backed(const WolfCertTransport* t)
+{
+    return t == &wolfcert_posix_transport || t == &wolfcert_legacy_transport;
 }

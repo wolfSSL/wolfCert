@@ -93,10 +93,12 @@ static int build_with_extras(void)
 
     const char* dns[]   = { "device-42.local" };
     const char* emails[]= { "ops@example.com" };
+    const char* ips[]   = { "192.0.2.10", "2001:db8::1" };
     WolfCertCertMeta meta = {
         .subject_dn   = "CN=device-42,UID=factory-0xABCD,O=Acme,postalCode=94103,C=US",
         .san_dns      = dns,     .san_dns_len   = 1,
         .san_email    = emails,  .san_email_len = 1,
+        .san_ip       = ips,     .san_ip_len    = 2,
     };
     WolfCertBuffer der = { 0 };
     REQUIRE(wolfcert_csr_build(key, &meta, &der) == WOLFCERT_OK);
@@ -125,6 +127,13 @@ static int build_with_extras(void)
         0x81, 0x0F, 'o','p','s','@','e','x','a','m','p','l','e','.','c','o','m'
     };
     REQUIRE(memmem(der.data, der.len, rfc822_prefix, sizeof(rfc822_prefix)) != NULL);
+
+    /* iPAddress SANs - tag 0x87 GeneralName [7], 4 bytes for v4, 16 for v6. */
+    static const uint8_t ip4[]  = { 0x87, 0x04, 192, 0, 2, 10 };
+    static const uint8_t ip6[]  = { 0x87, 0x10, 0x20, 0x01, 0x0d, 0xb8,
+                                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 };
+    REQUIRE(memmem(der.data, der.len, ip4, sizeof(ip4)) != NULL);
+    REQUIRE(memmem(der.data, der.len, ip6, sizeof(ip6)) != NULL);
 
     wolfcert_buffer_free(&der);
     wolfcert_key_free(key);

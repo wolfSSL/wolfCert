@@ -205,6 +205,47 @@ static int test_scep_envelop_alg(void)
 }
 #endif
 
+static int test_ip_literal(void)
+{
+    /* The output lands verbatim in a certificate iPAddress SAN, so pin the
+     * byte layout the "::" slide produces, not just the accept/reject call. */
+    static const struct {
+        const char*   text;
+        size_t        len;
+        const uint8_t bytes[16];
+    } good[] = {
+        { "192.0.2.10",       4, { 192, 0, 2, 10 } },
+        { "::",              16, { 0 } },
+        { "::1",             16, { 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1 } },
+        { "fe80::1",         16, { 0xfe,0x80,0,0,0,0,0,0,0,0,0,0,0,0,0,1 } },
+        { "::ffff:192.0.2.1", 16,
+          { 0,0,0,0,0,0,0,0,0,0,0xff,0xff,192,0,2,1 } },
+        { "1:2:3:4:5:6:7:8", 16, { 0,1,0,2,0,3,0,4,0,5,0,6,0,7,0,8 } }
+    };
+    static const char* const bad[] = {
+        "010.1.1.1", "256.1.1.1", "1.2.3", "1.2.3.4.5",
+        "fe80::1%eth0", "2001:db8::/32", "1::2::3", "12345::", "g::1", ""
+    };
+    uint8_t out[16];
+    size_t len;
+    size_t i;
+
+    for (i = 0; i < sizeof(good) / sizeof(good[0]); ++i) {
+        len = 0;
+        REQUIRE(wolfcert_parse_ip(good[i].text, out, &len) == WOLFCERT_OK);
+        REQUIRE(len == good[i].len);
+        REQUIRE(memcmp(out, good[i].bytes, len) == 0);
+    }
+
+    for (i = 0; i < sizeof(bad) / sizeof(bad[0]); ++i) {
+        len = 0;
+        REQUIRE(wolfcert_parse_ip(bad[i], out, &len) == WOLFCERT_ERR_PARSE);
+    }
+
+    REQUIRE(wolfcert_parse_ip(NULL, out, &len) == WOLFCERT_ERR_BAD_ARG);
+    return 0;
+}
+
 static int test_csr_pem(void)
 {
     WolfCertBuffer der = { 0 };
@@ -225,6 +266,8 @@ int main(void)
         return 1;
 #endif
     if (test_csr_pem())
+        return 1;
+    if (test_ip_literal())
         return 1;
 #if defined(WOLFCERT_HAVE_SCEP) && defined(WOLFCERT_HAVE_RSA)
     if (test_scep_envelop_alg())

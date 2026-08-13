@@ -306,6 +306,11 @@ WOLFCERT_TEST_VIS int wolfcert_base64_decode(const uint8_t* in, size_t in_len,
 WOLFCERT_TEST_VIS void wolfcert_hex_encode(const uint8_t* in, size_t in_len,
                                            int upper, char* out);
 
+/* Parse an IPv4/IPv6 literal into 4 or 16 network-order bytes. Rejects zone
+ * IDs, prefix lengths and leading zeros, so the accepted set is portable. */
+WOLFCERT_TEST_VIS int wolfcert_parse_ip(const char* s, uint8_t out[16],
+                                        size_t* out_len);
+
 int  wolfcert_pem_cert_to_der(const uint8_t* pem, size_t pem_len,
                               WolfCertBuffer* out_der, void* heap);
 

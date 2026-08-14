@@ -245,6 +245,15 @@ build systems reject enabling them alongside `--disable-builtin-transport`.
 A wolfSSL built with `WOLFSSL_USER_IO` works: wolfCert installs its own CBIO
 callbacks on every session, so wolfSSL's own socket I/O is never needed.
 
+**wolfCert requires `HAVE_SNI`**, which a cross-compiled wolfSSL often lacks;
+`check_config.h` fails the build with a message pointing at `--enable-sni`.
+
+If your device only reaches endpoints that serve a single certificate, or
+addresses them by IP, define `WOLFCERT_NO_SNI` to build without it. Do not
+take that opt-out for a hosted EST service: the server would return its
+default certificate and `verify_server` would reject the handshake with
+`WOLFCERT_ERR_TLS`.
+
 ## A worked "small footprint" wolfSSL config
 
 ```c

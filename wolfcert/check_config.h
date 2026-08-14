@@ -66,7 +66,7 @@
 /* Mandatory wolfSSL features. Rebuild wolfSSL with:
  *   ./configure --enable-pkcs7 --enable-certgen --enable-certreq \
  *       --enable-certext --enable-keygen --enable-cryptocb \
- *       --enable-base64encode --enable-opensslextra \
+ *       --enable-base64encode --enable-opensslextra --enable-sni \
  *       CPPFLAGS="-DWOLFSSL_ALT_NAMES -DWOLFSSL_CERT_NAME_ALL" */
 #ifndef HAVE_PKCS7
 #error "wolfSSL is missing HAVE_PKCS7; rebuild wolfSSL with --enable-pkcs7."
@@ -119,6 +119,13 @@
  * later missing-symbol link error. */
 #ifdef WOLFSSL_NO_FORCE_ZERO
 #error "wolfSSL was built with WOLFSSL_NO_FORCE_ZERO; wolfCert requires wc_ForceZero to scrub key material. Rebuild wolfSSL without WOLFSSL_NO_FORCE_ZERO."
+#endif
+
+/* SNI. wolfSSL leaves HAVE_SNI off by default on most cross builds; without it
+ * a hosted EST endpoint serves its default certificate and verification then
+ * fails. WOLFCERT_NO_SNI accepts that trade for a smaller build. */
+#if !defined(HAVE_SNI) && !defined(WOLFCERT_NO_SNI)
+#error "wolfSSL is missing HAVE_SNI; rebuild wolfSSL with --enable-sni. Define WOLFCERT_NO_SNI to build without it (only safe when every endpoint serves one certificate, or is addressed by IP)."
 #endif
 
 /* The HTTPS transport needs at least TLS 1.2 or TLS 1.3. */

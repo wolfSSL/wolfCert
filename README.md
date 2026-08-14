@@ -68,7 +68,7 @@ optional key types wolfCert picks up when available:
     --enable-keygen --enable-ecc --enable-cryptocb --enable-base64encode \
     --enable-ed25519 --enable-ed448 --enable-mldsa \
     --enable-postauth --enable-opensslextra --enable-ip-alt-name \
-    --enable-des3 \
+    --enable-des3 --enable-sni \
     CPPFLAGS="-DWOLFSSL_ALT_NAMES -DWOLFSSL_CERT_NAME_ALL"
 ```
 

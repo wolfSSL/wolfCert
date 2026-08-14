@@ -64,7 +64,8 @@ typedef enum {
 } WolfCertEncoding;
 
 /* Deprecated: use WolfCertTransport, never both on one config (BAD_ARG). An
- * fd cannot carry a non-socket handle, which is why this is going away. */
+ * fd cannot carry a non-socket handle, which is why this is going away.
+ * Return it blocking; its own SO_RCVTIMEO / SO_SNDTIMEO then bound the I/O. */
 typedef int (*WolfCertConnectFn)(const char* host, int port,
                                  int timeout_ms, void* ctx);
 

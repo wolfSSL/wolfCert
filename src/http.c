@@ -341,7 +341,8 @@ static int dial(WolfCertConn* c, const char* host, int port, int timeout_ms,
 #else
     if (t == NULL && connect_cb != NULL) {
         rc = wolfcert_legacy_connect(connect_cb, connect_ctx, host, port,
-                                     timeout_ms, &c->handle);
+                                     timeout_ms, c->io_timeout_ms == 0,
+                                     &c->handle);
         if (rc != WOLFCERT_OK)
             return rc;
 

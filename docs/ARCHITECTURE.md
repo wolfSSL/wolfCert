@@ -443,7 +443,10 @@ The contract:
   something different from `connect`'s. wolfCert passes only two values.
   `0` asks the call never to block: return `WOLFCERT_ERR_WANT_READ` or
   `WOLFCERT_ERR_WANT_WRITE` rather than wait. `-1` asks it to block until
-  bytes move.
+  bytes move. If your stack has its own receive or send timeout, implement
+  `-1` with a call that lets it apply, rather than an unbounded wait around a
+  non-blocking transfer: the second shape silently discards whatever the
+  application configured.
 - **`disconnect` runs exactly once per successful `connect`**, on every error
   path included. A failed `connect` is never paired with one.
 - **`ctx` is transport-wide** (the stack instance, say), distinct from the

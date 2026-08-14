@@ -318,7 +318,7 @@ extern const WolfCertTransport wolfcert_legacy_transport;
 int  wolfcert_transport_is_fd_backed(const WolfCertTransport* t);
 int  wolfcert_legacy_connect(WolfCertConnectFn cb, void* cb_ctx,
                              const char* host, int port, int timeout_ms,
-                             void** conn);
+                             int nonblocking, void** conn);
 
 int  wolfcert_pem_cert_to_der(const uint8_t* pem, size_t pem_len,
                               WolfCertBuffer* out_der, void* heap);

@@ -331,6 +331,14 @@ static int dial(WolfCertConn* c, const char* host, int port, int timeout_ms,
     const WolfCertTransport* t = transport;
     int rc;
 
+#ifndef WOLFCERT_HAVE_BUILTIN_TRANSPORT
+    (void)connect_cb;
+    (void)connect_ctx;
+
+    if (t == NULL)
+        return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "http",
+            "this build has no built-in transport");
+#else
     if (t == NULL && connect_cb != NULL) {
         rc = wolfcert_legacy_connect(connect_cb, connect_ctx, host, port,
                                      timeout_ms, &c->handle);
@@ -344,6 +352,7 @@ static int dial(WolfCertConn* c, const char* host, int port, int timeout_ms,
 
     if (t == NULL)
         t = &wolfcert_posix_transport;
+#endif
 
     /* Validate the whole vtable */
     if (t->connect == NULL || t->read == NULL || t->write == NULL ||
@@ -1305,12 +1314,17 @@ int wolfcert_http_session_open(const WolfCertHttpSessionCfg* cfg,
 
 int wolfcert_http_session_fd(const WolfCertHttpSession* s)
 {
+#ifdef WOLFCERT_HAVE_BUILTIN_TRANSPORT
     if (s == NULL || !s->conn.connected)
         return -1;
     if (!wolfcert_transport_is_fd_backed(s->conn.t))
         return -1;
 
     return (int)(intptr_t)s->conn.handle;
+#else
+    (void)s;   /* no fd-backed transport exists in this build */
+    return -1;
+#endif
 }
 
 int wolfcert_http_session_request(WolfCertHttpSession* s,

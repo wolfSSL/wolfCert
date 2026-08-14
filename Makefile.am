@@ -25,8 +25,11 @@ libwolfcert_la_SOURCES = \
     src/csr.c \
     src/store.c \
     src/http.c \
-    src/net_posix.c \
     src/client.c
+
+if WOLFCERT_HAVE_BUILTIN_TRANSPORT
+libwolfcert_la_SOURCES += src/net_posix.c
+endif
 
 if WOLFCERT_BUILD_TESTS
 AM_CPPFLAGS += -DWOLFCERT_BUILD_TESTING=1
@@ -111,7 +114,7 @@ endif
 
 if WOLFCERT_BUILD_TESTS
 check_PROGRAMS = \
-    test_smoke test_keygen test_csr test_store test_net test_http \
+    test_smoke test_keygen test_csr test_store test_http test_transport \
     test_parse_negative test_tls_http
 
 test_smoke_SOURCES  = tests/unit/test_smoke.c
@@ -122,6 +125,12 @@ test_csr_SOURCES    = tests/unit/test_csr.c
 test_csr_LDADD      = libwolfcert.la $(WOLFSSL_LIBS)
 test_store_SOURCES  = tests/unit/test_store.c
 test_store_LDADD    = libwolfcert.la $(WOLFSSL_LIBS)
+if WOLFCERT_HAVE_BUILTIN_TRANSPORT
+check_PROGRAMS     += test_net
+endif
+test_transport_SOURCES = tests/unit/test_transport.c
+test_transport_LDADD   = libwolfcert.la $(WOLFSSL_LIBS)
+
 test_net_SOURCES    = tests/unit/test_net.c
 test_net_LDADD      = libwolfcert.la $(WOLFSSL_LIBS)
 test_http_SOURCES   = tests/unit/test_http.c

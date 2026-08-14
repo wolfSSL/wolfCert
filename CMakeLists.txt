@@ -39,6 +39,8 @@ option(WOLFCERT_ENABLE_CLI     "Build wolfcert-client / wolfcert-server" ON)
 option(WOLFCERT_ENABLE_TESTS   "Build unit and integration tests"       OFF)
 option(WOLFCERT_ENABLE_EXAMPLES "Build example programs"                OFF)
 option(WOLFCERT_ENABLE_POSIX_STORE "Build the POSIX file storage backend" ON)
+option(WOLFCERT_ENABLE_BUILTIN_TRANSPORT
+    "Build the built-in POSIX socket transport" ON)
 option(WOLFCERT_WERROR         "Treat warnings as errors"               OFF)
 # Header-based configuration (the user_settings.h analogue of wolfSSL's
 # WOLFSSL_USER_SETTINGS). When ON, wolfCert does not generate or install
@@ -50,6 +52,19 @@ option(WOLFCERT_WERROR         "Treat warnings as errors"               OFF)
 option(WOLFCERT_USER_SETTINGS  "Take feature config from a user-supplied user_settings.h instead of the generated options.h" OFF)
 set(WOLFCERT_USER_SETTINGS_DIR "" CACHE PATH
     "Directory containing user_settings.h (used when WOLFCERT_USER_SETTINGS=ON)")
+
+if(NOT WOLFCERT_ENABLE_BUILTIN_TRANSPORT)
+    if(WOLFCERT_ENABLE_CLI)
+        message(FATAL_ERROR "WOLFCERT_ENABLE_CLI needs "
+            "WOLFCERT_ENABLE_BUILTIN_TRANSPORT: the CLI cannot supply a "
+            "custom transport")
+    endif()
+    if(WOLFCERT_ENABLE_SERVER)
+        message(FATAL_ERROR "WOLFCERT_ENABLE_SERVER needs "
+            "WOLFCERT_ENABLE_BUILTIN_TRANSPORT: its round-trip tests drive "
+            "the client over real sockets")
+    endif()
+endif()
 # ----- wolfSSL ---------------------------------------------------------------
 # Optional convenience: -DWITH_WOLFSSL=PATH points at a wolfSSL install
 # prefix. Adds it to CMAKE_PREFIX_PATH (for find_package CONFIG mode) and
@@ -252,6 +267,9 @@ if(NOT WOLFCERT_USER_SETTINGS)
     _wc_opt(WOLFCERT_OPT_SERVER  "${WOLFCERT_ENABLE_SERVER}" WOLFCERT_HAVE_SERVER)
     _wc_opt(WOLFCERT_OPT_POSIX_STORE "${WOLFCERT_ENABLE_POSIX_STORE}"
             WOLFCERT_HAVE_POSIX_STORE)
+    _wc_opt(WOLFCERT_OPT_BUILTIN_TRANSPORT
+            "${WOLFCERT_ENABLE_BUILTIN_TRANSPORT}"
+            WOLFCERT_HAVE_BUILTIN_TRANSPORT)
     _wc_opt(WOLFCERT_OPT_RSA     "${WOLFCERT_HAVE_RSA}"      WOLFCERT_HAVE_RSA)
     _wc_opt(WOLFCERT_OPT_ECC     "${WOLFCERT_HAVE_ECC}"      WOLFCERT_HAVE_ECC)
     _wc_opt(WOLFCERT_OPT_ED25519 "${WOLFCERT_HAVE_ED25519}"  WOLFCERT_HAVE_ED25519)
@@ -272,8 +290,11 @@ set(WOLFCERT_SOURCES
     src/csr.c
     src/store.c
     src/http.c
-    src/net_posix.c
     src/client.c)
+
+if(WOLFCERT_ENABLE_BUILTIN_TRANSPORT)
+    list(APPEND WOLFCERT_SOURCES src/net_posix.c)
+endif()
 
 if(WOLFCERT_ENABLE_EST OR WOLFCERT_ENABLE_SCEP)
     list(APPEND WOLFCERT_SOURCES src/pkcs7_util.c)
@@ -414,4 +435,5 @@ install(FILES "${CMAKE_CURRENT_BINARY_DIR}/wolfcert.pc"
 message(STATUS "wolfCert ${PROJECT_VERSION}: EST=${WOLFCERT_ENABLE_EST}, "
     "SCEP=${WOLFCERT_ENABLE_SCEP}, server=${WOLFCERT_ENABLE_SERVER}, "
     "cli=${WOLFCERT_ENABLE_CLI}, posix_store=${WOLFCERT_ENABLE_POSIX_STORE}, "
+    "builtin_transport=${WOLFCERT_ENABLE_BUILTIN_TRANSPORT}, "
     "user_settings=${WOLFCERT_USER_SETTINGS}")

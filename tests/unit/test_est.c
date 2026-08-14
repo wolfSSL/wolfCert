@@ -57,6 +57,14 @@
         }                                                                   \
     } while (0)
 
+#ifndef WOLFCERT_HAVE_BUILTIN_TRANSPORT
+/* Nothing below can open a socket in a build with no built-in transport. */
+int main(void)
+{
+    return 77;
+}
+#else
+
 static int make_test_ca(uint8_t* out, size_t cap, size_t* out_len)
 {
     test_signkey key;
@@ -605,3 +613,5 @@ int main(void)
     printf("OK\n");
     return 0;
 }
+
+#endif

@@ -36,6 +36,7 @@
 
 /* ---- Platform ---- */
 @WOLFCERT_OPT_POSIX_STORE@
+@WOLFCERT_OPT_BUILTIN_TRANSPORT@
 
 /* ---- Key algorithms ---- */
 @WOLFCERT_OPT_RSA@

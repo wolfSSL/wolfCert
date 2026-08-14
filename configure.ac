@@ -79,6 +79,22 @@ AC_ARG_ENABLE([cli],
     [enable_cli=$enableval], [enable_cli=yes])
 AM_CONDITIONAL([WOLFCERT_BUILD_CLI], [test "x$enable_cli" = "xyes"])
 
+AC_ARG_ENABLE([builtin-transport],
+    [AS_HELP_STRING([--disable-builtin-transport],
+        [do not build the built-in POSIX socket transport])],
+    [enable_builtin_transport=$enableval], [enable_builtin_transport=yes])
+AM_CONDITIONAL([WOLFCERT_HAVE_BUILTIN_TRANSPORT],
+    [test "x$enable_builtin_transport" = "xyes"])
+
+AS_IF([test "x$enable_builtin_transport" != "xyes"], [
+  AS_IF([test "x$enable_cli" = "xyes"],
+    [AC_MSG_ERROR([--enable-cli needs the built-in transport: the CLI
+cannot supply a custom one])])
+  AS_IF([test "x$enable_server" = "xyes"],
+    [AC_MSG_ERROR([--enable-server needs the built-in transport: its
+round-trip tests drive the client over real sockets])])
+])
+
 # store.c is always compiled; only its POSIX file backend is gated, so this
 # needs no AM_CONDITIONAL.
 AC_ARG_ENABLE([posix-store],
@@ -270,6 +286,8 @@ WOLFCERT_OPT([WOLFCERT_OPT_SCEP],    [$enable_scep],   [WOLFCERT_HAVE_SCEP])
 WOLFCERT_OPT([WOLFCERT_OPT_SERVER],  [$enable_server], [WOLFCERT_HAVE_SERVER])
 WOLFCERT_OPT([WOLFCERT_OPT_POSIX_STORE], [$enable_posix_store],
              [WOLFCERT_HAVE_POSIX_STORE])
+WOLFCERT_OPT([WOLFCERT_OPT_BUILTIN_TRANSPORT], [$enable_builtin_transport],
+             [WOLFCERT_HAVE_BUILTIN_TRANSPORT])
 WOLFCERT_OPT([WOLFCERT_OPT_RSA],     [$have_rsa],      [WOLFCERT_HAVE_RSA])
 WOLFCERT_OPT([WOLFCERT_OPT_ECC],     [$have_ecc],      [WOLFCERT_HAVE_ECC])
 WOLFCERT_OPT([WOLFCERT_OPT_ED25519], [$have_ed25519],  [WOLFCERT_HAVE_ED25519])
@@ -322,6 +340,7 @@ AC_MSG_NOTICE([
     TLS 1.2/1.3   : $have_tls12 / $have_tls13
     Test server   : $enable_server
     POSIX store   : $enable_posix_store
+    Builtin transp: $enable_builtin_transport
     User settings : $enable_user_settings
     CLI tools     : $enable_cli
     Tests         : $enable_tests

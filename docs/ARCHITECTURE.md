@@ -343,6 +343,10 @@ Key points:
 - **DNS and the initial TCP connect stay synchronous.** Only socket operations
   *after* the session is open are non-blocking; if you can't afford a blocking
   connect, resolve and connect the socket yourself.
+- **The descriptor comes from the built-in transport.** `*_session_fd()`
+  returns `-1` on a caller-supplied `WolfCertTransport`, which has no
+  descriptor to hand out; drive the loop from whatever readiness signal your
+  stack offers instead. See [section 4.6](#46-pluggable-transport).
 - **Re-invoke with identical arguments after a WANT-\*.** The session remembers
   its in-flight state; don't mutate the request/response between calls.
 - **One in-flight request per session** — pipelining is not supported.
@@ -398,7 +402,74 @@ if (rc != WOLFCERT_OK) {
 
 The message string is valid until the next wolfCert call on the same thread.
 
-### 4.6 Putting it together
+### 4.6 Pluggable transport
+
+wolfCert owns no socket. Every byte on the wire - TLS records and plain HTTP
+alike - moves through a `WolfCertTransport`, so a target with no BSD sockets
+needs one small glue file in *its own* tree and no change to wolfCert:
+
+```c
+typedef struct WolfCertTransport {
+    int  (*connect)(void* ctx, const char* host, int port,
+                    int timeout_ms, void** conn);
+    int  (*read)(void* ctx, void* conn, uint8_t* buf, size_t len,
+                 int timeout_ms);
+    int  (*write)(void* ctx, void* conn, const uint8_t* buf, size_t len,
+                  int timeout_ms);
+    int  (*disconnect)(void* ctx, void* conn);
+    void* ctx;
+} WolfCertTransport;
+```
+
+Set it on `WolfCertServerCfg.transport` (or `WolfCertHttpRequest` /
+`WolfCertHttpSessionCfg`). Leaving it `NULL` selects the built-in POSIX
+instance in `src/net_posix.c`, which is an ordinary implementation of this
+same vtable rather than a privileged path.
+
+The contract:
+
+- **The handle is opaque.** `connect` writes it to `*conn`; wolfCert never
+  dereferences, compares or NULL-tests it, so `0` is a perfectly valid handle
+  (a wolfIP descriptor starts there). It is passed back verbatim.
+- **`read` / `write` return a positive byte count**, or a negative
+  `WOLFCERT_ERR_*`. Never `0`: an orderly peer close is
+  `WOLFCERT_ERR_CONN_CLOSED`, which is what terminates a response body that
+  has neither `Content-Length` nor chunking.
+- **`connect`'s `timeout_ms` is the caller's**, passed through from
+  `WolfCertServerCfg.timeout_ms` / `WolfCertHttpRequest.timeout_ms`. A value
+  above zero bounds the whole connect attempt. Zero or less imposes no limit
+  of wolfCert's, leaving the stack's own default.
+- **`read` / `write`'s `timeout_ms` carries the blocking mode**, and means
+  something different from `connect`'s. wolfCert passes only two values.
+  `0` asks the call never to block: return `WOLFCERT_ERR_WANT_READ` or
+  `WOLFCERT_ERR_WANT_WRITE` rather than wait. `-1` asks it to block until
+  bytes move.
+- **`disconnect` runs exactly once per successful `connect`**, on every error
+  path included. A failed `connect` is never paired with one.
+- **`ctx` is transport-wide** (the stack instance, say), distinct from the
+  per-connection handle. The transport struct must outlive its connections.
+- **All four callbacks are required.** An incomplete vtable is rejected with
+  `WOLFCERT_ERR_BAD_ARG` before anything is dialled.
+
+TLS needs no extra work from the transport. wolfCert registers its own
+wolfSSL CBIO pair against the open connection, so records flow through the
+same `read`/`write` as plain HTTP:
+
+```
+wolfSSL_read/write -> wolfcert_cbio_recv/send -> t->read / t->write -> your stack
+```
+
+`WolfCertServerCfg.connect_cb` is the deprecated predecessor: it yields a
+socket descriptor rather than an opaque handle, which is exactly what a
+non-socket stack cannot supply. It still works, adapted internally onto the
+POSIX byte path, but setting both it and `transport` is `WOLFCERT_ERR_BAD_ARG`.
+
+Building with `WOLFCERT_ENABLE_BUILTIN_TRANSPORT=OFF` (CMake) or
+`--disable-builtin-transport` (autoconf) drops `src/net_posix.c` from the
+library entirely, so a target with no sockets links no socket code. A config
+that then leaves `transport` NULL fails with `WOLFCERT_ERR_BAD_ARG`.
+
+### 4.7 Putting it together
 
 ```c
 /* 1. Startup */
@@ -449,7 +520,7 @@ wolfcert_cleanup();
 
 ## 5. Extension points
 
-Three small vtables carry all of wolfCert's pluggability. Each is a "fill in a
+Four small vtables carry all of wolfCert's pluggability. Each is a "fill in a
 struct, no library changes" extension:
 
 - **`WolfCertKeyAlg`** (`src/key_algs.c`) — algorithm dispatch. Adding a key
@@ -461,6 +532,11 @@ struct, no library changes" extension:
   `read` / `write` / `remove` callbacks and a private `ctx`; keys are opaque
   strings. Shipped backends: POSIX files (atomic write, 0600 key mode) and
   in-memory. See [section 4.4](#44-pluggable-storage-for-flash--nvm).
+- **`WolfCertTransport`** (`wolfcert/types.h`) — the bytes on the wire. Supply
+  `connect` / `read` / `write` / `disconnect` and a private `ctx` to run
+  wolfCert on a non-BSD-sockets stack; TLS rides the same callbacks through an
+  internal CBIO bridge. The built-in POSIX transport is one instance of it.
+  See [section 4.6](#46-pluggable-transport).
 - **`WolfCertServerOps`** (`src/internal.h`) — test-server protocol dispatch.
   The EST and SCEP handlers are exposed through
   `wolfcert_est_server_ops()` / `wolfcert_scep_server_ops()` factories; a third

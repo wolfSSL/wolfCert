@@ -32,8 +32,10 @@ extern "C" {
 
 /* Built-in WolfCertConnectFn: blocking getaddrinfo + socket + connect over
  * POSIX/BSD sockets. Exported so applications can wrap or chain it. */
+#ifdef WOLFCERT_HAVE_BUILTIN_TRANSPORT
 WOLFCERT_API int wolfcert_posix_connect(const char* host, int port,
                                         int timeout_ms, void* ctx);
+#endif
 
 typedef struct {
     const char* method;            /* "GET" or "POST" */

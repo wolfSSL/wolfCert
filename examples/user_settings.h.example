@@ -64,7 +64,10 @@
 #define WOLFCERT_HAVE_SERVER 1   /* built-in EST/SCEP test server */
 
 /* ---- Platform ---- */
+/* One of each HAVE/NO pair is mandatory: define the WOLFCERT_NO_* form to
+ * compile the backend out and supply your own transport / store ops. */
 #define WOLFCERT_HAVE_POSIX_STORE 1
+#define WOLFCERT_HAVE_BUILTIN_TRANSPORT 1
 
 /* ---- Key algorithms (enable at least one) ---- */
 #define WOLFCERT_HAVE_RSA     1

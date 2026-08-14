@@ -42,6 +42,14 @@
         }                                                                   \
     } while (0)
 
+#ifndef WOLFCERT_HAVE_BUILTIN_TRANSPORT
+/* Nothing below can open a socket in a build with no built-in transport. */
+int main(void)
+{
+    return 77;
+}
+#else
+
 static int test_url_parser(void)
 {
     WolfCertUrl u;
@@ -487,16 +495,22 @@ static int conflict_disconnect(void* ctx, void* conn)
 
 /* connect_cb is the deprecated spelling of transport, so a config carrying
  * both is ambiguous and rejected before anything is dialled. */
+static int dummy_connect(const char* h, int p, int t, void* c)
+{
+    (void)h; (void)p; (void)t; (void)c;
+    return -1;
+}
+
 static int test_transport_conflict(void)
 {
     static const WolfCertTransport t = { conflict_connect, conflict_read,
                                          conflict_write, conflict_disconnect,
                                          NULL };
     WolfCertHttpRequest req = { .method = "GET", .url = "http://127.0.0.1:1/",
-                                .connect_cb = wolfcert_posix_connect,
+                                .connect_cb = dummy_connect,
                                 .transport = &t };
     WolfCertHttpSessionCfg cfg = { .base_url = "http://127.0.0.1:1/",
-                                   .connect_cb = wolfcert_posix_connect,
+                                   .connect_cb = dummy_connect,
                                    .transport = &t };
     WolfCertHttpResponse resp = { 0 };
     WolfCertHttpSession* s = NULL;
@@ -527,3 +541,5 @@ int main(void)
     printf("OK\n");
     return 0;
 }
+
+#endif

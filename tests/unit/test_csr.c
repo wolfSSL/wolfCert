@@ -94,7 +94,8 @@ static int build_with_extras(void)
     const char* dns[]   = { "device-42.local" };
     const char* emails[]= { "ops@example.com" };
     WolfCertCertMeta meta = {
-        .subject_dn   = "CN=device-42,UID=factory-0xABCD,O=Acme,postalCode=94103,C=US",
+        .subject_dn   = "CN=device-42,UID=factory-0xABCD,O=Acme,L=Portland,"
+                        "postalCode=94103,C=US",
         .san_dns      = dns,     .san_dns_len   = 1,
         .san_email    = emails,  .san_email_len = 1,
     };
@@ -107,6 +108,9 @@ static int build_with_extras(void)
     /* CN still parses. */
     REQUIRE(dc.subjectCN != NULL);
     REQUIRE(strncmp(dc.subjectCN, "device-42", 9) == 0);
+    /* One-character RDN keys reach their CertName field. */
+    REQUIRE(dc.subjectL != NULL && dc.subjectLLen == 8);
+    REQUIRE(strncmp(dc.subjectL, "Portland", 8) == 0);
     /* UID is carried in dc.uidRaw / dc.uidRawLen on this wolfSSL build;
      * fall back to a raw scan of the subjectRaw bytes otherwise. The
      * UID OID (0.9.2342.19200300.100.1.1) encodes to bytes

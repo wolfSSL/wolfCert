@@ -193,9 +193,7 @@ endif
 TESTS = $(check_PROGRAMS)
 
 # The CLI's protocol scoping and keyword validation, driven against the built
-# binary rather than the library. Every case fails before any network access,
-# so no server is involved. Kept at parity with the CTest registration in
-# tests/CMakeLists.txt.
+# binary rather than the library.
 if WOLFCERT_BUILD_CLI
 if WOLFCERT_HAVE_EST
 if WOLFCERT_HAVE_SCEP

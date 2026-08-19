@@ -114,8 +114,9 @@ if(WOLFCERT_ENABLE_SCEP AND WOLFCERT_ENABLE_SERVER)
     add_test(NAME scep_async_roundtrip COMMAND test_scep_async_roundtrip)
 endif()
 
-# The CLI's protocol scoping and keyword validation, driven against the built
-# binary. Every case fails before any network access, so no server is involved.
+# The CLI's protocol scoping and keyword validation. Most cases need no
+# network; the --ca-fingerprint group binds wolfcert-server to 127.0.0.1 on a
+# port from 18088 up, and skips when none is free or the server was not built.
 if(WOLFCERT_ENABLE_CLI AND WOLFCERT_ENABLE_EST AND WOLFCERT_ENABLE_SCEP AND UNIX)
     add_test(NAME cli_proto_scoping
              COMMAND ${CMAKE_COMMAND} -E env bash

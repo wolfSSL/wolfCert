@@ -651,6 +651,18 @@ static int issue_and_reply(WolfCertServer* s, int fd,
     return rc;
 }
 
+/* Answer a rejected pkiMessage with a signed CertRep carrying pkiStatus
+ * FAILURE and failInfo, per RFC 8894 section 3.2.1. */
+static int send_pki_failure(WolfCertServer* s, int fd,
+                            const uint8_t* tid, size_t tid_len,
+                            const uint8_t* snonce, size_t snonce_len,
+                            const char* fail_info)
+{
+    /* A FAILURE CertRep carries no messageData, hence no envelope target. */
+    return send_cert_rep(s, fd, NULL, 0, NULL, 0,
+                         tid, tid_len, snonce, snonce_len, "2", fail_info);
+}
+
 /* Handle messageType=19 (PKCSReq) or 17 (RenewalReq) freshly arrived. */
 static int handle_enroll(WolfCertServer* s, int fd, const char* mt,
                          const WolfCertBuffer* csr,
@@ -668,18 +680,16 @@ static int handle_enroll(WolfCertServer* s, int fd, const char* mt,
                                csr->data, csr->len, s->heap) != WOLFCERT_OK) {
         /* Report the failure as a CertRep, then close the connection. */
         s->keep_alive = 0;
-        return send_cert_rep(s, fd, NULL, 0, env_target, env_target_len,
-                             tid, tid_len, snonce, snonce_len,
-                             "2", "2" /* badRequest */);
+        return send_pki_failure(s, fd, tid, tid_len, snonce, snonce_len,
+                                "2" /* badRequest */);
     }
 
     if (check_challenge(csr->data, csr->len, s->cfg_challenge,
                         s->heap) != WOLFCERT_OK) {
         /* Report the failure as a CertRep, then close the connection. */
         s->keep_alive = 0;
-        return send_cert_rep(s, fd, NULL, 0, env_target, env_target_len,
-                             tid, tid_len, snonce, snonce_len,
-                             "2", "2" /* badRequest */);
+        return send_pki_failure(s, fd, tid, tid_len, snonce, snonce_len,
+                                "2" /* badRequest */);
     }
 
     if (s->cfg.scep_require_approval) {
@@ -694,9 +704,8 @@ static int handle_enroll(WolfCertServer* s, int fd, const char* mt,
 
             if (add != WOLFCERT_OK) {
                 /* Queue full - fail rather than silently losing requests. */
-                return send_cert_rep(s, fd, NULL, 0, env_target, env_target_len,
-                                     tid, tid_len, snonce, snonce_len,
-                                     "2", "2" /* badRequest */);
+                return send_pki_failure(s, fd, tid, tid_len, snonce, snonce_len,
+                                        "2" /* badRequest */);
             }
         }
 
@@ -716,18 +725,13 @@ static int handle_enroll(WolfCertServer* s, int fd, const char* mt,
  * to be pending forever. */
 static int handle_get_cert_initial(WolfCertServer* s, int fd,
                                    const uint8_t* tid, size_t tid_len,
-                                   const uint8_t* snonce, size_t snonce_len,
-                                   const uint8_t* signer_cert, size_t signer_cert_len)
+                                   const uint8_t* snonce, size_t snonce_len)
 {
     ScepPriv* p = (ScepPriv*)s->priv;
     ScepPending* e = pending_find(p, tid, tid_len);
     if (e == NULL) {
-        const uint8_t* env_target     = signer_cert ? signer_cert : s->ca.cert_der;
-        size_t         env_target_len = signer_cert ? signer_cert_len : s->ca.cert_der_len;
-
-        return send_cert_rep(s, fd, NULL, 0, env_target, env_target_len,
-                             tid, tid_len, snonce, snonce_len,
-                             "2", "4" /* badCertId: no such transaction */);
+        return send_pki_failure(s, fd, tid, tid_len, snonce, snonce_len,
+                                "4" /* badCertId: no such transaction */);
     }
 
     /* Approve on first poll. A production implementation would hold
@@ -778,6 +782,7 @@ static int handle_pki_op(WolfCertServer* s, int fd, const ScepRequest* req)
     uint8_t* signer_cert = NULL;
     size_t signer_cert_len = 0;
     WolfCertBuffer csr = { 0 };
+    int send_rc = WOLFCERT_OK;
 
     int rc = wolfcert_scep_parse_pki_message(req->body, req->body_len, &env,
             &tid, &tid_len, &snonce, &snonce_len, &rnonce, &rnonce_len,
@@ -787,15 +792,13 @@ static int handle_pki_op(WolfCertServer* s, int fd, const ScepRequest* req)
         goto out;
     }
 
-    if (tid == NULL || tid_len == 0 || snonce == NULL || snonce_len == 0) {
+    /* RFC 8894 section 3.2.1 requires all three in every message, so one that
+     * omits any of them is not a pkiMessage a CertRep could answer. */
+    if (tid == NULL || tid_len == 0 || snonce == NULL || snonce_len == 0 ||
+            mt == NULL || mt[0] == '\0') {
         s->keep_alive = 0;
         send_text(s, fd, 400, "Bad Message", "text/plain", "");
         rc = WOLFCERT_ERR_PROTOCOL;
-        goto out;
-    }
-
-    if (mt == NULL) {
-        send_text(s, fd, 400, "Bad Message", "text/plain", "");
         goto out;
     }
 
@@ -805,7 +808,17 @@ static int handle_pki_op(WolfCertServer* s, int fd, const ScepRequest* req)
     if (rc != WOLFCERT_OK && strcmp(mt, "20") != 0) {
         /* Decryption matters for 19/17 (CSR inside); for 20 the payload
          * is IssuerAndSubject which the server matches by txid anyway. */
-        send_text(s, fd, 400, "Cannot Decrypt", "text/plain", "");
+        const char* fail_info = rc == WOLFCERT_ERR_UNSUPPORTED
+                                    ? "0" /* badAlg */
+                                    : "2" /* badRequest */;
+
+        /* Closed by the non-OK return; the flag is for the header. */
+        s->keep_alive = 0;
+        send_rc = send_pki_failure(s, fd, tid, tid_len, snonce, snonce_len,
+                                   fail_info);
+        if (send_rc != WOLFCERT_OK)
+            WOLFCERT_LOG_DBG("scep", "CertRep send failed: %d", send_rc);
+
         goto out;
     }
 
@@ -814,11 +827,16 @@ static int handle_pki_op(WolfCertServer* s, int fd, const ScepRequest* req)
                            tid, tid_len, snonce, snonce_len);
     }
     else if (strcmp(mt, "20") == 0) {
-        rc = handle_get_cert_initial(s, fd, tid, tid_len, snonce, snonce_len,
-                                     signer_cert, signer_cert_len);
+        rc = handle_get_cert_initial(s, fd, tid, tid_len, snonce, snonce_len);
     }
     else {
-        send_text(s, fd, 400, "Bad Message", "text/plain", "");
+        /* Closed by the non-OK return; the flag is for the header. */
+        s->keep_alive = 0;
+        send_rc = send_pki_failure(s, fd, tid, tid_len, snonce, snonce_len,
+                                   "2" /* badRequest */);
+        if (send_rc != WOLFCERT_OK)
+            WOLFCERT_LOG_DBG("scep", "CertRep send failed: %d", send_rc);
+
         rc = WOLFCERT_ERR_PROTOCOL;
     }
 

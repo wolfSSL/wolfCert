@@ -185,6 +185,60 @@ static int check_get_fallback(const WolfCertServerCfg* cli,
     return rc;
 }
 
+/* RSA-4096 enrollment. rsa_make accepts 2048|3072|4096, so the signer key DER
+ * buffer must be sized from the key rather than from a fixed capacity. Owns and
+ * frees everything it makes. */
+static int check_rsa4096(const WolfCertServerCfg* cli,
+                         const WolfCertScepCaps* caps,
+                         const uint8_t* ca_der_buf, size_t ca_der_len)
+{
+    WolfCertKeyCfg        kcfg = { .type = WOLFCERT_KEY_RSA, .param = 4096,
+                                   .dev_id = WOLFCERT_DEVID_SOFTWARE };
+    WolfCertCertMeta      meta = { .subject_dn = "CN=device-scep-4096" };
+    WolfCertKey*          key = NULL;
+    WolfCertBuffer        csr = { 0 };
+    WolfCertBuffer        issued = { 0 };
+    WOLFSSL_CERT_MANAGER* cm = NULL;
+    DerBuffer*            issued_der = NULL;
+    int rc;
+
+    rc = wolfcert_key_generate(&kcfg, &key);
+    if (rc == WOLFCERT_OK)
+        rc = wolfcert_csr_build(key, &meta, &csr);
+    if (rc == WOLFCERT_OK)
+        rc = wolfcert_scep_pkcs_req(cli, caps, ca_der_buf, ca_der_len,
+                                    key, csr.data, csr.len, &issued);
+
+    /* The issued cert must chain to the CA that issued it, not merely look
+     * like a PEM certificate. */
+    if (rc == WOLFCERT_OK) {
+        cm = wolfSSL_CertManagerNew();
+        if (cm == NULL)
+            rc = -1;
+    }
+    if (rc == WOLFCERT_OK &&
+            wolfSSL_CertManagerLoadCABuffer(cm, ca_der_buf, (long)ca_der_len,
+                WOLFSSL_FILETYPE_ASN1) != WOLFSSL_SUCCESS)
+        rc = -1;
+    if (rc == WOLFCERT_OK &&
+            wc_PemToDer(issued.data, (long)issued.len, CERT_TYPE,
+                &issued_der, NULL, NULL, NULL) != 0)
+        rc = -1;
+    if (rc == WOLFCERT_OK &&
+            wolfSSL_CertManagerVerifyBuffer(cm, issued_der->buffer,
+                (long)issued_der->length, WOLFSSL_FILETYPE_ASN1)
+                    != WOLFSSL_SUCCESS)
+        rc = -1;
+
+    wc_FreeDer(&issued_der);
+    if (cm != NULL)
+        wolfSSL_CertManagerFree(cm);
+    wolfcert_buffer_free(&issued);
+    wolfcert_buffer_free(&csr);
+    wolfcert_key_free(key);
+    return rc;
+}
+
 /* proto_opts.scep.txid_mode = PUBKEY_HASH: the transactionID must be the
  * 64-char upper-case hex SHA-256 of the enrollee public keyInfo, must
  * match a value recomputed from the CSR, and must be deterministic (a second
@@ -736,6 +790,12 @@ int main(void)
     /* ---- Public-key-hash transactionID (RFC 8894 section 3.2.1) ----------- */
     REQUIRE(check_pubkey_txid(&cli, &caps, &kcfg,
                               ca_der->buffer, ca_der->length) == WOLFCERT_OK);
+
+    /* ---- RSA-4096 enrollment ---------------------------------------------- */
+    rc = check_rsa4096(&cli, &caps, ca_der->buffer, ca_der->length);
+    if (rc != WOLFCERT_OK)
+        fprintf(stderr, "SCEP rsa:4096 rc=%d (%s)\n", rc, wolfcert_strerror(rc));
+    REQUIRE(rc == WOLFCERT_OK);
 
     /* ---- Content-cipher override: explicit AES-256 and AES-128 both enroll.
      * Each half needs the cipher wolfSSL was actually built with; scep_prepare

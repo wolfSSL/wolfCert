@@ -998,16 +998,20 @@ static int do_scep_round_trip(const WolfCertServerCfg* srv,
 static int rsa_key_to_der(const WolfCertKey* key, void* heap,
                           uint8_t** out_der, size_t* out_len)
 {
-    size_t cap = 2048;
+    /* DER size grows with the modulus; give it head room. */
+    size_t bits = key->rsa_bits ? (size_t)key->rsa_bits : 4096;
+    size_t cap = bits + 2048;
     uint8_t* der = (uint8_t*)WOLFCERT_XMALLOC(cap, heap);
+    int n;
+
     if (der == NULL)
         return WOLFCERT_ERR_MEMORY;
 
-    int n = wc_RsaKeyToDer((RsaKey*)key->impl, der, (word32)cap);
+    n = wc_RsaKeyToDer((RsaKey*)key->impl, der, (word32)cap);
     if (n <= 0) {
         wc_ForceZero(der, (word32)cap);
         WOLFCERT_XFREE(der, heap);
-        return WOLFCERT_ERR_CRYPTO;
+        return WOLFCERT_ERR_WC(n, "scep", "RsaKeyToDer");
     }
 
     *out_der = der;

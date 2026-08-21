@@ -59,22 +59,45 @@ static void* server_thread(void* arg)
     return NULL;
 }
 
-/* Send a raw HTTP/1.1 GET to the plain-HTTP SCEP server on the loopback port
- * and return the numeric response status (or -1 on transport failure). An
- * optional body (with a matching Content-Length) is sent when `body` is
- * non-NULL. Used to exercise the server's malformed-GET rejection branches and
- * the GET-with-body free path, which the client API cannot produce. */
-static int raw_http_status(uint16_t port, const char* target, const char* body)
+/* write() on a stream socket may return a short count. */
+static int write_all_fd(int fd, const uint8_t* buf, size_t len)
+{
+    size_t off = 0;
+
+    while (off < len) {
+        ssize_t w = write(fd, buf + off, len - off);
+        if (w <= 0)
+            return -1;
+        off += (size_t)w;
+    }
+
+    return 0;
+}
+
+/* Raw HTTP/1.1 request to the loopback SCEP server, for malformed-request
+ * branches the client API cannot produce. out_body, when set, is caller-freed. */
+static int raw_http_req(uint16_t port, const char* method, const char* target,
+                        const char* content_type,
+                        const uint8_t* body, size_t body_len, int persistent,
+                        uint8_t** out_body, size_t* out_body_len)
 {
     struct sockaddr_in addr;
     struct timeval tv;
-    char req[512];
-    char resp[128];
-    size_t body_len = body != NULL ? strlen(body) : 0;
+    char hdr[512];
+    uint8_t* resp = NULL;
+    size_t resp_len = 0;
+    size_t resp_cap = 0;
+    const uint8_t* sep;
+    int eof = 0;
     int fd;
     int n;
     ssize_t r;
     int status = -1;
+
+    if (out_body != NULL && out_body_len != NULL) {
+        *out_body = NULL;
+        *out_body_len = 0;
+    }
 
     fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0)
@@ -94,33 +117,84 @@ static int raw_http_status(uint16_t port, const char* target, const char* body)
         return -1;
     }
 
-    if (body_len > 0)
-        n = snprintf(req, sizeof(req),
-                     "GET %s HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n"
-                     "Content-Length: %zu\r\n\r\n%s",
-                     target, body_len, body);
+    if (body != NULL)
+        n = snprintf(hdr, sizeof(hdr),
+                     "%s %s HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: %s\r\n"
+                     "%s%s%sContent-Length: %zu\r\n\r\n",
+                     method, target, persistent ? "keep-alive" : "close",
+                     content_type != NULL ? "Content-Type: " : "",
+                     content_type != NULL ? content_type : "",
+                     content_type != NULL ? "\r\n" : "",
+                     body_len);
     else
-        n = snprintf(req, sizeof(req),
-                     "GET %s HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
-                     target);
-    if (n < 0 || (size_t)n >= sizeof(req)) {
+        n = snprintf(hdr, sizeof(hdr),
+                     "%s %s HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: %s\r\n\r\n",
+                     method, target, persistent ? "keep-alive" : "close");
+    if (n < 0 || (size_t)n >= sizeof(hdr)) {
         close(fd);
         return -1;
     }
-    if (write(fd, req, (size_t)n) != (ssize_t)n) {
+    if (write_all_fd(fd, (const uint8_t*)hdr, (size_t)n) != 0 ||
+            (body_len > 0 && write_all_fd(fd, body, body_len) != 0)) {
         close(fd);
         return -1;
     }
 
-    r = read(fd, resp, sizeof(resp) - 1);
-    if (r > 0) {
-        resp[r] = '\0';
-        if (strncmp(resp, "HTTP/1.1 ", 9) == 0)
-            status = atoi(resp + 9);
+    /* Read to EOF so the whole response is available. A grow failure or a
+     * read error -- including the SO_RCVTIMEO expiry when the server holds the
+     * connection open -- must not pass for a complete response. */
+    for (;;) {
+        if (resp_len + 4096 + 1 > resp_cap) {
+            size_t want = resp_cap == 0 ? 8192 : resp_cap * 2;
+            uint8_t* grown = (uint8_t*)realloc(resp, want);
+            if (grown == NULL)
+                break;
+            resp = grown;
+            resp_cap = want;
+        }
+        r = read(fd, resp + resp_len, 4096);
+        if (r < 0)
+            break;
+        if (r == 0) {
+            eof = 1;
+            break;
+        }
+        resp_len += (size_t)r;
     }
-
     close(fd);
+
+    if (resp == NULL || !eof) {
+        free(resp);
+        return -1;
+    }
+    resp[resp_len] = '\0';
+
+    if (resp_len > 9 && memcmp(resp, "HTTP/1.1 ", 9) == 0)
+        status = atoi((const char*)resp + 9);
+
+    sep = (const uint8_t*)memmem(resp, resp_len, "\r\n\r\n", 4);
+    if (out_body != NULL && out_body_len != NULL && sep != NULL) {
+        size_t off = (size_t)(sep - resp) + 4;
+        size_t len = resp_len - off;
+        uint8_t* b = (uint8_t*)malloc(len + 1);
+        if (b != NULL) {
+            memcpy(b, resp + off, len);
+            b[len] = '\0';
+            *out_body = b;
+            *out_body_len = len;
+        }
+    }
+
+    free(resp);
     return status;
+}
+
+/* GET wrapper preserving the original call sites. */
+static int raw_http_status(uint16_t port, const char* target, const char* body)
+{
+    return raw_http_req(port, "GET", target, NULL,
+                        (const uint8_t*)body,
+                        body != NULL ? strlen(body) : 0, 0, NULL, NULL);
 }
 
 /* Exercise the HTTP GET PKIOperation fallback (RFC 8894 section 4.1): with a
@@ -724,6 +798,148 @@ static int check_getnextca_ca_id(const uint8_t* ca_der_buf, size_t ca_der_len)
     return 0;
 }
 
+/* RFC 8894 section 3.2.1 requires transactionID and a fresh senderNonce in every
+ * pkiMessage; the client always sends both, so POST hand-built ones instead. */
+static int check_required_attrs(WolfCertServer* s, const WolfCertKeyCfg* kcfg,
+                                const uint8_t* ca_der_buf, size_t ca_der_len)
+{
+    WolfCertCertMeta meta = { .subject_dn = "CN=scep-attrs" };
+    WolfCertKey*   key  = NULL;
+    WolfCertBuffer csr  = { 0 };
+    WolfCertBuffer kder = { 0 };
+    WolfCertBuffer env  = { 0 };
+    uint8_t* signer = NULL;
+    size_t   signer_len = 0;
+    uint8_t  tid[16], snonce[16];
+    size_t   i;
+    int      rc;
+
+    rc = wolfcert_key_generate(kcfg, &key);
+    if (rc == WOLFCERT_OK)
+        rc = wolfcert_csr_build(key, &meta, &csr);
+    if (rc == WOLFCERT_OK)
+        rc = wolfcert_key_to_der(key, &kder);
+    if (rc == WOLFCERT_OK)
+        rc = wolfcert_scep_self_signed_rsa((RsaKey*)key->impl, csr.data,
+                                           csr.len, &signer, &signer_len, NULL);
+    if (rc == WOLFCERT_OK)
+        rc = wolfcert_scep_envelop(ca_der_buf, ca_der_len, csr.data, csr.len,
+                                   AES128CBCb, &env, NULL);
+
+    memset(tid,    0x11, sizeof(tid));
+    memset(snonce, 0x22, sizeof(snonce));
+
+    /* Each round omits one required attribute; the last is the control that
+     * proves this raw-POST harness reaches the issuance path at all. */
+    for (i = 0; rc == WOLFCERT_OK && i < 5; ++i) {
+        WolfCertScepAttrs a = { .message_type = "19" };
+        WolfCertBuffer msg = { 0 };
+        WolfCertBuffer renv = { 0 };
+        uint8_t *r_tid = NULL, *r_sn = NULL, *r_rn = NULL, *r_sc = NULL;
+        size_t   r_tidl = 0,   r_snl = 0,   r_rnl = 0,   r_scl = 0;
+        char    *r_mt = NULL,  *r_st = NULL, *r_fi = NULL;
+        uint8_t* rsp = NULL;
+        size_t   rsp_len = 0;
+        int      st;
+        int      ok;
+
+        if (i == 0) {                       /* no transactionID */
+            a.sender_nonce = snonce;  a.sender_nonce_len = sizeof(snonce);
+        }
+        else if (i == 1) {                  /* zero-length transactionID */
+            a.transaction_id = tid;   a.transaction_id_len = 0;
+            a.sender_nonce = snonce;  a.sender_nonce_len = sizeof(snonce);
+        }
+        else if (i == 2) {                  /* no senderNonce */
+            a.transaction_id = tid;   a.transaction_id_len = sizeof(tid);
+        }
+        else if (i == 3) {                  /* zero-length senderNonce */
+            a.transaction_id = tid;   a.transaction_id_len = sizeof(tid);
+            a.sender_nonce = snonce;  a.sender_nonce_len = 0;
+        }
+        else {                              /* control: both present */
+            a.transaction_id = tid;   a.transaction_id_len = sizeof(tid);
+            a.sender_nonce = snonce;  a.sender_nonce_len = sizeof(snonce);
+        }
+
+        rc = wolfcert_scep_build_pki_message(env.data, env.len,
+                    signer, signer_len, kder.data, kder.len,
+                    SHA256h, &a, &msg, NULL);
+        if (rc != WOLFCERT_OK)
+            break;
+
+        st = raw_http_req(wolfcert_server_port(s), "POST",
+                          "/scep?operation=PKIOperation",
+                          "application/x-pki-message",
+                          msg.data, msg.len, 0, &rsp, &rsp_len);
+        wolfcert_buffer_free(&msg);
+
+        if (i < 4) {
+            /* Nothing to echo, so no conforming CertRep exists. */
+            ok = (st == 400);
+        }
+        else {
+            ok = (st == 200 && rsp != NULL &&
+                  wolfcert_scep_parse_pki_message(rsp, rsp_len, &renv,
+                      &r_tid, &r_tidl, &r_sn, &r_snl, &r_rn, &r_rnl,
+                      &r_mt, &r_st, &r_sc, &r_scl, &r_fi, NULL) == WOLFCERT_OK);
+
+            ok = ok && r_tid != NULL && r_tidl == sizeof(tid) &&
+                 memcmp(r_tid, tid, sizeof(tid)) == 0 &&
+                 r_st != NULL && strcmp(r_st, "0") == 0 && renv.len > 0 &&
+                 r_rn != NULL && r_rnl == sizeof(snonce) &&
+                 memcmp(r_rn, snonce, sizeof(snonce)) == 0;
+
+            WOLFCERT_XFREE(r_tid, NULL); WOLFCERT_XFREE(r_sn, NULL);
+            WOLFCERT_XFREE(r_rn,  NULL); WOLFCERT_XFREE(r_sc, NULL);
+            WOLFCERT_XFREE(r_mt,  NULL); WOLFCERT_XFREE(r_st, NULL);
+            WOLFCERT_XFREE(r_fi,  NULL);
+            wolfcert_buffer_free(&renv);
+        }
+
+        free(rsp);
+        if (!ok) {
+            fprintf(stderr, "FAIL %s:%d required-attrs round %zu (status %d)\n",
+                    __FILE__, __LINE__, i, st);
+            rc = -1;
+        }
+    }
+
+    /* A rejected pkiMessage must close the connection even when the client
+     * asked to keep it. raw_http_req reports a status only once it sees EOF,
+     * so a server holding the socket open returns -1 here, not 400. */
+    if (rc == WOLFCERT_OK) {
+        WolfCertScepAttrs a = { .message_type = "19",
+                                .sender_nonce = snonce,
+                                .sender_nonce_len = sizeof(snonce) };
+        WolfCertBuffer msg = { 0 };
+
+        rc = wolfcert_scep_build_pki_message(env.data, env.len,
+                    signer, signer_len, kder.data, kder.len,
+                    SHA256h, &a, &msg, NULL);
+        if (rc == WOLFCERT_OK) {
+            if (raw_http_req(wolfcert_server_port(s), "POST",
+                             "/scep?operation=PKIOperation",
+                             "application/x-pki-message",
+                             msg.data, msg.len, 1, NULL, NULL) != 400) {
+                fprintf(stderr, "FAIL %s:%d required-attrs kept the "
+                                "connection open after reject\n",
+                        __FILE__, __LINE__);
+                rc = -1;
+            }
+            wolfcert_buffer_free(&msg);
+        }
+    }
+
+    WOLFCERT_XFREE(signer, NULL);
+    wolfcert_buffer_free(&env);
+    wolfcert_buffer_free(&kder);
+    wolfcert_buffer_free(&csr);
+    wolfcert_key_free(key);
+
+    return rc;
+}
+
 int main(void)
 {
     REQUIRE(wolfcert_init(NULL) == WOLFCERT_OK);
@@ -884,6 +1100,9 @@ int main(void)
      * real pkiMessage, so the request is rejected with 400. */
     REQUIRE(raw_http_status(wolfcert_server_port(s),
                 "/scep?operation=PKIOperation&message=QUJD", "XYZ") == 400); /* body freed */
+
+    REQUIRE(check_required_attrs(s, &kcfg, ca_der->buffer,
+                                 ca_der->length) == WOLFCERT_OK);
 
 #ifdef WOLFCERT_HAVE_ED25519
     /* Ed25519 signer must be rejected cleanly (RFC 8894 requires RSA). */

@@ -792,6 +792,13 @@ static int handle_pki_op(WolfCertServer* s, int fd, const ScepRequest* req)
         goto out;
     }
 
+    if (tid == NULL || tid_len == 0 || snonce == NULL || snonce_len == 0) {
+        s->keep_alive = 0;
+        send_text(s, fd, 400, "Bad Message", "text/plain", "");
+        rc = WOLFCERT_ERR_PROTOCOL;
+        goto out;
+    }
+
     rc = wolfcert_scep_deenvelop(s->ca.cert_der, s->ca.cert_der_len,
                                   s->ca.key_der,  s->ca.key_der_len,
                                   env.data, env.len, &csr, s->heap);

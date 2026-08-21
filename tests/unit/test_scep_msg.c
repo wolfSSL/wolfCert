@@ -541,6 +541,49 @@ static int test_signer_subject_matches_csr(void)
     return 0;
 }
 
+/* RFC 8894 section 1: the transient self-signed signer certificate must carry a
+ * keyUsage extension asserting digitalSignature and keyEncipherment. */
+static int test_signer_key_usage(void)
+{
+    RsaKey      key;
+    WC_RNG      rng;
+    uint8_t*    csr_der    = NULL;
+    size_t      csr_len    = 0;
+    uint8_t*    signer_der = NULL;
+    size_t      signer_len = 0;
+    DecodedCert dc;
+    int         rc = 0;
+
+    REQUIRE(wc_InitRng(&rng) == 0);
+    REQUIRE(wc_InitRsaKey(&key, NULL) == 0);
+    REQUIRE(wc_MakeRsaKey(&key, 2048, WC_RSA_EXPONENT, &rng) == 0);
+
+    REQUIRE(make_csr(&key, &rng, "device-9799.example.org", "Widgets Inc",
+                     &csr_der, &csr_len) == 0);
+
+    REQUIRE(wolfcert_scep_self_signed_rsa(&key, csr_der, csr_len,
+                                          &signer_der, &signer_len, NULL)
+            == WOLFCERT_OK);
+
+    wc_InitDecodedCert(&dc, signer_der, (word32)signer_len, NULL);
+    REQUIRE(wc_ParseCert(&dc, CERT_TYPE, NO_VERIFY, NULL) == 0);
+
+    if (dc.extKeyUsageSet == 0 ||
+            (dc.extKeyUsage & KEYUSE_DIGITAL_SIG) == 0 ||
+            (dc.extKeyUsage & KEYUSE_KEY_ENCIPHER) == 0) {
+        rc = 1;
+    }
+
+    wc_FreeDecodedCert(&dc);
+    WOLFCERT_XFREE(signer_der, NULL);
+    free(csr_der);
+    wc_FreeRsaKey(&key);
+    wc_FreeRng(&rng);
+
+    REQUIRE(rc == 0);
+    return 0;
+}
+
 /* RFC 8894: a CertRep must be signed by the CA/RA certificate the client
  * fetched via GetCACert. A response signed by any other certificate, as a
  * MITM or rogue server would forge, must be rejected before the client
@@ -1275,6 +1318,8 @@ int main(void)
     if (test_signer_subject_fallback())
         return 1;
     if (test_signer_subject_matches_csr())
+        return 1;
+    if (test_signer_key_usage())
         return 1;
     if (test_cert_rep_signer_trust())
         return 1;

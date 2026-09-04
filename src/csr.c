@@ -65,7 +65,7 @@ static const struct rdn_field rdn_fields[] = {
     { "OU",               2,  offsetof(CertName, unit),       CTC_NAME_SIZE },
     { "C",                1,  offsetof(CertName, country),    CTC_NAME_SIZE },
     { "ST",               2,  offsetof(CertName, state),      CTC_NAME_SIZE },
-    { "L",                2,  offsetof(CertName, locality),   CTC_NAME_SIZE },
+    { "L",                1,  offsetof(CertName, locality),   CTC_NAME_SIZE },
     { "SN",               2,  offsetof(CertName, sur),        CTC_NAME_SIZE },
     { "GN",               2,  offsetof(CertName, givenName),  CTC_NAME_SIZE },
     { "emailAddress",     12, offsetof(CertName, email),      CTC_NAME_SIZE },

@@ -410,6 +410,14 @@ WOLFCERT_TEST_VIS int wolfcert_scep_self_signed_rsa(RsaKey* key,
     cert->sigType    = CTC_SHA256wRSA;
     cert->daysValid  = 2;
 
+    /* RFC 8894 section 1: the signer certificate must assert digitalSignature
+     * and keyEncipherment. */
+    rc = wc_SetKeyUsage(cert, "digitalSignature,keyEncipherment");
+    if (rc != 0) {
+        wc_CertFree(cert);
+        return WOLFCERT_ERR_WC(rc, "scep", "SetKeyUsage");
+    }
+
     if (wc_InitRng_ex(&rng, heap, WOLFCERT_DEVID_SOFTWARE) != 0) {
         wc_CertFree(cert);
         return WOLFCERT_ERR_CRYPTO;

@@ -103,6 +103,19 @@ jobs:
             os: ubuntu-latest
             build: cmake
             wolfssl: mldsa-87off
+          # ---- Platform pieces compiled out (the transport/store gates) ----
+          - name: cmake-no-builtin-transport
+            os: ubuntu-latest
+            build: cmake
+            wolfssl: full
+            # Neither the CLI nor the test server can supply a transport, so
+            # both build systems reject them here. The socket-driven tests
+            # exit 77 (skipped) on their own; nothing needs excluding.
+            cmake_extra: >-
+              -DWOLFCERT_ENABLE_BUILTIN_TRANSPORT=OFF
+              -DWOLFCERT_ENABLE_POSIX_STORE=OFF
+              -DWOLFCERT_ENABLE_CLI=OFF
+              -DWOLFCERT_ENABLE_SERVER=OFF
           # ---- Constrained builds (unit tests only: single-thread / no-malloc) --
           - name: cmake-static-mem
             os: ubuntu-latest
@@ -223,6 +236,27 @@ jobs:
             -DWOLFCERT_USER_SETTINGS_DIR="$RUNNER_TEMP/us"
           cmake --build build -j "$(nproc)"
           ctest --test-dir build -j "$(nproc)" --output-on-failure
+
+  no-posix-arm:
+    name: freestanding ARM compile (no POSIX)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the bare-metal ARM toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-none-eabi
+      # Headers only: nothing is compiled from wolfSSL and nothing is linked,
+      # so this needs no wolfSSL build and no prefix cache.
+      - name: Check out wolfSSL headers
+        run: |
+          git clone --depth 1 --branch "$WOLFSSL_REF" \
+            https://github.com/wolfSSL/wolfssl "$RUNNER_TEMP/wolfssl"
+      - name: Compile every portable source for Cortex-M4
+        run: |
+          scripts/ci/compile-freestanding.sh \
+            --wolfssl-src "$RUNNER_TEMP/wolfssl"
 
   negative-config:
     name: negative-config (fail-fast gates)

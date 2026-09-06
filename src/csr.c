@@ -17,9 +17,6 @@
  * along with wolfCert.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#define _POSIX_C_SOURCE 200809L
-#define _DEFAULT_SOURCE
-
 #include <wolfcert/csr.h>
 #include <wolfcert/errors.h>
 #include "internal.h"
@@ -28,7 +25,6 @@
 #include <wolfssl/wolfcrypt/asn.h>
 #include <wolfssl/wolfcrypt/error-crypt.h>
 
-#include <arpa/inet.h>
 #include <ctype.h>
 #include <stddef.h>
 #include <string.h>
@@ -145,25 +141,6 @@ static int parse_subject_dn(const char* dn, CertName* subject)
  * expects via wc_FlattenAltNames(). wolfSSL owns all list allocation; the
  * list is released with FreeAltNames(). */
 
-static int encode_ip(const char* s, uint8_t out[16], size_t* out_len)
-{
-    uint8_t buf4[4], buf16[16];
-
-    if (inet_pton(AF_INET, s, buf4) == 1) {
-        memcpy(out, buf4, 4);
-        *out_len = 4;
-        return WOLFCERT_OK;
-    }
-
-    if (inet_pton(AF_INET6, s, buf16) == 1) {
-        memcpy(out, buf16, 16);
-        *out_len = 16;
-        return WOLFCERT_OK;
-    }
-
-    return WOLFCERT_ERR_PARSE;
-}
-
 static int build_san_seq(const WolfCertCertMeta* meta, Cert* cert, void* heap)
 {
     DNS_entry* list = NULL;
@@ -188,7 +165,7 @@ static int build_san_seq(const WolfCertCertMeta* meta, Cert* cert, void* heap)
     for (size_t i = 0; i < meta->san_ip_len && rc == 0; ++i) {
         uint8_t ipbuf[16];
         size_t iplen = 0;
-        int erc = encode_ip(meta->san_ip[i], ipbuf, &iplen);
+        int erc = wolfcert_parse_ip(meta->san_ip[i], ipbuf, &iplen);
         if (erc != WOLFCERT_OK) {
             FreeAltNames(list, heap);
             return erc;

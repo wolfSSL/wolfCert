@@ -10,7 +10,7 @@ build entirely.
 
 | Workflow | Trigger | What it does |
 |----------|---------|--------------|
-| `pr.yml` | PR + push | Merge gate: CMake (`-Werror`) + autoconf + ASan/UBSan on the canonical config, plus per-PR feature/config gating — EST-only, SCEP-only, server-off, the key-alg variants (NO_RSA, ECC-only, RSA-only, no-3DES), TLS 1.3-only, the three ML-DSA per-level builds, the static-memory and no-malloc constrained builds, the header-only (`WOLFCERT_USER_SETTINGS`) build, a macOS build, and the two cheapest configure-must-fail assertions. |
+| `pr.yml` | PR + push | Merge gate: CMake (`-Werror`) + autoconf + ASan/UBSan on the canonical config, plus per-PR feature/config gating — EST-only, SCEP-only, server-off, the key-alg variants (NO_RSA, ECC-only, RSA-only, no-3DES), TLS 1.3-only, the three ML-DSA per-level builds, the static-memory and no-malloc constrained builds, the platform-pieces-off build (`cmake-no-builtin-transport`), the freestanding ARM compile (`no-posix-arm`), the header-only (`WOLFCERT_USER_SETTINGS`) build, a macOS build, and the two cheapest configure-must-fail assertions. |
 | `lint.yml` | PR + push | GPL license-header check and CMake↔autoconf parity of both the library and test source lists (`scripts/ci/check-buildsystem-parity.sh`). No wolfSSL build — fails in seconds. |
 | `nightly.yml` | schedule + dispatch | Re-runs the wolfSSL-variant build matrix against fresh wolfSSL `master`, the macOS extras, and the full negative-config set. Also **reseeds the wolfSSL prefix caches** so the next day's PRs restore instead of build. The feature/config gating itself now runs per-PR (see `pr.yml`). |
 | `sanitizers.yml` | schedule + dispatch | ASan+UBSan over the full test suite, ThreadSanitizer over the threaded integration roundtrips (against a TSAN-instrumented wolfSSL), and valgrind over a representative subset. |
@@ -62,3 +62,17 @@ TLS / all key algorithms, so wolfCert's compile-time `#error` guards for those
 scripts/ci/assert-configure-fails.sh              # all cases, both build systems
 scripts/ci/assert-configure-fails.sh no-rsa-scep  # a single case
 ```
+
+The `no-posix-arm` gate compiles every portable `src/*.c` for a Cortex-M4
+against wolfSSL's headers only, keeping wolfCert runnable on a non-BSD-sockets
+stack. Nothing is built or linked, so it needs a wolfSSL checkout rather than a
+prefix. Its feature set is `scripts/ci/freestanding-user_settings.h`; the
+script's own header documents the rest.
+
+```sh
+git clone --depth 1 https://github.com/wolfSSL/wolfssl /tmp/wolfssl-src
+scripts/ci/compile-freestanding.sh --wolfssl-src /tmp/wolfssl-src
+```
+
+Its companion is the `cmake-no-builtin-transport` row: the ARM job proves the
+code is header-clean, that row proves the gated build links and passes tests.

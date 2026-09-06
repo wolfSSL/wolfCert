@@ -63,6 +63,10 @@
 #define WOLFCERT_HAVE_SCEP   1   /* SCEP (RFC 8894) - requires WOLFCERT_HAVE_RSA */
 #define WOLFCERT_HAVE_SERVER 1   /* built-in EST/SCEP test server */
 
+/* ---- Platform ---- */
+#define WOLFCERT_HAVE_POSIX_STORE 1
+#define WOLFCERT_HAVE_BUILTIN_TRANSPORT 1
+
 /* ---- Key algorithms (enable at least one) ---- */
 #define WOLFCERT_HAVE_RSA     1
 #define WOLFCERT_HAVE_ECC     1

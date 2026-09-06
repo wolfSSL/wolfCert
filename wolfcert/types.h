@@ -63,14 +63,29 @@ typedef enum {
     WOLFCERT_ENCODING_DER = 1
 } WolfCertEncoding;
 
-/* Pluggable TCP connect. Open a connection to host:port and return a connected
- * socket file descriptor (>= 0), or a negative value on failure. timeout_ms is
- * a hint (0 = library/OS default); ctx is passed through untouched. wolfCert
- * performs all subsequent I/O - and the TLS handshake via wolfSSL - on the
- * returned fd, so it must be a real socket. When a config leaves connect_cb
- * NULL, the built-in wolfcert_posix_connect() is used. */
+/* Deprecated: use WolfCertTransport, never both on one config (BAD_ARG). An
+ * fd cannot carry a non-socket handle, which is why this is going away.
+ * Return it blocking; its own SO_RCVTIMEO / SO_SNDTIMEO then bound the I/O. */
 typedef int (*WolfCertConnectFn)(const char* host, int port,
                                  int timeout_ms, void* ctx);
+
+/* Pluggable transport, carrying TLS records and plain HTTP alike. NULL in a
+ * config selects the built-in POSIX one; it must outlive its connections.
+ * Contract: docs/ARCHITECTURE.md section 4.6. */
+typedef struct WolfCertTransport {
+    /* *conn is opaque and never NULL-tested, so 0 is a valid handle. */
+    int  (*connect)(void* ctx, const char* host, int port,
+                    int timeout_ms, void** conn);
+    /* Bytes moved, or a negative WOLFCERT_ERR_*; never 0 (orderly close is
+     * CONN_CLOSED). timeout_ms: 0 never blocks, > 0 caps it, < 0 waits. */
+    int  (*read)(void* ctx, void* conn, uint8_t* buf, size_t len,
+                 int timeout_ms);
+    int  (*write)(void* ctx, void* conn, const uint8_t* buf, size_t len,
+                  int timeout_ms);
+    /* Runs exactly once per successful connect, error paths included. */
+    int  (*disconnect)(void* ctx, void* conn);
+    void* ctx;   /* transport-wide, e.g. the stack instance */
+} WolfCertTransport;
 
 typedef enum {
     WOLFCERT_KEY_RSA     = 1,
@@ -265,11 +280,6 @@ typedef struct {
      * typically sets this explicitly. */
     size_t           max_response_bytes;
 
-    /* Optional pluggable transport. When connect_cb is set, wolfCert calls it
-     * (instead of the built-in wolfcert_posix_connect) to open every TCP
-     * connection for this server; connect_ctx is passed through untouched.
-     * Lets an application own DNS/socket policy or supply a custom transport
-     * while wolfCert keeps doing the HTTP and (via wolfSSL) TLS I/O. */
     WolfCertConnectFn connect_cb;
     void*             connect_ctx;
 
@@ -293,6 +303,8 @@ typedef struct {
     /* Heap hint for any library-internal allocations made while servicing
      * this request. NULL = library default. */
     void*            heap;
+
+    const WolfCertTransport* transport;
 } WolfCertServerCfg;
 
 /* A caller-owned byte buffer produced by the library. Free with

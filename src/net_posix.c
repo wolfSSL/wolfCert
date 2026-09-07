@@ -19,7 +19,7 @@
 
 /*
  * Built-in POSIX/BSD-sockets WolfCertTransport, used when a config leaves
- * `transport` NULL. It lives in its own translation unit so the core HTTP/TLS
+ * `transport` zeroed. It lives in its own translation unit so the core HTTP/TLS
  * logic holds no syscalls, and so a platform without BSD sockets can supply
  * its own transport and leave this file out of the link.
  */
@@ -30,9 +30,6 @@
 #include <wolfcert/http.h>
 #include <wolfcert/errors.h>
 #include "internal.h"
-
-#include <wolfssl/wolfio.h>
-#include <wolfssl/error-ssl.h>
 
 #include <errno.h>
 #include <limits.h>
@@ -160,8 +157,8 @@ int wolfcert_posix_connect(const char* host, int port, int timeout_ms, void* ctx
 
 /* ---- WolfCertTransport instance ----------------------------------------- */
 
-/* Wait for readiness. timeout_ms follows the transport contract: 0 polls,
- * > 0 caps the wait, < 0 blocks. `want` is what to report on a 0 timeout. */
+/* Wait for readiness on fd. `want` is the caller's WANT_READ or WANT_WRITE,
+ * returned when nothing is ready and timeout_ms asked not to block. */
 static int posix_wait(int fd, short events, int timeout_ms, int want)
 {
     struct pollfd pfd;
@@ -183,26 +180,13 @@ static int posix_wait(int fd, short events, int timeout_ms, int want)
     return WOLFCERT_OK;
 }
 
-/* wolfIO_* return CBIO codes, which carry no direction: WANT_READ and
- * WANT_WRITE are the same value, so the caller supplies `want`. */
-static int map_io(int n, int want)
-{
-    if (n > 0)
-        return n;
-    /* wolfSSL passes a 0-length read straight through, so map it here. */
-    if (n == 0)
-        return WOLFCERT_ERR_CONN_CLOSED;
-
-    switch (n) {
-        case WOLFSSL_CBIO_ERR_WANT_READ:  /* == WANT_WRITE */
-            return want;
-        case WOLFSSL_CBIO_ERR_CONN_CLOSE:
-        case WOLFSSL_CBIO_ERR_CONN_RST:
-            return WOLFCERT_ERR_CONN_CLOSED;
-        default:
-            return WOLFCERT_ERR_IO;
-    }
-}
+/* A failed transfer is an I/O error unless it merely would block, so this is
+ * the one errno the byte path reads. */
+#if defined(EWOULDBLOCK) && EWOULDBLOCK != EAGAIN
+    #define WOLFCERT_WOULDBLOCK(e) ((e) == EAGAIN || (e) == EWOULDBLOCK)
+#else
+    #define WOLFCERT_WOULDBLOCK(e) ((e) == EAGAIN)
+#endif
 
 /* poll() only promises that one byte can move, so the transfer must never
  * block; the wait is poll's job. Sockets the transport owns stay O_NONBLOCK. */
@@ -242,8 +226,8 @@ static int posix_read(void* ctx, void* conn, uint8_t* buf, size_t len,
                       int timeout_ms)
 {
     int fd = (int)(intptr_t)conn;
+    ssize_t n;
     int rc;
-    int n;
 
     (void)ctx;
 
@@ -257,24 +241,30 @@ static int posix_read(void* ctx, void* conn, uint8_t* buf, size_t len,
         if (rc != WOLFCERT_OK)
             return rc;
 
-        /* TranslateIoReturnCode reports EINTR rather than retrying. */
         do {
-            n = wolfIO_Recv(fd, (char*)buf, (int)len, 0);
-        } while (n == WOLFSSL_CBIO_ERR_ISR);
+            n = recv(fd, buf, len, 0);
+        } while (n < 0 && errno == EINTR);
 
-        if (n != WOLFSSL_CBIO_ERR_WANT_READ || timeout_ms >= 0)
-            break;
+        if (n > 0)
+            return (int)n;
+        if (n == 0)
+            return WOLFCERT_ERR_CONN_CLOSED;
+
+        /* poll() can report a readiness the transfer then declines. Only an
+         * unbounded caller waits again; the others report it. */
+        if (!WOLFCERT_WOULDBLOCK(errno))
+            return WOLFCERT_ERR_IO;
+        if (timeout_ms >= 0)
+            return WOLFCERT_ERR_WANT_READ;
     }
-
-    return map_io(n, WOLFCERT_ERR_WANT_READ);
 }
 
 static int posix_write(void* ctx, void* conn, const uint8_t* buf, size_t len,
                        int timeout_ms)
 {
     int fd = (int)(intptr_t)conn;
+    ssize_t n;
     int rc;
-    int n;
 
     (void)ctx;
 
@@ -289,14 +279,19 @@ static int posix_write(void* ctx, void* conn, const uint8_t* buf, size_t len,
             return rc;
 
         do {
-            n = wolfIO_Send(fd, (char*)(uintptr_t)buf, (int)len, 0);
-        } while (n == WOLFSSL_CBIO_ERR_ISR);
+            n = send(fd, buf, len, 0);
+        } while (n < 0 && errno == EINTR);
 
-        if (n != WOLFSSL_CBIO_ERR_WANT_WRITE || timeout_ms >= 0)
-            break;
+        if (n > 0)
+            return (int)n;
+        if (n == 0)
+            return WOLFCERT_ERR_IO;
+
+        if (!WOLFCERT_WOULDBLOCK(errno))
+            return WOLFCERT_ERR_IO;
+        if (timeout_ms >= 0)
+            return WOLFCERT_ERR_WANT_WRITE;
     }
-
-    return map_io(n, WOLFCERT_ERR_WANT_WRITE);
 }
 
 static int posix_disconnect(void* ctx, void* conn)
@@ -313,36 +308,10 @@ const WolfCertTransport wolfcert_posix_transport = {
     posix_connect, posix_read, posix_write, posix_disconnect, NULL
 };
 
-/* Dial through the deprecated connect_cb, keeping every fd detail in this file.
- * The descriptor becomes ours, so it gets the O_NONBLOCK posix_connect sets. */
-int wolfcert_legacy_connect(WolfCertConnectFn cb, void* cb_ctx,
-                            const char* host, int port, int timeout_ms,
-                            void** conn)
+int wolfcert_transport_fd(const WolfCertTransport* t, void* conn)
 {
-    int fd;
+    if (t == NULL || t->connect != posix_connect)
+        return -1;
 
-    if (cb == NULL || conn == NULL)
-        return WOLFCERT_ERR_BAD_ARG;
-
-    fd = cb(host, port, timeout_ms, cb_ctx);
-    if (fd < 0)
-        return WOLFCERT_ERR_IO;
-
-    if (set_nonblock(fd) != WOLFCERT_OK) {
-        (void)close(fd);
-        return WOLFCERT_ERR_IO;
-    }
-
-    *conn = (void*)(intptr_t)fd;
-    return WOLFCERT_OK;
-}
-
-/* Byte path for a connection opened by wolfcert_legacy_connect. */
-const WolfCertTransport wolfcert_legacy_transport = {
-    NULL, posix_read, posix_write, posix_disconnect, NULL
-};
-
-int wolfcert_transport_is_fd_backed(const WolfCertTransport* t)
-{
-    return t == &wolfcert_posix_transport || t == &wolfcert_legacy_transport;
+    return (int)(intptr_t)conn;
 }

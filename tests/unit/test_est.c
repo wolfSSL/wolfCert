@@ -441,17 +441,16 @@ static int cfg_tr_disconnect(void* ctx, void* c)
 
 static int test_est_uses_cfg_transport(void)
 {
-    static const WolfCertTransport tr = { cfg_tr_connect, cfg_tr_read,
-                                          cfg_tr_write, cfg_tr_disconnect,
-                                          NULL };
+    WolfCertTransport tr = { cfg_tr_connect, cfg_tr_read,
+                             cfg_tr_write, cfg_tr_disconnect, NULL };
     WolfCertServerCfg srv = {
         .protocol      = WOLFCERT_PROTO_EST,
         .server_url    = "https://127.0.0.1:1/.well-known/est",
-        .verify_server = 1,
-        .transport     = &tr
+        .verify_server = 1
     };
     WolfCertBuffer out = { 0 };
 
+    srv.transport = tr;
     g_cfg_tr_connects = 0;
     REQUIRE(wolfcert_est_get_cacerts(&srv, &out) != WOLFCERT_OK);
     REQUIRE(g_cfg_tr_connects == 1);

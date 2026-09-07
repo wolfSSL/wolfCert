@@ -63,20 +63,15 @@ typedef enum {
     WOLFCERT_ENCODING_DER = 1
 } WolfCertEncoding;
 
-/* Deprecated: use WolfCertTransport, never both on one config (BAD_ARG). An
- * fd cannot carry a non-socket handle, which is why this is going away. */
-typedef int (*WolfCertConnectFn)(const char* host, int port,
-                                 int timeout_ms, void* ctx);
-
-/* Pluggable transport, carrying TLS records and plain HTTP alike. NULL in a
- * config selects the built-in POSIX one. Contract: docs/ARCHITECTURE.md 4.6. */
+/* Pluggable transport, carrying TLS records and plain HTTP alike.
+ * Contract: docs/ARCHITECTURE.md 4.6. */
 typedef struct WolfCertTransport {
     /* Return WOLFCERT_OK with the handle stored in *conn, else a negative
      * WOLFCERT_ERR_*. *conn is opaque and never NULL-tested, so 0 is valid. */
     int  (*connect)(void* ctx, const char* host, int port,
                     int timeout_ms, void** conn);
     /* Bytes moved, or a negative WOLFCERT_ERR_*; never 0 (orderly close is
-     * CONN_CLOSED). timeout_ms: 0 never blocks, > 0 caps it, < 0 waits. */
+     * CONN_CLOSED). */
     int  (*read)(void* ctx, void* conn, uint8_t* buf, size_t len,
                  int timeout_ms);
     int  (*write)(void* ctx, void* conn, const uint8_t* buf, size_t len,
@@ -279,9 +274,6 @@ typedef struct {
      * typically sets this explicitly. */
     size_t           max_response_bytes;
 
-    WolfCertConnectFn connect_cb;
-    void*             connect_ctx;
-
     /* Protocol-specific options, selected by `protocol`: one connection is
      * either EST or SCEP, never both, so the two option sets share storage.
      * Every member is zero-init-safe - leaving the union untouched keeps the
@@ -303,7 +295,7 @@ typedef struct {
      * this request. NULL = library default. */
     void*            heap;
 
-    const WolfCertTransport* transport;
+    WolfCertTransport transport;
 } WolfCertServerCfg;
 
 /* A caller-owned byte buffer produced by the library. Free with

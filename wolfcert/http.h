@@ -30,8 +30,9 @@ extern "C" {
  * requested by the URL scheme, is layered on top of wolfSSL with the
  * caller-supplied trust anchors. */
 
-/* Built-in WolfCertConnectFn: blocking getaddrinfo + socket + connect over
- * POSIX/BSD sockets. Exported so applications can wrap or chain it. */
+/* Blocking getaddrinfo + socket + connect over POSIX/BSD sockets, returning
+ * a connected fd or -1. Exported so a custom transport's connect can open its
+ * TCP leg with it. */
 #ifdef WOLFCERT_HAVE_BUILTIN_TRANSPORT
 WOLFCERT_API int wolfcert_posix_connect(const char* host, int port,
                                         int timeout_ms, void* ctx);
@@ -64,12 +65,9 @@ typedef struct {
      * embedding wolfCert in an MCU almost always sets this explicitly. */
     size_t         max_response_bytes;
 
-    WolfCertConnectFn connect_cb;
-    void*          connect_ctx;
-
     void*          heap;           /* NULL -> default */
 
-    const WolfCertTransport* transport;
+    WolfCertTransport transport;
 } WolfCertHttpRequest;
 
 typedef struct {
@@ -128,12 +126,9 @@ typedef struct {
      * DNS and the initial connect stay synchronous. */
     int            nonblocking;
 
-    WolfCertConnectFn connect_cb;
-    void*          connect_ctx;
-
     void*          heap;
 
-    const WolfCertTransport* transport;
+    WolfCertTransport transport;
 } WolfCertHttpSessionCfg;
 
 WOLFCERT_API int  wolfcert_http_session_open (const WolfCertHttpSessionCfg* cfg,
@@ -149,10 +144,9 @@ WOLFCERT_API int  wolfcert_http_session_request(WolfCertHttpSession* s,
 
 WOLFCERT_API void wolfcert_http_session_close(WolfCertHttpSession* s);
 
-/* Socket descriptor of the open session, for event loops: poll POLLIN /
- * POLLOUT per the last WOLFCERT_ERR_WANT_READ / _WANT_WRITE returned;
- * undefined after wolfcert_http_session_close. A caller-supplied
- * WolfCertTransport has no descriptor to offer, so it returns -1. */
+/* Socket descriptor of the open session: poll POLLIN / POLLOUT per the last
+ * WOLFCERT_ERR_WANT_*. The built-in transport keeps it O_NONBLOCK, so do not
+ * transfer on it. -1 under any other transport; undefined after close. */
 WOLFCERT_API int wolfcert_http_session_fd(const WolfCertHttpSession* s);
 
 /* Non-blocking variant of wolfcert_http_session_request. Must be used

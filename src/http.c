@@ -314,58 +314,45 @@ static int basic_auth_header(const char* user, const char* pass,
 /* ---- TCP + TLS I/O ------------------------------------------------------ */
 
 typedef struct {
-    const WolfCertTransport* t;
+    WolfCertTransport t;
     void*        handle;
     WOLFSSL*     ssl;
     int          io_timeout_ms;   /* 0 nonblocking, < 0 unbounded */
     unsigned int connected : 1;
 } WolfCertConn;
 
-/* Open a connection and attach the transport that owns it. An explicit
- * transport wins; a legacy connect_cb is dialled here and adapted, since it
- * yields a descriptor rather than opening through a vtable. */
+/* Open a connection and take a copy of the transport that owns it. */
 static int dial(WolfCertConn* c, const char* host, int port, int timeout_ms,
-                const WolfCertTransport* transport,
-                WolfCertConnectFn connect_cb, void* connect_ctx)
+                const WolfCertTransport* transport)
 {
-    const WolfCertTransport* t = transport;
+    int cbs;
     int rc;
 
-#ifndef WOLFCERT_HAVE_BUILTIN_TRANSPORT
-    (void)connect_cb;
-    (void)connect_ctx;
+    cbs = (transport->connect != NULL) + (transport->read != NULL) +
+          (transport->write != NULL) + (transport->disconnect != NULL);
 
-    if (t == NULL)
+    if (cbs == 4) {
+        c->t = *transport;
+    }
+    else if (cbs != 0 || transport->ctx != NULL) {
+        return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "http",
+            "transport must set all four callbacks, or nothing at all to take "
+            "the built-in one");
+    }
+    else {
+#ifdef WOLFCERT_HAVE_BUILTIN_TRANSPORT
+        c->t = wolfcert_posix_transport;
+#else
         return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "http",
             "this build has no built-in transport");
-#else
-    if (t == NULL && connect_cb != NULL) {
-        rc = wolfcert_legacy_connect(connect_cb, connect_ctx, host, port,
-                                     timeout_ms, &c->handle);
-        if (rc != WOLFCERT_OK)
-            return rc;
-
-        c->t         = &wolfcert_legacy_transport;
-        c->connected = 1;
-        return WOLFCERT_OK;
+#endif
     }
 
-    if (t == NULL)
-        t = &wolfcert_posix_transport;
-#endif
-
-    /* Validate the whole vtable */
-    if (t->connect == NULL || t->read == NULL || t->write == NULL ||
-        t->disconnect == NULL)
-        return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "http",
-            "transport must supply connect, read, write and disconnect");
-
-    rc = t->connect(t->ctx, host, port, timeout_ms, &c->handle);
+    rc = c->t.connect(c->t.ctx, host, port, timeout_ms, &c->handle);
     if (rc != WOLFCERT_OK)
         return rc < 0 ? rc : WOLFCERT_ERR(WOLFCERT_ERR_IO, "http",
             "transport connect returned %d, not 0 or a WOLFCERT_ERR_*", rc);
 
-    c->t         = t;
     c->connected = 1;
     return WOLFCERT_OK;
 }
@@ -374,7 +361,7 @@ static int dial(WolfCertConn* c, const char* host, int port, int timeout_ms,
 static void conn_close(WolfCertConn* c)
 {
     if (c->connected) {
-        (void)c->t->disconnect(c->t->ctx, c->handle);
+        (void)c->t.disconnect(c->t.ctx, c->handle);
         c->connected = 0;
     }
 }
@@ -440,8 +427,8 @@ static int conn_write(WolfCertConn* c, const void* buf, size_t len)
             w = wolfSSL_write(c->ssl, p + n, (int)(len - n));
         }
         else {
-            w = c->t->write(c->t->ctx, c->handle, p + n, len - n,
-                            c->io_timeout_ms);
+            w = c->t.write(c->t.ctx, c->handle, p + n, len - n,
+                           c->io_timeout_ms);
             if (w > 0 && (size_t)w > len - n)
                 return WOLFCERT_ERR_IO;
         }
@@ -467,8 +454,8 @@ static int wolfcert_cbio_recv(WOLFSSL* ssl, char* buf, int sz, void* ctx)
     if (c == NULL || sz <= 0)
         return WOLFSSL_CBIO_ERR_GENERAL;
 
-    r = c->t->read(c->t->ctx, c->handle, (uint8_t*)buf, (size_t)sz,
-                   c->io_timeout_ms);
+    r = c->t.read(c->t.ctx, c->handle, (uint8_t*)buf, (size_t)sz,
+                  c->io_timeout_ms);
     if (r > sz)
         return WOLFSSL_CBIO_ERR_GENERAL;
     if (r > 0)
@@ -499,8 +486,8 @@ static int wolfcert_cbio_send(WOLFSSL* ssl, char* buf, int sz, void* ctx)
     if (c == NULL || sz <= 0)
         return WOLFSSL_CBIO_ERR_GENERAL;
 
-    r = c->t->write(c->t->ctx, c->handle, (const uint8_t*)buf, (size_t)sz,
-                    c->io_timeout_ms);
+    r = c->t.write(c->t.ctx, c->handle, (const uint8_t*)buf, (size_t)sz,
+                   c->io_timeout_ms);
     if (r > sz)
         return WOLFSSL_CBIO_ERR_GENERAL;
     if (r > 0)
@@ -524,10 +511,9 @@ static int conn_read(WolfCertConn* c, void* buf, size_t len)
     int r;
 
     if (c->ssl == NULL) {
-        r = c->t->read(c->t->ctx, c->handle, (uint8_t*)buf, len,
-                       c->io_timeout_ms);
-        /* A 0 spins the read-until-close loop; a count above len means the
-         * transport already overran the buffer. Neither is passed on. */
+        r = c->t.read(c->t.ctx, c->handle, (uint8_t*)buf, len,
+                      c->io_timeout_ms);
+        /* Turn a 0 into a close, and refuse a count larger than len. */
         if (r == 0)
             return WOLFCERT_ERR_CONN_CLOSED;
         if (r > 0 && (size_t)r > len)
@@ -1167,10 +1153,6 @@ int wolfcert_http_request(const WolfCertHttpRequest* req, WolfCertHttpResponse* 
     if (req == NULL || resp == NULL || req->url == NULL || req->method == NULL)
         return WOLFCERT_ERR_BAD_ARG;
 
-    if (req->connect_cb != NULL && req->transport != NULL)
-        return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "http",
-            "set either connect_cb or transport, not both");
-
     memset(resp, 0, sizeof(*resp));
     void* heap = req->heap ? req->heap : wolfcert_default_heap();
     resp->heap = heap;
@@ -1182,12 +1164,12 @@ int wolfcert_http_request(const WolfCertHttpRequest* req, WolfCertHttpResponse* 
     if (rc != WOLFCERT_OK)
         return rc;
 
-    WolfCertConn c = { 0 };
+    WolfCertConn c;
     WOLFSSL_CTX* ctx = NULL;
 
+    memset(&c, 0, sizeof(c));
     c.io_timeout_ms = -1;
-    rc = dial(&c, u.host, u.port, req->timeout_ms, req->transport,
-              req->connect_cb, req->connect_ctx);
+    rc = dial(&c, u.host, u.port, req->timeout_ms, &req->transport);
     if (rc != WOLFCERT_OK) {
         wolfcert_http_url_free(&u);
         return rc;
@@ -1243,10 +1225,6 @@ int wolfcert_http_session_open(const WolfCertHttpSessionCfg* cfg,
     if (cfg == NULL || cfg->base_url == NULL || out == NULL)
         return WOLFCERT_ERR_BAD_ARG;
 
-    if (cfg->connect_cb != NULL && cfg->transport != NULL)
-        return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "http",
-            "set either connect_cb or transport, not both");
-
     void* heap = cfg->heap ? cfg->heap : wolfcert_default_heap();
 
     WolfCertHttpSession* s = (WolfCertHttpSession*)WOLFCERT_XMALLOC(sizeof(*s), heap);
@@ -1266,7 +1244,7 @@ int wolfcert_http_session_open(const WolfCertHttpSessionCfg* cfg,
 
     s->conn.io_timeout_ms = cfg->nonblocking ? 0 : -1;
     rc = dial(&s->conn, s->base.host, s->base.port, cfg->timeout_ms,
-              cfg->transport, cfg->connect_cb, cfg->connect_ctx);
+              &cfg->transport);
     if (rc != WOLFCERT_OK) {
         wolfcert_http_session_close(s);
         return rc;
@@ -1320,12 +1298,10 @@ int wolfcert_http_session_fd(const WolfCertHttpSession* s)
 #ifdef WOLFCERT_HAVE_BUILTIN_TRANSPORT
     if (s == NULL || !s->conn.connected)
         return -1;
-    if (!wolfcert_transport_is_fd_backed(s->conn.t))
-        return -1;
 
-    return (int)(intptr_t)s->conn.handle;
+    return wolfcert_transport_fd(&s->conn.t, s->conn.handle);
 #else
-    (void)s;   /* no fd-backed transport exists in this build */
+    (void)s;   /* no descriptor-backed transport exists in this build */
     return -1;
 #endif
 }
@@ -1457,8 +1433,8 @@ static int nb_write(WolfCertConn* c, const uint8_t* buf, size_t len, size_t* off
             return WOLFCERT_ERR_IO;
         }
 
-        int r = c->t->write(c->t->ctx, c->handle, buf + *off, len - *off,
-                            c->io_timeout_ms);
+        int r = c->t.write(c->t.ctx, c->handle, buf + *off, len - *off,
+                           c->io_timeout_ms);
         if (r > 0 && (size_t)r > len - *off)
             return WOLFCERT_ERR_IO;
         if (r > 0) {
@@ -1539,9 +1515,9 @@ static int nb_read_some(WolfCertHttpSession* s, int* ended)
         return WOLFCERT_ERR_IO;
     }
 
-    int r = s->conn.t->read(s->conn.t->ctx, s->conn.handle,
-                            s->sm_rx + s->sm_rx_len,
-                            WOLFCERT_HTTP_READ_CHUNK, s->conn.io_timeout_ms);
+    int r = s->conn.t.read(s->conn.t.ctx, s->conn.handle,
+                           s->sm_rx + s->sm_rx_len,
+                           WOLFCERT_HTTP_READ_CHUNK, s->conn.io_timeout_ms);
     if (r > 0) {
         if ((size_t)r > WOLFCERT_HTTP_READ_CHUNK)
             return WOLFCERT_ERR_IO;

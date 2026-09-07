@@ -123,7 +123,7 @@ static int fetch(Peer* p, const char* resp, size_t chunk,
     p->resp = resp;
     p->off = 0;
     p->chunk = chunk;
-    req.transport = &t;
+    req.transport = t;
 
     return wolfcert_http_request(&req, out);
 }
@@ -213,7 +213,7 @@ static int test_error_paths(void)
     Peer p = { 0 };
 
     t.ctx = &p;
-    req.transport = &t;
+    req.transport = t;
 
     p.fail_connect = 1;
     REQUIRE(wolfcert_http_request(&req, &resp) != WOLFCERT_OK);
@@ -239,7 +239,7 @@ static int test_positive_connect_rc(void)
     int rc;
 
     t.ctx = &p;
-    req.transport = &t;
+    req.transport = t;
     p.bogus_connect_rc = 1;
 
     rc = wolfcert_http_request(&req, &resp);
@@ -248,6 +248,108 @@ static int test_positive_connect_rc(void)
     return 0;
 }
 
+/* Opens with a vtable that dies with this frame, so a session that outlives it
+ * proves the copy. */
+static int open_scoped(Peer* p, WolfCertHttpSession** out)
+{
+    WolfCertHttpSessionCfg cfg = { .base_url = "http://peer.test/" };
+    WolfCertTransport t = { p_connect, p_read, p_write, p_disconnect, p };
+
+    cfg.transport = t;
+    return wolfcert_http_session_open(&cfg, out);
+}
+
+/* Overwrite the frame open_scoped() used, so a borrowed vtable would read
+ * junk rather than callbacks that happen to still be intact. */
+static int clobber_stack(void)
+{
+    volatile unsigned char junk[512];
+    size_t i;
+
+    for (i = 0; i < sizeof(junk); i++) {
+        junk[i] = 0xAA;
+    }
+
+    return junk[0] == 0xAA;
+}
+
+static int test_transport_is_copied(void)
+{
+    WolfCertHttpRequest req = { .method = "GET", .url = "http://peer.test/" };
+    WolfCertHttpResponse resp = { 0 };
+    WolfCertHttpSession* s = NULL;
+    Peer p = { 0 };
+
+    p.resp  = RESP_CL;
+    p.chunk = sizeof(RESP_CL);
+
+    REQUIRE(open_scoped(&p, &s) == WOLFCERT_OK);
+    REQUIRE(clobber_stack() == 1);
+
+    REQUIRE(wolfcert_http_session_request(s, &req, &resp) == WOLFCERT_OK);
+    REQUIRE(resp.status_code == 200);
+    wolfcert_http_response_free(&resp);
+    wolfcert_http_session_close(s);
+    REQUIRE(p.connects == 1 && p.disconnects == 1);
+    return 0;
+}
+
+/* Only a wholly zeroed transport asks for the built-in one; a half-filled one
+ * is a mistake and must not silently dial POSIX. */
+static int test_partial_vtable_rejected(void)
+{
+    WolfCertHttpRequest req = { .method = "GET", .url = "http://peer.test/" };
+    WolfCertHttpSessionCfg cfg = { .base_url = "http://peer.test/" };
+    WolfCertHttpResponse resp = { 0 };
+    WolfCertHttpSession* s = NULL;
+    WolfCertTransport t;
+    Peer p = { 0 };
+
+    memset(&t, 0, sizeof(t));
+    t.read = p_read;
+    t.write = p_write;
+    t.disconnect = p_disconnect;
+    req.transport = t;
+    cfg.transport = t;
+    REQUIRE(wolfcert_http_request(&req, &resp) == WOLFCERT_ERR_BAD_ARG);
+    REQUIRE(wolfcert_http_session_open(&cfg, &s) == WOLFCERT_ERR_BAD_ARG);
+    REQUIRE(s == NULL);
+
+    memset(&t, 0, sizeof(t));
+    t.ctx = &p;
+    req.transport = t;
+    cfg.transport = t;
+    REQUIRE(wolfcert_http_request(&req, &resp) == WOLFCERT_ERR_BAD_ARG);
+    REQUIRE(wolfcert_http_session_open(&cfg, &s) == WOLFCERT_ERR_BAD_ARG);
+
+    memset(&t, 0, sizeof(t));
+    t.connect = p_connect;
+    t.write = p_write;
+    t.disconnect = p_disconnect;
+    t.ctx = &p;
+    req.transport = t;
+    REQUIRE(wolfcert_http_request(&req, &resp) == WOLFCERT_ERR_BAD_ARG);
+    REQUIRE(p.connects == 0);
+    return 0;
+}
+
+#ifdef WOLFCERT_HAVE_BUILTIN_TRANSPORT
+/* A zeroed transport reaches the built-in one, so the failure must come from
+ * the connect attempt rather than from validation. */
+static int test_zero_transport_takes_builtin(void)
+{
+    WolfCertHttpRequest req = { .method = "GET", .url = "http://127.0.0.1:1/" };
+    WolfCertHttpResponse resp = { 0 };
+    int rc;
+
+    req.timeout_ms = 500;
+    rc = wolfcert_http_request(&req, &resp);
+    REQUIRE(rc != WOLFCERT_OK);
+    REQUIRE(rc != WOLFCERT_ERR_BAD_ARG);
+    return 0;
+}
+#endif
+
 static int test_incomplete_vtable(void)
 {
     WolfCertHttpResponse resp = { 0 };
@@ -255,7 +357,7 @@ static int test_incomplete_vtable(void)
     WolfCertTransport no_disc = { p_connect, p_read, p_write, NULL, &p };
     WolfCertHttpRequest req = { .method = "GET", .url = "http://peer.test/" };
 
-    req.transport = &no_disc;
+    req.transport = no_disc;
     REQUIRE(wolfcert_http_request(&req, &resp) == WOLFCERT_ERR_BAD_ARG);
     REQUIRE(p.connects == 0);
     return 0;
@@ -271,7 +373,7 @@ static int test_no_fd(void)
     t.ctx = &p;
     p.resp = RESP_CL;
     p.chunk = sizeof(RESP_CL);
-    cfg.transport = &t;
+    cfg.transport = t;
 
     REQUIRE(wolfcert_http_session_open(&cfg, &s) == WOLFCERT_OK);
     /* Nothing pollable exists, so the accessor must say so. */
@@ -316,6 +418,14 @@ int main(void)
         return 1;
     if (test_positive_connect_rc())
         return 1;
+    if (test_transport_is_copied())
+        return 1;
+    if (test_partial_vtable_rejected())
+        return 1;
+#ifdef WOLFCERT_HAVE_BUILTIN_TRANSPORT
+    if (test_zero_transport_takes_builtin())
+        return 1;
+#endif
     if (test_incomplete_vtable())
         return 1;
     if (test_no_fd())

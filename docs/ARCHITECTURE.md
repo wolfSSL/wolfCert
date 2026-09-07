@@ -422,7 +422,7 @@ typedef struct WolfCertTransport {
 ```
 
 Set it on `WolfCertServerCfg.transport` (or `WolfCertHttpRequest` /
-`WolfCertHttpSessionCfg`). Leaving it `NULL` selects the built-in POSIX
+`WolfCertHttpSessionCfg`). Leaving it zeroed selects the built-in POSIX
 instance in `src/net_posix.c`, which is an ordinary implementation of this
 same vtable rather than a privileged path.
 
@@ -440,16 +440,27 @@ The contract:
   above zero bounds the whole connect attempt. Zero or less imposes no limit
   of wolfCert's, leaving the stack's own default.
 - **`read` / `write`'s `timeout_ms` carries the blocking mode**, and means
-  something different from `connect`'s. wolfCert passes only two values.
+  something different from `connect`'s. It takes two values and no others.
   `0` asks the call never to block: return `WOLFCERT_ERR_WANT_READ` or
-  `WOLFCERT_ERR_WANT_WRITE` rather than wait. `-1` asks it to block until
-  bytes move.
+  `WOLFCERT_ERR_WANT_WRITE` rather than wait. A negative value asks it to
+  block until bytes move. If your stack has its own receive or send timeout,
+  implement the negative case with a call that lets it apply, rather than an
+  unbounded wait around a non-blocking transfer: the second shape silently
+  discards whatever the application configured.
+- **Never write more than `len` bytes.** wolfCert rejects a count larger than
+  it asked for, but that only keeps the overrun out of its own buffers - the
+  write into yours has already happened, so honouring `len` is the transport's
+  responsibility and exceeding it is undefined.
 - **`disconnect` runs exactly once per successful `connect`**, on every error
   path included. A failed `connect` is never paired with one.
 - **`ctx` is transport-wide** (the stack instance, say), distinct from the
-  per-connection handle. The transport struct must outlive its connections.
+  per-connection handle. Whatever it points at must outlive the connection.
+- **The struct itself need not.** Opening a connection copies it, so the config
+  may be a temporary — and a later change to your copy has no effect on a
+  connection already open.
 - **All four callbacks are required.** An incomplete vtable is rejected with
-  `WOLFCERT_ERR_BAD_ARG` before anything is dialled.
+  `WOLFCERT_ERR_BAD_ARG` before anything is dialled, and so is a half-filled
+  one: only a wholly zeroed `transport` asks for the built-in instance.
 
 TLS needs no extra work from the transport. wolfCert registers its own
 wolfSSL CBIO pair against the open connection, so records flow through the
@@ -459,15 +470,10 @@ same `read`/`write` as plain HTTP:
 wolfSSL_read/write -> wolfcert_cbio_recv/send -> t->read / t->write -> your stack
 ```
 
-`WolfCertServerCfg.connect_cb` is the deprecated predecessor: it yields a
-socket descriptor rather than an opaque handle, which is exactly what a
-non-socket stack cannot supply. It still works, adapted internally onto the
-POSIX byte path, but setting both it and `transport` is `WOLFCERT_ERR_BAD_ARG`.
-
 Building with `WOLFCERT_ENABLE_BUILTIN_TRANSPORT=OFF` (CMake) or
 `--disable-builtin-transport` (autoconf) drops `src/net_posix.c` from the
 library entirely, so a target with no sockets links no socket code. A config
-that then leaves `transport` NULL fails with `WOLFCERT_ERR_BAD_ARG`.
+that then leaves `transport` zeroed fails with `WOLFCERT_ERR_BAD_ARG`.
 
 ### 4.7 Putting it together
 

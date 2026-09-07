@@ -35,6 +35,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
 #define REQUIRE(cond) \
     do {                                                                    \
@@ -50,14 +52,59 @@ static void* server_thread(void* arg)
     return NULL;
 }
 
-/* Pluggable-transport coverage: a connect_cb that counts invocations and then
- * delegates to the built-in POSIX connect. */
+/* Pluggable-transport coverage: a WolfCertTransport whose connect counts
+ * invocations and opens through wolfcert_posix_connect, with the byte path
+ * over plain blocking sockets. */
 static int g_connect_calls = 0;
-static int counting_connect(const char* host, int port, int timeout_ms, void* ctx)
+
+static int counting_connect(void* ctx, const char* host, int port,
+                            int timeout_ms, void** conn)
 {
+    int fd;
+
     (void)ctx;
     ++g_connect_calls;
-    return wolfcert_posix_connect(host, port, timeout_ms, NULL);
+    fd = wolfcert_posix_connect(host, port, timeout_ms, NULL);
+    if (fd < 0)
+        return WOLFCERT_ERR_IO;
+
+    *conn = (void*)(intptr_t)fd;
+    return WOLFCERT_OK;
+}
+
+static int counting_read(void* ctx, void* conn, uint8_t* buf, size_t len,
+                         int timeout_ms)
+{
+    ssize_t n;
+
+    (void)ctx;
+    (void)timeout_ms;
+    n = recv((int)(intptr_t)conn, buf, len, 0);
+    if (n > 0)
+        return (int)n;
+    if (n == 0)
+        return WOLFCERT_ERR_CONN_CLOSED;
+
+    return WOLFCERT_ERR_IO;
+}
+
+static int counting_write(void* ctx, void* conn, const uint8_t* buf,
+                          size_t len, int timeout_ms)
+{
+    ssize_t n;
+
+    (void)ctx;
+    (void)timeout_ms;
+    n = send((int)(intptr_t)conn, buf, len, 0);
+
+    return (n > 0) ? (int)n : WOLFCERT_ERR_IO;
+}
+
+static int counting_disconnect(void* ctx, void* conn)
+{
+    (void)ctx;
+    (void)close((int)(intptr_t)conn);
+    return WOLFCERT_OK;
 }
 
 static int enroll_one(const WolfCertServerCfg* client_cfg,
@@ -247,8 +294,14 @@ int main(void)
                                                          .password = "hunter2" },
                                      .trust_anchors = tls_cert,
                                      .trust_anchors_len = tls_cert_len,
-                                     .verify_server = 1,
-                                     .connect_cb = counting_connect };
+                                     .verify_server = 1 };
+
+    WolfCertTransport counting_transport = {
+        counting_connect, counting_read, counting_write, counting_disconnect,
+        NULL
+    };
+
+    client_cfg.transport = counting_transport;
 
     WolfCertBuffer ca_pem = { 0 };
     REQUIRE(wolfcert_est_get_cacerts(&client_cfg, &ca_pem) == WOLFCERT_OK);

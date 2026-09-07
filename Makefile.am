@@ -116,6 +116,9 @@ if WOLFCERT_BUILD_TESTS
 check_PROGRAMS = \
     test_smoke test_keygen test_csr test_store test_http test_transport \
     test_parse_negative test_tls_http
+if WOLFCERT_HAVE_BUILTIN_TRANSPORT
+check_PROGRAMS     += test_net
+endif
 
 test_smoke_SOURCES  = tests/unit/test_smoke.c
 test_smoke_LDADD    = libwolfcert.la $(WOLFSSL_LIBS)
@@ -125,9 +128,6 @@ test_csr_SOURCES    = tests/unit/test_csr.c
 test_csr_LDADD      = libwolfcert.la $(WOLFSSL_LIBS)
 test_store_SOURCES  = tests/unit/test_store.c
 test_store_LDADD    = libwolfcert.la $(WOLFSSL_LIBS)
-if WOLFCERT_HAVE_BUILTIN_TRANSPORT
-check_PROGRAMS     += test_net
-endif
 test_transport_SOURCES = tests/unit/test_transport.c
 test_transport_LDADD   = libwolfcert.la $(WOLFSSL_LIBS)
 

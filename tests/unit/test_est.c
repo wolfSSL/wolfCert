@@ -402,6 +402,54 @@ static int test_est_rejects_scep_cfg(void)
     return 0;
 }
 
+/* The built-in transport would fail this dial too, so only the count proves
+ * srv.transport reached the HTTP layer. */
+static int g_cfg_tr_connects;
+
+static int cfg_tr_connect(void* ctx, const char* h, int p, int t, void** o)
+{
+    (void)ctx; (void)h; (void)p; (void)t; (void)o;
+    ++g_cfg_tr_connects;
+    return WOLFCERT_ERR_IO;
+}
+
+static int cfg_tr_read(void* ctx, void* c, uint8_t* b, size_t n, int t)
+{
+    (void)ctx; (void)c; (void)b; (void)n; (void)t;
+    return WOLFCERT_ERR_IO;
+}
+
+static int cfg_tr_write(void* ctx, void* c, const uint8_t* b, size_t n, int t)
+{
+    (void)ctx; (void)c; (void)b; (void)n; (void)t;
+    return WOLFCERT_ERR_IO;
+}
+
+static int cfg_tr_disconnect(void* ctx, void* c)
+{
+    (void)ctx; (void)c;
+    return WOLFCERT_OK;
+}
+
+static int test_est_uses_cfg_transport(void)
+{
+    static const WolfCertTransport tr = { cfg_tr_connect, cfg_tr_read,
+                                          cfg_tr_write, cfg_tr_disconnect,
+                                          NULL };
+    WolfCertServerCfg srv = {
+        .protocol      = WOLFCERT_PROTO_EST,
+        .server_url    = "https://127.0.0.1:1/.well-known/est",
+        .verify_server = 1,
+        .transport     = &tr
+    };
+    WolfCertBuffer out = { 0 };
+
+    g_cfg_tr_connects = 0;
+    REQUIRE(wolfcert_est_get_cacerts(&srv, &out) != WOLFCERT_OK);
+    REQUIRE(g_cfg_tr_connects == 1);
+    return 0;
+}
+
 /* Drive a non-blocking session enroll to completion, poll()ing on the
  * session fd between WANT_READ / WANT_WRITE returns. */
 static int pump_simple_enroll(WolfCertEstSession* s,
@@ -446,6 +494,9 @@ int main(void)
         return 1;
 
     if (test_est_rejects_scep_cfg())
+        return 1;
+
+    if (test_est_uses_cfg_transport())
         return 1;
 
     uint8_t ca_der[4096];

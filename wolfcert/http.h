@@ -31,8 +31,7 @@ extern "C" {
  * caller-supplied trust anchors. */
 
 /* Built-in WolfCertConnectFn: blocking getaddrinfo + socket + connect over
- * POSIX/BSD sockets. This is the default transport when a config leaves
- * connect_cb NULL; it is also exported so applications can wrap or chain it. */
+ * POSIX/BSD sockets. Exported so applications can wrap or chain it. */
 WOLFCERT_API int wolfcert_posix_connect(const char* host, int port,
                                         int timeout_ms, void* ctx);
 
@@ -63,11 +62,12 @@ typedef struct {
      * embedding wolfCert in an MCU almost always sets this explicitly. */
     size_t         max_response_bytes;
 
-    /* Optional pluggable transport; NULL -> built-in wolfcert_posix_connect. */
     WolfCertConnectFn connect_cb;
     void*          connect_ctx;
 
     void*          heap;           /* NULL -> default */
+
+    const WolfCertTransport* transport;
 } WolfCertHttpRequest;
 
 typedef struct {
@@ -130,11 +130,12 @@ typedef struct {
      * wolfcert_http_session_open() are still synchronous. */
     int            nonblocking;
 
-    /* Optional pluggable transport; NULL -> built-in wolfcert_posix_connect. */
     WolfCertConnectFn connect_cb;
     void*          connect_ctx;
 
     void*          heap;
+
+    const WolfCertTransport* transport;
 } WolfCertHttpSessionCfg;
 
 WOLFCERT_API int  wolfcert_http_session_open (const WolfCertHttpSessionCfg* cfg,

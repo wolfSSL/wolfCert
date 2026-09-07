@@ -58,7 +58,9 @@ enum {
      * call with the same arguments to resume. Only returned by the
      * *_nb entry points. */
     WOLFCERT_ERR_WANT_READ   = -14,
-    WOLFCERT_ERR_WANT_WRITE  = -15
+    WOLFCERT_ERR_WANT_WRITE  = -15,
+
+    WOLFCERT_ERR_CONN_CLOSED = -16
 };
 
 /* Returns a human-readable description of a wolfCert error code. */

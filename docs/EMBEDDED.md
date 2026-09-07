@@ -221,6 +221,47 @@ and tables drop out entirely - see the `WOLFCERT_HAVE_*` /
 gating discussion in `CLAUDE.md`. SCEP is RSA-only; if you only need EST
 with ECC or a PQC algorithm, disabling SCEP avoids pulling in RSA.
 
+## 7. Targets without BSD sockets or a filesystem
+
+Two platform pieces can be compiled out entirely, so a target that has
+neither a socket API nor a filesystem links neither.
+
+| Macro | Off means | Build flags | `user_settings.h` |
+|---|---|---|---|
+| `WOLFCERT_HAVE_BUILTIN_TRANSPORT` | `src/net_posix.c` is not compiled | `-DWOLFCERT_ENABLE_BUILTIN_TRANSPORT=OFF` / `--disable-builtin-transport` | `#define WOLFCERT_NO_BUILTIN_TRANSPORT` |
+| `WOLFCERT_HAVE_POSIX_STORE` | the POSIX file store backend is stubbed out | `-DWOLFCERT_ENABLE_POSIX_STORE=OFF` / `--disable-posix-store` | `#define WOLFCERT_NO_POSIX_STORE` |
+
+Each pair is mandatory-one-of: `check_config.h` fails the build when a
+config defines neither the `WOLFCERT_HAVE_*` nor the `WOLFCERT_NO_*` form,
+so compiling a backend out is always an explicit decision. The configure
+builds emit the right macro automatically; only a `user_settings.h` build
+writes it by hand.
+
+With the transport off, every config must carry a `WolfCertTransport`;
+leaving it NULL is `WOLFCERT_ERR_BAD_ARG`. Writing one is a small glue file
+in your own tree - `connect` / `read` / `write` / `disconnect` over your
+stack, no TLS code - described in
+[`ARCHITECTURE.md` section 4.6](ARCHITECTURE.md#46-pluggable-transport).
+With the store off, `wolfcert_store_posix_open()` returns NULL and the
+in-memory backend or your own `WolfCertStoreOps` carries persistence.
+
+The CLI tools and the built-in test server both need real sockets, so both
+build systems reject enabling them alongside `--disable-builtin-transport`.
+
+A wolfSSL built with `WOLFSSL_USER_IO` works: wolfCert installs its own CBIO
+callbacks on every session, so wolfSSL's own socket I/O is never needed.
+
+**wolfCert requires `HAVE_SNI`**, which a cross-compiled wolfSSL often lacks;
+`check_config.h` fails the build with a message pointing at `--enable-sni`.
+
+If your device only reaches endpoints that serve a single certificate, or
+addresses them by IP, define `WOLFCERT_NO_SNI` to build without it: it
+waives the `HAVE_SNI` requirement, and also keeps the extension out of the
+handshake when wolfSSL does have SNI compiled in. Do not
+take that opt-out for a hosted EST service: the server would return its
+default certificate and `verify_server` would reject the handshake with
+`WOLFCERT_ERR_TLS`.
+
 ## A worked "small footprint" wolfSSL config
 
 ```c

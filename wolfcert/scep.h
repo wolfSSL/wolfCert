@@ -236,7 +236,7 @@ WOLFCERT_API int wolfcert_scep_get_next_ca_cert(const WolfCertServerCfg* srv,
  * enrolling round trips over the session. Open with wolfcert_scep_session_open
  * for a blocking connection, or wolfcert_scep_session_open_async for a
  * non-blocking one whose *_nb calls return WOLFCERT_ERR_WANT_READ /
- * WOLFCERT_ERR_WANT_WRITE (poll wolfcert_scep_session_fd(), then call again
+ * WOLFCERT_ERR_WANT_WRITE (wait for readiness, then call again
  * with the same arguments - and in particular the same WolfCertScepResult* out
  * pointer, which the session captures on the first call; a later poll that
  * passes a different out is rejected with WOLFCERT_ERR_BAD_ARG). DNS + the
@@ -266,7 +266,8 @@ WOLFCERT_API int  wolfcert_scep_session_open_async(const WolfCertServerCfg* srv,
                                                    WolfCertScepSession** out);
 WOLFCERT_API void wolfcert_scep_session_close(WolfCertScepSession* s);
 
-/* Socket fd of the backing HTTP session - hand to poll/epoll/kqueue. */
+/* Socket fd of the backing HTTP session - hand to poll/epoll/kqueue;
+ * -1 when a caller-supplied WolfCertTransport backs it (no descriptor). */
 WOLFCERT_API int  wolfcert_scep_session_fd(const WolfCertScepSession* s);
 
 /* PKCSReq over the session. See wolfcert_scep_pkcs_req_ex for the argument

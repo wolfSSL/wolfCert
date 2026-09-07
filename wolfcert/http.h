@@ -121,15 +121,11 @@ typedef struct {
     /* TLS 1.3 post-handshake authentication opt-in. */
     int            allow_post_handshake_auth;
 
-    /* Non-blocking session I/O. When set, the underlying socket is
-     * flipped to O_NONBLOCK right after the TCP connect completes, the
-     * TLS handshake is driven incrementally, and the paired
-     * wolfcert_http_session_request_nb returns WOLFCERT_ERR_WANT_READ /
-     * WOLFCERT_ERR_WANT_WRITE instead of blocking. Callers hand the
-     * result of wolfcert_http_session_fd() to their event loop.
-     *
-     * Out of scope: DNS resolution + the initial TCP connect inside
-     * wolfcert_http_session_open() are still synchronous. */
+    /* Non-blocking session I/O: wolfcert_http_session_request_nb returns
+     * WOLFCERT_ERR_WANT_READ / WOLFCERT_ERR_WANT_WRITE instead of blocking,
+     * and the TLS handshake is driven incrementally. Poll
+     * wolfcert_http_session_fd(), or your transport's own readiness signal.
+     * DNS and the initial connect stay synchronous. */
     int            nonblocking;
 
     WolfCertConnectFn connect_cb;
@@ -153,11 +149,10 @@ WOLFCERT_API int  wolfcert_http_session_request(WolfCertHttpSession* s,
 
 WOLFCERT_API void wolfcert_http_session_close(WolfCertHttpSession* s);
 
-/* Socket descriptor of the open session. Valid for as long as the
- * session is open; after wolfcert_http_session_close the value is
- * undefined. Returned as -1 if the session is not open. Intended for
- * event loops - the caller polls for POLLIN / POLLOUT depending on
- * the last WOLFCERT_ERR_WANT_READ / _WANT_WRITE the library returned. */
+/* Socket descriptor of the open session, for event loops: poll POLLIN /
+ * POLLOUT per the last WOLFCERT_ERR_WANT_READ / _WANT_WRITE returned;
+ * undefined after wolfcert_http_session_close. A caller-supplied
+ * WolfCertTransport has no descriptor to offer, so it returns -1. */
 WOLFCERT_API int wolfcert_http_session_fd(const WolfCertHttpSession* s);
 
 /* Non-blocking variant of wolfcert_http_session_request. Must be used

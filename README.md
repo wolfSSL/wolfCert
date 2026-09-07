@@ -68,7 +68,7 @@ optional key types wolfCert picks up when available:
     --enable-keygen --enable-ecc --enable-cryptocb --enable-base64encode \
     --enable-ed25519 --enable-ed448 --enable-mldsa \
     --enable-postauth --enable-opensslextra --enable-ip-alt-name \
-    --enable-des3 \
+    --enable-des3 --enable-sni \
     CPPFLAGS="-DWOLFSSL_ALT_NAMES -DWOLFSSL_CERT_NAME_ALL"
 ```
 
@@ -155,7 +155,11 @@ All `WolfCertBuffer` outputs remember which heap they came from, so the same
   `RenewalReq`, plus `pkiStatus=PENDING` + `GetCertInitial` polling.
 - **Transport:** HTTP/1.1 over wolfSSL TLS 1.3/1.2 (trust anchors, SNI,
   mutual TLS), keep-alive sessions, TLS 1.3 post-handshake auth, and an
-  optional non-blocking mode for `poll`/`epoll`/`kqueue` event loops.
+  optional non-blocking mode for `poll`/`epoll`/`kqueue` event loops. Every
+  byte goes through the `WolfCertTransport` vtable, TLS records included, so
+  a non-BSD-sockets stack (FreeRTOS+TCP, NetX, lwIP, wolfIP) needs one small
+  glue file and no wolfCert change; the POSIX transport is the default
+  instance and can be compiled out.
 - **Storage:** file-based cert/key store with atomic writes and 0600 key-file
   mode; pluggable via the `WolfCertStoreOps` vtable.
 - **Test servers + CLIs** for Linux/macOS (`wolfcert-server`,

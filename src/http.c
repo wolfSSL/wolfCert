@@ -924,7 +924,9 @@ static int setup_tls_ex(WolfCertConn* c, const TlsDials* dials,
     }
 
     if (sni_host != NULL) {
+#if defined(HAVE_SNI) && !defined(WOLFCERT_NO_SNI)
         wolfSSL_UseSNI(ssl, 0, sni_host, (word16)strlen(sni_host));
+#endif
 
         if (dials->verify_server) {
             /* RFC 6125: a literal address matches iPAddress SAN entries

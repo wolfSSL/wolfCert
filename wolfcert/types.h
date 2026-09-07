@@ -69,7 +69,7 @@ typedef int (*WolfCertConnectFn)(const char* host, int port,
                                  int timeout_ms, void* ctx);
 
 /* Pluggable transport, carrying TLS records and plain HTTP alike. NULL in a
- * config selects the built-in POSIX one; it must outlive its connections. */
+ * config selects the built-in POSIX one. Contract: docs/ARCHITECTURE.md 4.6. */
 typedef struct WolfCertTransport {
     /* Return WOLFCERT_OK with the handle stored in *conn, else a negative
      * WOLFCERT_ERR_*. *conn is opaque and never NULL-tested, so 0 is valid. */

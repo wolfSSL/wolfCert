@@ -119,6 +119,32 @@ static int enc_printable(const char* s, byte* out, size_t cap)
     return enc_printable_n((const byte*)s, strlen(s), out, cap);
 }
 
+/* Wrap `vl` bytes in a SEQUENCE. Returns total bytes written, or -1 if `cap`
+ * is too small. */
+static int enc_seq(const byte* v, size_t vl, byte* out, size_t cap)
+{
+    if (cap < 1)
+        return -1;
+
+    out[0] = 0x30;
+    int ll = der_put_len(out + 1, cap - 1, vl);
+    if (ll < 0 || 1 + (size_t)ll + vl > cap)
+        return -1;
+
+    memcpy(out + 1 + ll, v, vl);
+    return (int)(1 + (size_t)ll + vl);
+}
+
+/* Size of the TLV that enc_seq writes for `vl` content bytes, or 0 when the
+ * length cannot be encoded. */
+static size_t enc_seq_len(size_t vl)
+{
+    byte tmp[8];
+    int  ll = der_put_len(tmp, sizeof(tmp), vl);
+
+    return (ll < 0) ? 0 : (size_t)(1 + (size_t)ll + vl);
+}
+
 static int enc_octet(const byte* v, size_t vl, byte* out, size_t cap)
 {
     if (cap < 1)
@@ -795,23 +821,23 @@ WOLFCERT_TEST_VIS int wolfcert_scep_parse_pki_message(const uint8_t* pki_der,
     return WOLFCERT_OK;
 }
 
-/* Build RFC 8894 section 3.3.2 IssuerAndSubject:
- *   IssuerAndSubject ::= SEQUENCE { issuer Name, subject Name }
- * where the issuer Name is copied from the RA/CA cert and the subject
- * Name is copied from the CSR. This is the enveloped content of a
- * GetCertInitial (messageType 20) pkiMessage - it lets the server
- * locate the pending request by DN when transactionID matching is
- * ambiguous. */
-int wolfcert_scep_issuer_and_subject(const uint8_t* issuer_cert_der, size_t issuer_cert_len,
-                                      const uint8_t* csr_der,         size_t csr_len,
+/* Build the GetCertInitial (messageType 20) enveloped content, RFC 8894
+ * section 3.3.2 IssuerAndSubject ::= SEQUENCE { issuer Name, subject Name }:
+ * the Name of the issuing CA, then the subject Name from the CSR. */
+WOLFCERT_TEST_VIS int wolfcert_scep_issuer_and_subject(
+                                      const uint8_t* ra_cert_der, size_t ra_cert_len,
+                                      const uint8_t* csr_der,     size_t csr_len,
                                       WolfCertBuffer* out_der, void* heap)
 {
-    if (issuer_cert_der == NULL || csr_der == NULL || out_der == NULL)
+    const uint8_t* issuer_name;
+    int            issuer_name_len;
+
+    if (ra_cert_der == NULL || csr_der == NULL || out_der == NULL)
         return WOLFCERT_ERR_BAD_ARG;
 
     DecodedCert ic;
-    wc_InitDecodedCert(&ic, (byte*)issuer_cert_der,
-                                        (word32)issuer_cert_len, heap);
+    wc_InitDecodedCert(&ic, (byte*)ra_cert_der,
+                                        (word32)ra_cert_len, heap);
 
     int rc = wc_ParseCert(&ic, CERT_TYPE, NO_VERIFY, NULL);
     if (rc != 0) {
@@ -829,15 +855,37 @@ int wolfcert_scep_issuer_and_subject(const uint8_t* issuer_cert_der, size_t issu
         return WOLFCERT_ERR_PARSE;
     }
 
-    if (ic.subjectRaw == NULL || ic.subjectRawLen <= 0 ||
+    /* A CA certificate issues under its own name. An RA certificate is an
+     * end entity, so the CA that will issue is the one that issued it. */
+    if (ic.isCA) {
+        issuer_name     = ic.subjectRaw;
+        issuer_name_len = ic.subjectRawLen;
+    }
+    else {
+        issuer_name     = ic.issuerRaw;
+        issuer_name_len = ic.issuerRawLen;
+    }
+
+    if (issuer_name == NULL || issuer_name_len <= 0 ||
             sc.subjectRaw == NULL || sc.subjectRawLen <= 0) {
         wc_FreeDecodedCert(&ic);
         wc_FreeDecodedCert(&sc);
         return WOLFCERT_ERR_PARSE;
     }
 
-    size_t inner = (size_t)ic.subjectRawLen + (size_t)sc.subjectRawLen;
+    /* Give each Name its own SEQUENCE, so the result decodes as
+     * IssuerAndSubject ::= SEQUENCE { issuer Name, subject Name }. */
+    size_t issuer_tlv  = enc_seq_len((size_t)issuer_name_len);
+    size_t subject_tlv = enc_seq_len((size_t)sc.subjectRawLen);
+    size_t inner = issuer_tlv + subject_tlv;
     size_t cap   = inner + 8;
+
+    if (issuer_tlv == 0 || subject_tlv == 0) {
+        wc_FreeDecodedCert(&ic);
+        wc_FreeDecodedCert(&sc);
+        return WOLFCERT_ERR_MEMORY;
+    }
+
     uint8_t* buf = (uint8_t*)WOLFCERT_XMALLOC(cap, heap);
     if (buf == NULL) {
         wc_FreeDecodedCert(&ic);
@@ -855,10 +903,22 @@ int wolfcert_scep_issuer_and_subject(const uint8_t* issuer_cert_der, size_t issu
     }
 
     size_t off = 1 + (size_t)ll;
-    memcpy(buf + off, ic.subjectRaw, (size_t)ic.subjectRawLen);
-    off += (size_t)ic.subjectRawLen;
-    memcpy(buf + off, sc.subjectRaw, (size_t)sc.subjectRawLen);
-    off += (size_t)sc.subjectRawLen;
+    int    n   = enc_seq(issuer_name, (size_t)issuer_name_len,
+                         buf + off, cap - off);
+    if (n > 0) {
+        off += (size_t)n;
+        n = enc_seq(sc.subjectRaw, (size_t)sc.subjectRawLen,
+                    buf + off, cap - off);
+    }
+
+    if (n < 0) {
+        WOLFCERT_XFREE(buf, heap);
+        wc_FreeDecodedCert(&ic);
+        wc_FreeDecodedCert(&sc);
+        return WOLFCERT_ERR_MEMORY;
+    }
+
+    off += (size_t)n;
 
     wc_FreeDecodedCert(&ic);
     wc_FreeDecodedCert(&sc);

@@ -141,6 +141,97 @@ static int make_ca(uint8_t** cert_out, size_t* cert_out_len,
     return ret;
 }
 
+/* Issue a certificate signed by the make_ca CA cert/key, so its issuer and
+ * subject names differ. `is_ca` sets the basic constraints CA flag; `with_bc`
+ * 0 omits the extension entirely. Caller frees *cert_out with free(). */
+static int make_signed_cert(const uint8_t* ca_der, size_t ca_der_len,
+                            const uint8_t* ca_key_der, size_t ca_key_len,
+                            const char* cn, int is_ca, int with_bc,
+                            uint8_t** cert_out, size_t* cert_out_len)
+{
+    RsaKey   ca_key;
+    RsaKey   sub_key;
+    WC_RNG   rng;
+    Cert*    cert = NULL;
+    uint8_t* der  = NULL;
+    word32   idx  = 0;
+    int      ret  = 0;
+    int      body_n = 0;
+    int      sign_n = 0;
+
+    if (wc_InitRng(&rng) != 0)
+        return -1;
+    if (wc_InitRsaKey(&ca_key, NULL) != 0) {
+        wc_FreeRng(&rng);
+        return -1;
+    }
+    if (wc_InitRsaKey(&sub_key, NULL) != 0) {
+        wc_FreeRsaKey(&ca_key);
+        wc_FreeRng(&rng);
+        return -1;
+    }
+
+    if (wc_RsaPrivateKeyDecode(ca_key_der, &idx, &ca_key,
+                               (word32)ca_key_len) != 0)
+        ret = -1;
+
+    if (ret == 0 && wc_MakeRsaKey(&sub_key, 2048, WC_RSA_EXPONENT, &rng) != 0)
+        ret = -1;
+
+    if (ret == 0) {
+        der = (uint8_t*)malloc(4096);
+        if (der == NULL)
+            ret = -1;
+    }
+
+    if (ret == 0) {
+        cert = wc_CertNew(NULL);
+        if (cert == NULL)
+            ret = -1;
+    }
+
+    if (ret == 0) {
+        wc_InitCert_ex(cert, NULL, INVALID_DEVID);
+        strncpy(cert->subject.commonName, cn, CTC_NAME_SIZE - 1);
+        cert->subject.commonName[CTC_NAME_SIZE - 1] = '\0';
+        cert->isCA          = is_ca;
+        cert->basicConstSet = with_bc;   /* CA:FALSE when is_ca is 0 */
+        cert->selfSigned    = 0;
+        cert->sigType    = CTC_SHA256wRSA;
+        cert->daysValid  = 2;
+
+        if (wc_SetIssuerBuffer(cert, ca_der, (int)ca_der_len) != 0)
+            ret = -1;
+    }
+
+    if (ret == 0) {
+        body_n = wc_MakeCert(cert, der, 4096, &sub_key, NULL, &rng);
+        if (body_n <= 0)
+            ret = -1;
+    }
+
+    if (ret == 0) {
+        sign_n = wc_SignCert(cert->bodySz, cert->sigType, der, 4096, &ca_key,
+                             NULL, &rng);
+        if (sign_n <= 0)
+            ret = -1;
+    }
+
+    if (ret == 0) {
+        *cert_out     = der;
+        *cert_out_len = (size_t)sign_n;
+        der = NULL;   /* ownership transferred */
+    }
+
+    if (cert != NULL)
+        wc_CertFree(cert);
+    free(der);
+    wc_FreeRsaKey(&sub_key);
+    wc_FreeRsaKey(&ca_key);
+    wc_FreeRng(&rng);
+    return ret;
+}
+
 #ifdef HAVE_ECC
 /* Generate a throwaway self-signed ECC (P-256) CA cert, DER. Ownership of the
  * returned buffer passes to the caller (free with free()). */
@@ -577,6 +668,188 @@ static int test_signer_key_usage(void)
     wc_FreeDecodedCert(&dc);
     WOLFCERT_XFREE(signer_der, NULL);
     free(csr_der);
+    wc_FreeRsaKey(&key);
+    wc_FreeRng(&rng);
+
+    REQUIRE(rc == 0);
+    return 0;
+}
+
+/* Content of the DER SEQUENCE at `p`, or NULL when it is not one or does not
+ * fit in `len`. `content_len` and `total` receive the content and TLV sizes. */
+static const uint8_t* seq_content(const uint8_t* p, size_t len,
+                                  size_t* content_len, size_t* total)
+{
+    size_t hdr;
+    size_t clen;
+    size_t nb;
+    size_t i;
+
+    if (len < 2 || p[0] != 0x30)
+        return NULL;
+
+    if ((p[1] & 0x80) == 0) {
+        hdr  = 2;
+        clen = p[1];
+    }
+    else {
+        nb = (size_t)(p[1] & 0x7F);
+        if (nb == 0 || nb > 4 || len < 2 + nb)
+            return NULL;
+
+        clen = 0;
+        for (i = 0; i < nb; i++)
+            clen = (clen << 8) | p[2 + i];
+        hdr = 2 + nb;
+    }
+
+    if (clen > len - hdr)
+        return NULL;
+
+    *content_len = clen;
+    *total       = hdr + clen;
+    return p + hdr;
+}
+
+/* Build the IssuerAndSubject for `ra_der` and require it to decode as
+ * SEQUENCE { issuer Name, subject Name }, with the issuer Name carrying the
+ * subject DN of `name_der` and the subject Name that of the CSR. */
+static int check_issuer_and_subject(const uint8_t* ra_der, size_t ra_len,
+                                    const uint8_t* name_der, size_t name_len,
+                                    const uint8_t* csr_der, size_t csr_len)
+{
+    WolfCertBuffer ias = { 0 };
+    DecodedCert    nc;
+    DecodedCert    sc;
+    const uint8_t* outer = NULL;
+    const uint8_t* dn    = NULL;
+    size_t         outer_len = 0;
+    size_t         dn_len    = 0;
+    size_t         total     = 0;
+    size_t         total2    = 0;
+    int            rc  = 0;
+
+    if (wolfcert_scep_issuer_and_subject(ra_der, ra_len, csr_der, csr_len,
+                                         &ias, NULL) != WOLFCERT_OK)
+        return 1;
+
+    wc_InitDecodedCert(&nc, name_der, (word32)name_len, NULL);
+    wc_InitDecodedCert(&sc, csr_der, (word32)csr_len, NULL);
+
+    if (wc_ParseCert(&nc, CERT_TYPE, NO_VERIFY, NULL) != 0 ||
+            wc_ParseCert(&sc, CERTREQ_TYPE, NO_VERIFY, NULL) != 0)
+        rc = 1;
+
+    if (rc == 0 && (nc.subjectRaw == NULL || nc.subjectRawLen <= 0 ||
+                    sc.subjectRaw == NULL || sc.subjectRawLen <= 0))
+        rc = 1;
+
+    /* SEQUENCE { issuer Name, subject Name }, nothing before or after. */
+    if (rc == 0) {
+        outer = seq_content(ias.data, ias.len, &outer_len, &total);
+        if (outer == NULL || total != ias.len)
+            rc = 1;
+    }
+
+    if (rc == 0) {
+        dn = seq_content(outer, outer_len, &dn_len, &total);
+        if (dn == NULL || dn_len != (size_t)nc.subjectRawLen ||
+                memcmp(dn, nc.subjectRaw, dn_len) != 0)
+            rc = 1;
+    }
+
+    if (rc == 0) {
+        dn = seq_content(outer + total, outer_len - total, &dn_len, &total2);
+        if (dn == NULL || dn_len != (size_t)sc.subjectRawLen ||
+                memcmp(dn, sc.subjectRaw, dn_len) != 0)
+            rc = 1;
+        else if (total + total2 != outer_len)
+            rc = 1;
+    }
+
+    wc_FreeDecodedCert(&nc);
+    wc_FreeDecodedCert(&sc);
+    wolfcert_buffer_free(&ias);
+    return rc;
+}
+
+/* RFC 8894 section 3.3.2: the IssuerAndSubject issuer Name identifies the CA
+ * that issues the requested cert - an RA contributes its issuer's name, a CA
+ * (including a sub-CA under an offline root) its own subject. */
+static int test_issuer_and_subject_issuer_name(void)
+{
+    RsaKey   key;
+    WC_RNG   rng;
+    uint8_t* ca_der     = NULL;
+    size_t   ca_len     = 0;
+    uint8_t* ca_key_der = NULL;
+    size_t   ca_key_len = 0;
+    uint8_t* ra_der     = NULL;
+    size_t   ra_len     = 0;
+    uint8_t* sub_der    = NULL;
+    size_t   sub_len    = 0;
+    uint8_t* nobc_der   = NULL;
+    size_t   nobc_len   = 0;
+    uint8_t* csr_der    = NULL;
+    size_t   csr_len    = 0;
+    WolfCertBuffer bad  = { 0 };
+    int      rc = 0;
+
+    REQUIRE(wc_InitRng(&rng) == 0);
+    REQUIRE(wc_InitRsaKey(&key, NULL) == 0);
+    REQUIRE(wc_MakeRsaKey(&key, 2048, WC_RSA_EXPONENT, &rng) == 0);
+
+    REQUIRE(make_ca(&ca_der, &ca_len, &ca_key_der, &ca_key_len) == 0);
+    REQUIRE(make_signed_cert(ca_der, ca_len, ca_key_der, ca_key_len,
+                             "wolfCert Test RA Encryption", 0, 1,
+                             &ra_der, &ra_len) == 0);
+    REQUIRE(make_signed_cert(ca_der, ca_len, ca_key_der, ca_key_len,
+                             "wolfCert Test Sub CA", 1, 1,
+                             &sub_der, &sub_len) == 0);
+    REQUIRE(make_signed_cert(ca_der, ca_len, ca_key_der, ca_key_len,
+                             "wolfCert Test No BC", 0, 0,
+                             &nobc_der, &nobc_len) == 0);
+    REQUIRE(make_csr(&key, &rng, "device-4711.example.org", "Widgets Inc",
+                     &csr_der, &csr_len) == 0);
+
+    /* Split RA/CA: the RA is an end entity, so its issuer names the CA. */
+    rc = check_issuer_and_subject(ra_der, ra_len, ca_der, ca_len,
+                                  csr_der, csr_len);
+
+    /* Single self-signed CA as the envelope target. */
+    if (rc == 0)
+        rc = check_issuer_and_subject(ca_der, ca_len, ca_der, ca_len,
+                                      csr_der, csr_len);
+
+    /* Sub-CA with no RA: it issues, so it names itself. */
+    if (rc == 0)
+        rc = check_issuer_and_subject(sub_der, sub_len, sub_der, sub_len,
+                                      csr_der, csr_len);
+
+    /* No basic constraints at all: taken for an end entity, so its issuer
+     * supplies the Name whatever the certificate was meant to be. */
+    if (rc == 0)
+        rc = check_issuer_and_subject(nobc_der, nobc_len, ca_der, ca_len,
+                                      csr_der, csr_len);
+
+    /* Each NULL argument is refused before any parsing. */
+    if (rc == 0 && wolfcert_scep_issuer_and_subject(NULL, ra_len, csr_der,
+            csr_len, &bad, NULL) != WOLFCERT_ERR_BAD_ARG)
+        rc = 1;
+    if (rc == 0 && wolfcert_scep_issuer_and_subject(ra_der, ra_len, NULL,
+            csr_len, &bad, NULL) != WOLFCERT_ERR_BAD_ARG)
+        rc = 1;
+    if (rc == 0 && wolfcert_scep_issuer_and_subject(ra_der, ra_len, csr_der,
+            csr_len, NULL, NULL) != WOLFCERT_ERR_BAD_ARG)
+        rc = 1;
+
+    wolfcert_buffer_free(&bad);
+    free(csr_der);
+    free(nobc_der);
+    free(sub_der);
+    free(ra_der);
+    free(ca_key_der);
+    free(ca_der);
     wc_FreeRsaKey(&key);
     wc_FreeRng(&rng);
 
@@ -1320,6 +1593,8 @@ int main(void)
     if (test_signer_subject_matches_csr())
         return 1;
     if (test_signer_key_usage())
+        return 1;
+    if (test_issuer_and_subject_issuer_name())
         return 1;
     if (test_cert_rep_signer_trust())
         return 1;

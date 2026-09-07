@@ -352,11 +352,12 @@ typedef struct {
     const char*    fail_info;
 } WolfCertScepAttrs;
 
-/* Build a DER-encoded IssuerAndSubject SEQUENCE (RFC 8894 section 3.3.2) from
- * the raw Name bytes of the RA/CA cert (-> issuer) and a CSR (-> subject).
- * Used as the enveloped content of a GetCertInitial pkiMessage. */
-int wolfcert_scep_issuer_and_subject(const uint8_t* issuer_cert_der, size_t issuer_cert_len,
-                                     const uint8_t* csr_der,         size_t csr_len,
+/* Build the GetCertInitial IssuerAndSubject (RFC 8894 section 3.3.2) from an
+ * envelope-target cert and a CSR. A CA target names itself; an RA names its
+ * issuer, which assumes that is the CA issuing the requested cert. */
+WOLFCERT_TEST_VIS int wolfcert_scep_issuer_and_subject(
+                                     const uint8_t* ra_cert_der, size_t ra_cert_len,
+                                     const uint8_t* csr_der,     size_t csr_len,
                                      WolfCertBuffer* out_der, void* heap);
 
 WOLFCERT_TEST_VIS int wolfcert_scep_envelop(const uint8_t* ra_cert_der,

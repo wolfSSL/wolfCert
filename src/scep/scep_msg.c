@@ -601,6 +601,42 @@ WOLFCERT_TEST_VIS int wolfcert_scep_verify_next_ca_response(const uint8_t* resp_
     return rc;
 }
 
+/* One bit per SCEP signed attribute wolfCert reads. RFC 8894 gives each of
+ * them a single value, so the parser tracks which it has already seen. */
+#define SCEP_ATTR_MSG_TYPE      0x01
+#define SCEP_ATTR_PKI_STATUS    0x02
+#define SCEP_ATTR_FAIL_INFO     0x04
+#define SCEP_ATTR_TRANS_ID      0x08
+#define SCEP_ATTR_SENDER_NONCE  0x10
+#define SCEP_ATTR_RECIP_NONCE   0x20
+
+static int scep_attr_bit(const PKCS7DecodedAttrib* a)
+{
+    if (a->oid == NULL)
+        return 0;
+
+    if (a->oidSz == sizeof(OID_MSG_TYPE) &&
+        memcmp(a->oid, OID_MSG_TYPE, a->oidSz) == 0)
+        return SCEP_ATTR_MSG_TYPE;
+    if (a->oidSz == sizeof(OID_PKI_STATUS) &&
+        memcmp(a->oid, OID_PKI_STATUS, a->oidSz) == 0)
+        return SCEP_ATTR_PKI_STATUS;
+    if (a->oidSz == sizeof(OID_FAIL_INFO) &&
+        memcmp(a->oid, OID_FAIL_INFO, a->oidSz) == 0)
+        return SCEP_ATTR_FAIL_INFO;
+    if (a->oidSz == sizeof(OID_TRANS_ID) &&
+        memcmp(a->oid, OID_TRANS_ID, a->oidSz) == 0)
+        return SCEP_ATTR_TRANS_ID;
+    if (a->oidSz == sizeof(OID_SENDER_NONCE) &&
+        memcmp(a->oid, OID_SENDER_NONCE, a->oidSz) == 0)
+        return SCEP_ATTR_SENDER_NONCE;
+    if (a->oidSz == sizeof(OID_RECIP_NONCE) &&
+        memcmp(a->oid, OID_RECIP_NONCE, a->oidSz) == 0)
+        return SCEP_ATTR_RECIP_NONCE;
+
+    return 0;
+}
+
 WOLFCERT_TEST_VIS int wolfcert_scep_parse_pki_message(const uint8_t* pki_der,
     size_t pki_len, WolfCertBuffer* out_envelope, uint8_t** out_transaction_id,
     size_t* out_tid_len, uint8_t** out_sender_nonce, size_t* out_snonce_len,
@@ -608,13 +644,26 @@ WOLFCERT_TEST_VIS int wolfcert_scep_parse_pki_message(const uint8_t* pki_der,
     char** out_pki_status, uint8_t** out_signer_cert, size_t* out_signer_cert_len,
     char** out_fail_info, void* heap)
 {
-    PKCS7* p7 = wc_PKCS7_New(heap, WOLFCERT_DEVID_SOFTWARE);
+    PKCS7* p7;
+    PKCS7DecodedAttrib* a;
+    const byte* v;
+    char**    out_str;
+    uint8_t** out_bin;
+    size_t*   out_bin_len;
+    char*     s;
+    uint8_t*  b;
+    size_t off, vlen, voff;
+    int seen = 0;
+    int bit;
+    int rc;
+
+    p7 = wc_PKCS7_New(heap, WOLFCERT_DEVID_SOFTWARE);
     if (p7 == NULL)
         return WOLFCERT_ERR_MEMORY;
 
     wc_PKCS7_AllowDegenerate(p7, 0);
 
-    int rc = wc_PKCS7_VerifySignedData(p7, (byte*)pki_der, (word32)pki_len);
+    rc = wc_PKCS7_VerifySignedData(p7, (byte*)pki_der, (word32)pki_len);
     if (rc != 0) {
         wc_PKCS7_Free(p7);
         return WOLFCERT_ERR_WC(rc, "scep", "VerifySignedData");
@@ -684,7 +733,20 @@ WOLFCERT_TEST_VIS int wolfcert_scep_parse_pki_message(const uint8_t* pki_der,
     if (out_fail_info)
         *out_fail_info = NULL;
 
-    for (PKCS7DecodedAttrib* a = p7->decodedAttrib; a != NULL; a = a->next) {
+    for (a = p7->decodedAttrib; a != NULL; a = a->next) {
+        bit = scep_attr_bit(a);
+        if (bit == 0)
+            continue;
+
+        /* A repeated attribute is malformed: it would let the peer pick which
+         * copy the parser keeps and strand the copy it overwrote. */
+        if ((seen & bit) != 0) {
+            rc = WOLFCERT_ERR(WOLFCERT_ERR_PROTOCOL, "scep",
+                              "duplicate signed attribute in pkiMessage");
+            break;
+        }
+        seen |= bit;
+
         /* PKCS7DecodedAttrib.value can arrive in either of two shapes
          * depending on the wolfSSL version / producer:
          *   (a) the outer `SET OF AttributeValue` (tag 0x31 + content), or
@@ -694,8 +756,8 @@ WOLFCERT_TEST_VIS int wolfcert_scep_parse_pki_message(const uint8_t* pki_der,
         if (a->valueSz < 2 || a->value == NULL)
             continue;
 
-        const byte* v = a->value;
-        size_t off = 0;
+        v = a->value;
+        off = 0;
 
         if (v[0] == 0x31) {
             off = 2;
@@ -714,8 +776,8 @@ WOLFCERT_TEST_VIS int wolfcert_scep_parse_pki_message(const uint8_t* pki_der,
         if (off + 2 > a->valueSz)
             continue;
 
-        size_t vlen = v[off + 1];
-        size_t voff = off + 2;
+        vlen = v[off + 1];
+        voff = off + 2;
         if (v[off + 1] == 0x81) {
             if (off + 3 > a->valueSz)
                 continue;
@@ -730,69 +792,105 @@ WOLFCERT_TEST_VIS int wolfcert_scep_parse_pki_message(const uint8_t* pki_der,
             voff = off + 4;
         }
 
-        if (voff + vlen > a->valueSz)
-            continue;
+        if (voff + vlen != a->valueSz) {
+            rc = WOLFCERT_ERR(WOLFCERT_ERR_PROTOCOL, "scep",
+                              "multi-valued signed attribute in pkiMessage");
+            break;
+        }
 
         off = voff;
 
-        if (a->oidSz == sizeof(OID_MSG_TYPE) &&
-            memcmp(a->oid, OID_MSG_TYPE, a->oidSz) == 0 && out_message_type) {
-            char* s = (char*)WOLFCERT_XMALLOC(vlen + 1, heap);
-            if (s) {
+        /* messageType, pkiStatus and failInfo are text; the transactionID and
+         * the two nonces are opaque octets carried with their length. */
+        out_str     = NULL;
+        out_bin     = NULL;
+        out_bin_len = NULL;
+
+        switch (bit) {
+        case SCEP_ATTR_MSG_TYPE:
+            out_str = out_message_type;
+            break;
+        case SCEP_ATTR_PKI_STATUS:
+            out_str = out_pki_status;
+            break;
+        case SCEP_ATTR_FAIL_INFO:
+            out_str = out_fail_info;
+            break;
+        case SCEP_ATTR_TRANS_ID:
+            out_bin     = out_transaction_id;
+            out_bin_len = out_tid_len;
+            break;
+        case SCEP_ATTR_SENDER_NONCE:
+            out_bin     = out_sender_nonce;
+            out_bin_len = out_snonce_len;
+            break;
+        case SCEP_ATTR_RECIP_NONCE:
+            out_bin     = out_recipient_nonce;
+            out_bin_len = out_rnonce_len;
+            break;
+        default:
+            break;
+        }
+
+        if (out_str != NULL) {
+            s = (char*)WOLFCERT_XMALLOC(vlen + 1, heap);
+            if (s != NULL) {
                 memcpy(s, v + off, vlen);
                 s[vlen] = '\0';
-                *out_message_type = s;
+                *out_str = s;
             }
         }
-        else if (a->oidSz == sizeof(OID_PKI_STATUS) &&
-                 memcmp(a->oid, OID_PKI_STATUS, a->oidSz) == 0 && out_pki_status) {
-            char* s = (char*)WOLFCERT_XMALLOC(vlen + 1, heap);
-            if (s) {
-                memcpy(s, v + off, vlen);
-                s[vlen] = '\0';
-                *out_pki_status = s;
-            }
-        }
-        else if (a->oidSz == sizeof(OID_FAIL_INFO) &&
-                 memcmp(a->oid, OID_FAIL_INFO, a->oidSz) == 0 && out_fail_info) {
-            char* s = (char*)WOLFCERT_XMALLOC(vlen + 1, heap);
-            if (s) {
-                memcpy(s, v + off, vlen);
-                s[vlen] = '\0';
-                *out_fail_info = s;
-            }
-        }
-        else if (a->oidSz == sizeof(OID_TRANS_ID) &&
-                 memcmp(a->oid, OID_TRANS_ID, a->oidSz) == 0 && out_transaction_id) {
-            uint8_t* b = (uint8_t*)WOLFCERT_XMALLOC(vlen, heap);
-            if (b) {
+        else if (out_bin != NULL) {
+            b = (uint8_t*)WOLFCERT_XMALLOC(vlen, heap);
+            if (b != NULL) {
                 memcpy(b, v + off, vlen);
-                *out_transaction_id = b;
-                *out_tid_len = vlen;
-            }
-        }
-        else if (a->oidSz == sizeof(OID_SENDER_NONCE) &&
-                 memcmp(a->oid, OID_SENDER_NONCE, a->oidSz) == 0 && out_sender_nonce) {
-            uint8_t* b = (uint8_t*)WOLFCERT_XMALLOC(vlen, heap);
-            if (b) {
-                memcpy(b, v + off, vlen);
-                *out_sender_nonce = b;
-                *out_snonce_len = vlen;
-            }
-        }
-        else if (a->oidSz == sizeof(OID_RECIP_NONCE) &&
-                 memcmp(a->oid, OID_RECIP_NONCE, a->oidSz) == 0 && out_recipient_nonce) {
-            uint8_t* b = (uint8_t*)WOLFCERT_XMALLOC(vlen, heap);
-            if (b) {
-                memcpy(b, v + off, vlen);
-                *out_recipient_nonce = b;
-                *out_rnonce_len = vlen;
+                *out_bin     = b;
+                *out_bin_len = vlen;
             }
         }
     }
 
     wc_PKCS7_Free(p7);
-    return WOLFCERT_OK;
+
+    /* Leave nothing allocated behind on the reject path, as the early returns
+     * above do not either. */
+    if (rc != WOLFCERT_OK) {
+        if (out_message_type != NULL) {
+            WOLFCERT_XFREE(*out_message_type, heap);
+            *out_message_type = NULL;
+        }
+        if (out_pki_status != NULL) {
+            WOLFCERT_XFREE(*out_pki_status, heap);
+            *out_pki_status = NULL;
+        }
+        if (out_fail_info != NULL) {
+            WOLFCERT_XFREE(*out_fail_info, heap);
+            *out_fail_info = NULL;
+        }
+        if (out_transaction_id != NULL) {
+            WOLFCERT_XFREE(*out_transaction_id, heap);
+            *out_transaction_id = NULL;
+            *out_tid_len = 0;
+        }
+        if (out_sender_nonce != NULL) {
+            WOLFCERT_XFREE(*out_sender_nonce, heap);
+            *out_sender_nonce = NULL;
+            *out_snonce_len = 0;
+        }
+        if (out_recipient_nonce != NULL) {
+            WOLFCERT_XFREE(*out_recipient_nonce, heap);
+            *out_recipient_nonce = NULL;
+            *out_rnonce_len = 0;
+        }
+        if (out_signer_cert != NULL && out_signer_cert_len != NULL) {
+            WOLFCERT_XFREE(*out_signer_cert, heap);
+            *out_signer_cert = NULL;
+            *out_signer_cert_len = 0;
+        }
+        wolfcert_buffer_free(out_envelope);
+    }
+
+    return rc;
 }
 
 /* Build RFC 8894 section 3.3.2 IssuerAndSubject:

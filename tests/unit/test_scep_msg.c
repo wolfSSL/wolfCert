@@ -1296,6 +1296,272 @@ static int test_envelop_cipher_oid(void)
 }
 #endif /* HAVE_AES_CBC && (WOLFSSL_AES_128 || WOLFSSL_AES_256) */
 
+static const byte scep_oid_msg_type[] =
+    { 0x06,0x0A,0x60,0x86,0x48,0x01,0x86,0xF8,0x45,0x01,0x09,0x02 };
+static const byte scep_oid_trans_id[] =
+    { 0x06,0x0A,0x60,0x86,0x48,0x01,0x86,0xF8,0x45,0x01,0x09,0x07 };
+
+/* Sign fixed content with the caller's signed attributes. Taking them raw is
+ * what lets a test build an attribute set wolfCert itself never emits.
+ * Ownership of *out passes to the caller. */
+static int make_signed_with_attribs(const uint8_t* signer_cert,
+                                    size_t signer_cert_len,
+                                    const uint8_t* signer_key,
+                                    size_t signer_key_len,
+                                    PKCS7Attrib* attribs, int attribs_sz,
+                                    uint8_t** out, size_t* out_len)
+{
+    static const uint8_t content[3] = { 0xDE, 0xAD, 0xBE };
+    PKCS7*   p7 = NULL;
+    WC_RNG   rng;
+    uint8_t* buf = NULL;
+    int      have_rng = 0;
+    int      ret = 0;
+    int      n = 0;
+
+    if (wc_InitRng(&rng) != 0)
+        return -1;
+    have_rng = 1;
+
+    p7 = wc_PKCS7_New(NULL, INVALID_DEVID);
+    if (p7 == NULL)
+        ret = -1;
+
+    if (ret == 0 &&
+            wc_PKCS7_InitWithCert(p7, (byte*)signer_cert, (word32)signer_cert_len) != 0)
+        ret = -1;
+
+    if (ret == 0) {
+        buf = (uint8_t*)malloc(8192);
+        if (buf == NULL)
+            ret = -1;
+    }
+
+    if (ret == 0) {
+        p7->rng             = &rng;
+        p7->privateKey      = (byte*)signer_key;
+        p7->privateKeySz    = (word32)signer_key_len;
+        p7->encryptOID      = RSAk;
+        p7->hashOID         = SHA256h;
+        p7->content         = (byte*)content;
+        p7->contentSz       = sizeof(content);
+        p7->signedAttribs   = attribs;
+        p7->signedAttribsSz = (word32)attribs_sz;
+
+        n = wc_PKCS7_EncodeSignedData(p7, buf, 8192);
+        if (n <= 0)
+            ret = -1;
+    }
+
+    if (ret == 0) {
+        *out     = buf;
+        *out_len = (size_t)n;
+        buf = NULL;
+    }
+
+    free(buf);
+    if (p7 != NULL)
+        wc_PKCS7_Free(p7);
+    if (have_rng)
+        wc_FreeRng(&rng);
+    return ret;
+}
+
+/* A messageType attribute plus two transactionID attributes whose values
+ * differ, each in its own Attribute SEQUENCE. */
+static int make_dup_tid_signed(const uint8_t* signer_cert, size_t signer_cert_len,
+                               const uint8_t* signer_key, size_t signer_key_len,
+                               uint8_t** out, size_t* out_len)
+{
+    static const byte msg_type[] = { 0x13, 0x02, '1', '9' };
+    static const byte tid_a[] = { 0x13, 0x01, 'A' };
+    static const byte tid_b[] = { 0x13, 0x01, 'B' };
+    PKCS7Attrib attribs[3];
+
+    attribs[0].oid     = scep_oid_msg_type;
+    attribs[0].oidSz   = sizeof(scep_oid_msg_type);
+    attribs[0].value   = msg_type;
+    attribs[0].valueSz = sizeof(msg_type);
+    attribs[1].oid     = scep_oid_trans_id;
+    attribs[1].oidSz   = sizeof(scep_oid_trans_id);
+    attribs[1].value   = tid_a;
+    attribs[1].valueSz = sizeof(tid_a);
+    attribs[2].oid     = scep_oid_trans_id;
+    attribs[2].oidSz   = sizeof(scep_oid_trans_id);
+    attribs[2].value   = tid_b;
+    attribs[2].valueSz = sizeof(tid_b);
+
+    return make_signed_with_attribs(signer_cert, signer_cert_len,
+                                    signer_key, signer_key_len,
+                                    attribs, 3, out, out_len);
+}
+
+/* One transactionID attribute holding two PrintableStrings. EncodeAttributes
+ * wraps a PKCS7Attrib's value bytes in a single SET without reading them, so
+ * both land inside one SET OF AttributeValue. */
+static int make_multi_value_tid_signed(const uint8_t* signer_cert,
+                                       size_t signer_cert_len,
+                                       const uint8_t* signer_key,
+                                       size_t signer_key_len,
+                                       uint8_t** out, size_t* out_len)
+{
+    static const byte msg_type[] = { 0x13, 0x02, '1', '9' };
+    static const byte tid_two[] = { 0x13, 0x01, 'A', 0x13, 0x01, 'B' };
+    PKCS7Attrib attribs[2];
+
+    attribs[0].oid     = scep_oid_msg_type;
+    attribs[0].oidSz   = sizeof(scep_oid_msg_type);
+    attribs[0].value   = msg_type;
+    attribs[0].valueSz = sizeof(msg_type);
+    attribs[1].oid     = scep_oid_trans_id;
+    attribs[1].oidSz   = sizeof(scep_oid_trans_id);
+    attribs[1].value   = tid_two;
+    attribs[1].valueSz = sizeof(tid_two);
+
+    return make_signed_with_attribs(signer_cert, signer_cert_len,
+                                    signer_key, signer_key_len,
+                                    attribs, 2, out, out_len);
+}
+
+/* RFC 8894 gives each SCEP signed attribute one value and wolfSSL's PKCS#7
+ * decoder returns every copy, so a pkiMessage with two transactionID
+ * attributes must be rejected rather than letting the peer pick a winner. */
+static int test_duplicate_signed_attrib(void)
+{
+    uint8_t* ca_der  = NULL;
+    size_t   ca_len  = 0;
+    uint8_t* ca_key  = NULL;
+    size_t   ca_key_len = 0;
+    uint8_t* msg     = NULL;
+    size_t   msg_len = 0;
+    WolfCertBuffer env = { 0 };
+    uint8_t* tid     = NULL;
+    size_t   tid_len = 0;
+    uint8_t* snonce  = NULL;
+    size_t   snonce_len = 0;
+    uint8_t* rnonce  = NULL;
+    size_t   rnonce_len = 0;
+    char*    mt      = NULL;
+    char*    ps      = NULL;
+    char*    fi      = NULL;
+    uint8_t* signer  = NULL;
+    size_t   signer_len = 0;
+    int      rc;
+    int      tid_ok, snonce_ok, rnonce_ok, signer_ok, str_ok, env_ok;
+
+    REQUIRE(make_ca(&ca_der, &ca_len, &ca_key, &ca_key_len) == 0);
+    REQUIRE(make_dup_tid_signed(ca_der, ca_len, ca_key, ca_key_len,
+                                &msg, &msg_len) == 0);
+
+    /* Every out-param is requested so the reject path has to roll back what it
+     * had already produced, the signer certificate and messageType included. */
+    rc = wolfcert_scep_parse_pki_message(msg, msg_len, &env,
+            &tid, &tid_len, &snonce, &snonce_len, &rnonce, &rnonce_len,
+            &mt, &ps, &signer, &signer_len, &fi, NULL);
+    if (rc != WOLFCERT_ERR_PROTOCOL) {
+        fprintf(stderr, "duplicate transactionID accepted: rc=%d tid=%.*s\n",
+                rc, (int)tid_len, tid == NULL ? "" : (const char*)tid);
+    }
+
+    /* Nothing may be left behind for the caller to leak. Capture every check,
+     * then free unconditionally, so a failing one cannot leak either (same
+     * pattern as test_non_success_has_no_envelope). */
+    tid_ok    = (tid == NULL && tid_len == 0);
+    snonce_ok = (snonce == NULL && snonce_len == 0);
+    rnonce_ok = (rnonce == NULL && rnonce_len == 0);
+    signer_ok = (signer == NULL && signer_len == 0);
+    str_ok    = (mt == NULL && ps == NULL && fi == NULL);
+    env_ok    = (env.data == NULL && env.len == 0);
+
+    WOLFCERT_XFREE(tid, NULL);
+    WOLFCERT_XFREE(snonce, NULL);
+    WOLFCERT_XFREE(rnonce, NULL);
+    WOLFCERT_XFREE(signer, NULL);
+    WOLFCERT_XFREE(mt, NULL);
+    WOLFCERT_XFREE(ps, NULL);
+    WOLFCERT_XFREE(fi, NULL);
+    wolfcert_buffer_free(&env);
+    free(msg);
+    free(ca_der);
+    free(ca_key);
+
+    REQUIRE(rc == WOLFCERT_ERR_PROTOCOL);
+    REQUIRE(tid_ok);
+    REQUIRE(snonce_ok);
+    REQUIRE(rnonce_ok);
+    REQUIRE(signer_ok);
+    REQUIRE(str_ok);
+    REQUIRE(env_ok);
+    return 0;
+}
+
+/* The same ambiguity in the other encoding: one Attribute SEQUENCE whose SET
+ * carries two values. Nothing says which value applies, so the message is
+ * rejected instead of silently yielding the first. */
+static int test_multi_value_signed_attrib(void)
+{
+    uint8_t* ca_der  = NULL;
+    size_t   ca_len  = 0;
+    uint8_t* ca_key  = NULL;
+    size_t   ca_key_len = 0;
+    uint8_t* msg     = NULL;
+    size_t   msg_len = 0;
+    WolfCertBuffer env = { 0 };
+    uint8_t* tid     = NULL;
+    size_t   tid_len = 0;
+    uint8_t* snonce  = NULL;
+    size_t   snonce_len = 0;
+    uint8_t* rnonce  = NULL;
+    size_t   rnonce_len = 0;
+    char*    mt      = NULL;
+    char*    ps      = NULL;
+    char*    fi      = NULL;
+    uint8_t* signer  = NULL;
+    size_t   signer_len = 0;
+    int      rc;
+    int      tid_ok, snonce_ok, rnonce_ok, signer_ok, str_ok, env_ok;
+
+    REQUIRE(make_ca(&ca_der, &ca_len, &ca_key, &ca_key_len) == 0);
+    REQUIRE(make_multi_value_tid_signed(ca_der, ca_len, ca_key, ca_key_len,
+                                        &msg, &msg_len) == 0);
+
+    rc = wolfcert_scep_parse_pki_message(msg, msg_len, &env,
+            &tid, &tid_len, &snonce, &snonce_len, &rnonce, &rnonce_len,
+            &mt, &ps, &signer, &signer_len, &fi, NULL);
+    if (rc != WOLFCERT_ERR_PROTOCOL) {
+        fprintf(stderr, "multi-valued transactionID accepted: rc=%d tid=%.*s\n",
+                rc, (int)tid_len, tid == NULL ? "" : (const char*)tid);
+    }
+
+    tid_ok    = (tid == NULL && tid_len == 0);
+    snonce_ok = (snonce == NULL && snonce_len == 0);
+    rnonce_ok = (rnonce == NULL && rnonce_len == 0);
+    signer_ok = (signer == NULL && signer_len == 0);
+    str_ok    = (mt == NULL && ps == NULL && fi == NULL);
+    env_ok    = (env.data == NULL && env.len == 0);
+
+    WOLFCERT_XFREE(tid, NULL);
+    WOLFCERT_XFREE(snonce, NULL);
+    WOLFCERT_XFREE(rnonce, NULL);
+    WOLFCERT_XFREE(signer, NULL);
+    WOLFCERT_XFREE(mt, NULL);
+    WOLFCERT_XFREE(ps, NULL);
+    WOLFCERT_XFREE(fi, NULL);
+    wolfcert_buffer_free(&env);
+    free(msg);
+    free(ca_der);
+    free(ca_key);
+
+    REQUIRE(rc == WOLFCERT_ERR_PROTOCOL);
+    REQUIRE(tid_ok);
+    REQUIRE(snonce_ok);
+    REQUIRE(rnonce_ok);
+    REQUIRE(signer_ok);
+    REQUIRE(str_ok);
+    REQUIRE(env_ok);
+    return 0;
+}
+
 int main(void)
 {
     REQUIRE(test_static_mem_init() == 0);
@@ -1334,6 +1600,10 @@ int main(void)
     if (test_signer_is_verified_cert())
         return 1;
     if (test_signer_matches_any_bundle_cert())
+        return 1;
+    if (test_duplicate_signed_attrib())
+        return 1;
+    if (test_multi_value_signed_attrib())
         return 1;
 #ifdef HAVE_ECC
     if (test_envelop_rejects_ecc_ra())

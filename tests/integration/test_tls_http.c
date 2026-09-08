@@ -57,6 +57,14 @@
         }                                                                   \
     } while (0)
 
+#ifndef WOLFCERT_HAVE_BUILTIN_TRANSPORT
+/* Nothing below can open a socket in a build with no built-in transport. */
+int main(void)
+{
+    return 77;
+}
+#else
+
 struct srv_ctx {
     /* Published by srv_thread once the ephemeral listener is bound, then
      * polled by the main thread. Atomic so the cross-thread handoff has a
@@ -157,3 +165,5 @@ int main(void)
     printf("OK\n");
     return 0;
 }
+
+#endif

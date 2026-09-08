@@ -64,8 +64,7 @@ static void fill_common(const WolfCertServerCfg* srv, WolfCertHttpRequest* req)
     req->client_cert_len   = srv->client_cert_len;
     req->client_key        = srv->client_key;
     req->client_key_len    = srv->client_key_len;
-    req->connect_cb        = srv->connect_cb;
-    req->connect_ctx       = srv->connect_ctx;
+    req->transport         = srv->transport;
 }
 
 /* Validate the config before it is used. The protocol check comes first: it
@@ -493,8 +492,7 @@ static int est_session_open_common(const WolfCertServerCfg* srv, int nonblocking
         .client_key_len            = srv->client_key_len,
         .allow_post_handshake_auth = srv->proto_opts.est.allow_post_handshake_auth,
         .nonblocking               = nonblocking,
-        .connect_cb                = srv->connect_cb,
-        .connect_ctx               = srv->connect_ctx,
+        .transport                 = srv->transport,
         .heap                      = heap,
     };
     rc = wolfcert_http_session_open(&hcfg, &s->http);

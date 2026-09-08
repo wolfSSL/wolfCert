@@ -263,7 +263,8 @@ WOLFCERT_API int wolfcert_est_session_simple_enroll(WolfCertEstSession* s,
 
 WOLFCERT_API void wolfcert_est_session_close(WolfCertEstSession* s);
 
-/* Socket fd of the backing HTTP session - hand to poll/epoll/kqueue. */
+/* Socket fd of the backing HTTP session - hand to poll/epoll/kqueue;
+ * -1 when a caller-supplied WolfCertTransport backs it (no descriptor). */
 WOLFCERT_API int wolfcert_est_session_fd(const WolfCertEstSession* s);
 
 /* Async variants. The session must have been opened via a
@@ -274,9 +275,9 @@ WOLFCERT_API int wolfcert_est_session_fd(const WolfCertEstSession* s);
  *
  * Each call drives the HTTP session state machine forward and returns
  *   WOLFCERT_OK              - `out_*` populated.
- *   WOLFCERT_ERR_WANT_READ   - poll fd for readable, then call again
+ *   WOLFCERT_ERR_WANT_READ   - wait for readable, then call again
  *                              with the same arguments.
- *   WOLFCERT_ERR_WANT_WRITE  - poll fd for writable, then call again.
+ *   WOLFCERT_ERR_WANT_WRITE  - wait for writable, then call again.
  *   other negative values    - permanent failure.
  */
 WOLFCERT_API int wolfcert_est_session_open_async(const WolfCertServerCfg* srv,

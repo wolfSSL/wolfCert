@@ -633,8 +633,7 @@ static int cmd_getcacerts(int argc, char** argv)
     if (ret == 0 && check_proto_only_opts(&opts, p) != 0)
         ret = 1;
 
-    WolfCertServerCfg srv = { .protocol = p, .server_url = opts.url,
-                              .connect_cb = wolfcert_posix_connect };
+    WolfCertServerCfg srv = { .protocol = p, .server_url = opts.url };
 
     if (ret == 0) {
         fill_trust(&opts, &srv, &trust_hold);
@@ -712,8 +711,7 @@ static int cmd_enroll(int argc, char** argv)
     /* Build the server cfg first - needed by --csrattrs-auto before we
      * pick a key type. The key cfg + meta are populated below, then
      * optionally overlaid with /csrattrs hints, then used to generate. */
-    WolfCertServerCfg srv = { .protocol = p, .server_url = opts.url,
-                              .connect_cb = wolfcert_posix_connect };
+    WolfCertServerCfg srv = { .protocol = p, .server_url = opts.url };
     WolfCertCertMeta meta = { .subject_dn = opts.subject,
                               .san_dns = opts.san_dns, .san_dns_len = opts.san_dns_len,
                               .san_ip = opts.san_ip, .san_ip_len = opts.san_ip_len,
@@ -1049,8 +1047,7 @@ static int cmd_reenroll(int argc, char** argv)
         }
     }
 
-    WolfCertServerCfg srv = { .protocol = p, .server_url = opts.url,
-                              .connect_cb = wolfcert_posix_connect };
+    WolfCertServerCfg srv = { .protocol = p, .server_url = opts.url };
 
     if (ret == 0) {
         fill_trust(&opts, &srv, &trust_hold);
@@ -1132,8 +1129,7 @@ static int cmd_getnextca(int argc, char** argv)
         ret = 1;
     }
 
-    WolfCertServerCfg srv = { .protocol = p, .server_url = opts.url,
-                              .connect_cb = wolfcert_posix_connect };
+    WolfCertServerCfg srv = { .protocol = p, .server_url = opts.url };
 
     if (ret == 0) {
         fill_trust(&opts, &srv, &trust_hold);

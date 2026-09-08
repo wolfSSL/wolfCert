@@ -46,6 +46,8 @@ jobs:
           - { name: cmake-mldsa-44off,     os: ubuntu-latest, build: cmake,    wolfssl: mldsa-44off }
           - { name: cmake-mldsa-65off,     os: ubuntu-latest, build: cmake,    wolfssl: mldsa-65off }
           - { name: cmake-mldsa-87off,     os: ubuntu-latest, build: cmake,    wolfssl: mldsa-87off }
+          # ---- Platform pieces compiled out (transport/store gates) ----
+          - { name: cmake-no-builtin-transport, os: ubuntu-latest, build: cmake, wolfssl: full, cmake_extra: "-DWOLFCERT_ENABLE_BUILTIN_TRANSPORT=OFF -DWOLFCERT_ENABLE_POSIX_STORE=OFF -DWOLFCERT_ENABLE_CLI=OFF -DWOLFCERT_ENABLE_SERVER=OFF" }
           # ---- Constrained builds (unit tests only: single-thread / no-malloc) ----
           - { name: cmake-static-mem,      os: ubuntu-latest, build: cmake,    wolfssl: static-mem, cmake_extra: -DWOLFCERT_ENABLE_SERVER=OFF, ctest_exclude: "http|tls|roundtrip" }
           - { name: cmake-no-malloc,       os: ubuntu-latest, build: cmake,    wolfssl: no-malloc,  ctest_exclude: "http|tls|roundtrip|est" }

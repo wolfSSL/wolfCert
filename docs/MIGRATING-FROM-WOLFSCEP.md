@@ -25,14 +25,14 @@ wolfCert takes a URL and returns a certificate. HTTP, TLS, the CMS round trip an
 
 The practical consequence is that a migration deletes code rather than translating it, and the largest part of what goes is the cryptographic message layer, not the plumbing. The `wc_PKCS7_*` request builder, the signed-attribute handling, the CertRep parse and de-envelope, the fingerprint helper, the socket setup, the TLS wiring, the response buffer sizing and the polling loop all go. What remains is a config struct and one call per operation.
 
-If you must keep your own transport, for example on an RTOS with a proprietary stack, set `WolfCertServerCfg.connect_cb`. wolfCert then asks you for a connected socket and still does the HTTP and TLS on top of it.
+If you must keep your own transport, for example on an RTOS with a proprietary stack, fill in a `WolfCertTransport` and set `WolfCertServerCfg.transport`; wolfCert then moves every byte through it, TLS records included. See `ARCHITECTURE.md` section 4.6.
 
 ## Call mapping
 
 | wolfSCEP | wolfCert |
 |---|---|
 | `wolfSCEP_CTX_new` / `wolfSCEP_new` / `_free` | none needed; `WolfCertServerCfg` is a plain value you fill in |
-| `wolfSCEP_set_fd`, `wolfSCEP_SetIORecv`, `wolfSCEP_SetIOSend`, `wolfSCEP_SetIOReadCtx` | handled internally; `srv.connect_cb` if you need your own transport |
+| `wolfSCEP_set_fd`, `wolfSCEP_SetIORecv`, `wolfSCEP_SetIOSend`, `wolfSCEP_SetIOReadCtx` | handled internally; `srv.transport` (a `WolfCertTransport`) if you need your own |
 | `wolfSCEP_set_httpField(name, host, port)`, `wolfSCEP_set_cgi` | all part of `srv.server_url` |
 | `wolfSCEP_set_getCaId` | `srv.proto_opts.scep.ca_id` |
 | `wolfSCEP_set_bundle` (the pkiMessage your application built) | nothing to pass: wolfCert builds the pkiMessage. You supply `csr_der`, `ra_cert` and `ca_bundle` and it does the rest |

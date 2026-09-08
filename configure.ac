@@ -79,6 +79,29 @@ AC_ARG_ENABLE([cli],
     [enable_cli=$enableval], [enable_cli=yes])
 AM_CONDITIONAL([WOLFCERT_BUILD_CLI], [test "x$enable_cli" = "xyes"])
 
+AC_ARG_ENABLE([builtin-transport],
+    [AS_HELP_STRING([--disable-builtin-transport],
+        [do not build the built-in POSIX socket transport])],
+    [enable_builtin_transport=$enableval], [enable_builtin_transport=yes])
+AM_CONDITIONAL([WOLFCERT_HAVE_BUILTIN_TRANSPORT],
+    [test "x$enable_builtin_transport" = "xyes"])
+
+AS_IF([test "x$enable_builtin_transport" != "xyes"], [
+  AS_IF([test "x$enable_cli" = "xyes"],
+    [AC_MSG_ERROR([--enable-cli needs the built-in transport: the CLI
+cannot supply a custom one])])
+  AS_IF([test "x$enable_server" = "xyes"],
+    [AC_MSG_ERROR([--enable-server needs the built-in transport: its
+round-trip tests drive the client over real sockets])])
+])
+
+# store.c is always compiled; only its POSIX file backend is gated, so this
+# needs no AM_CONDITIONAL.
+AC_ARG_ENABLE([posix-store],
+    [AS_HELP_STRING([--disable-posix-store],
+        [do not build the POSIX file storage backend])],
+    [enable_posix_store=$enableval], [enable_posix_store=yes])
+
 AC_ARG_ENABLE([tests],
     [AS_HELP_STRING([--enable-tests], [build unit and integration tests])],
     [enable_tests=$enableval], [enable_tests=no])
@@ -171,6 +194,14 @@ AC_DEFUN([WOLFCERT_OPT],
    [$1="/* $3 not enabled */"])
  AC_SUBST([$1])])
 
+# WOLFCERT_PLAT(SUBST_VAR, $cond_value, HAVE_MACRO, NO_MACRO): platform gates
+# always define a macro: HAVE_MACRO when enabled, NO_MACRO when disabled.
+AC_DEFUN([WOLFCERT_PLAT],
+[AS_IF([test "x$2" = "xyes"],
+   [$1="@%:@define $3 1"],
+   [$1="@%:@define $4 1"])
+ AC_SUBST([$1])])
+
 save_CPPFLAGS="$CPPFLAGS"
 CPPFLAGS="$CPPFLAGS $WOLFSSL_CFLAGS"
 AC_CHECK_DECLS([HAVE_PKCS7, WOLFSSL_CERT_GEN, WOLFSSL_CERT_REQ, WOLFSSL_CERT_EXT,
@@ -261,6 +292,10 @@ AS_IF([test "x$have_rsa" = "xno" && test "x$have_ecc" = "xno" \
 WOLFCERT_OPT([WOLFCERT_OPT_EST],     [$enable_est],    [WOLFCERT_HAVE_EST])
 WOLFCERT_OPT([WOLFCERT_OPT_SCEP],    [$enable_scep],   [WOLFCERT_HAVE_SCEP])
 WOLFCERT_OPT([WOLFCERT_OPT_SERVER],  [$enable_server], [WOLFCERT_HAVE_SERVER])
+WOLFCERT_PLAT([WOLFCERT_OPT_POSIX_STORE], [$enable_posix_store],
+              [WOLFCERT_HAVE_POSIX_STORE], [WOLFCERT_NO_POSIX_STORE])
+WOLFCERT_PLAT([WOLFCERT_OPT_BUILTIN_TRANSPORT], [$enable_builtin_transport],
+              [WOLFCERT_HAVE_BUILTIN_TRANSPORT], [WOLFCERT_NO_BUILTIN_TRANSPORT])
 WOLFCERT_OPT([WOLFCERT_OPT_RSA],     [$have_rsa],      [WOLFCERT_HAVE_RSA])
 WOLFCERT_OPT([WOLFCERT_OPT_ECC],     [$have_ecc],      [WOLFCERT_HAVE_ECC])
 WOLFCERT_OPT([WOLFCERT_OPT_ED25519], [$have_ed25519],  [WOLFCERT_HAVE_ED25519])
@@ -312,6 +347,8 @@ AC_MSG_NOTICE([
                     Ed448=$have_ed448 ML-DSA=$have_mldsa
     TLS 1.2/1.3   : $have_tls12 / $have_tls13
     Test server   : $enable_server
+    POSIX store   : $enable_posix_store
+    Builtin transp: $enable_builtin_transport
     User settings : $enable_user_settings
     CLI tools     : $enable_cli
     Tests         : $enable_tests

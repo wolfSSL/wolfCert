@@ -30,11 +30,13 @@ extern "C" {
  * requested by the URL scheme, is layered on top of wolfSSL with the
  * caller-supplied trust anchors. */
 
-/* Built-in WolfCertConnectFn: blocking getaddrinfo + socket + connect over
- * POSIX/BSD sockets. This is the default transport when a config leaves
- * connect_cb NULL; it is also exported so applications can wrap or chain it. */
+/* Blocking getaddrinfo + socket + connect over POSIX/BSD sockets, returning
+ * a connected fd or -1. Exported so a custom transport's connect can open its
+ * TCP leg with it. */
+#ifdef WOLFCERT_HAVE_BUILTIN_TRANSPORT
 WOLFCERT_API int wolfcert_posix_connect(const char* host, int port,
                                         int timeout_ms, void* ctx);
+#endif
 
 typedef struct {
     const char* method;            /* "GET" or "POST" */
@@ -63,11 +65,9 @@ typedef struct {
      * embedding wolfCert in an MCU almost always sets this explicitly. */
     size_t         max_response_bytes;
 
-    /* Optional pluggable transport; NULL -> built-in wolfcert_posix_connect. */
-    WolfCertConnectFn connect_cb;
-    void*          connect_ctx;
-
     void*          heap;           /* NULL -> default */
+
+    WolfCertTransport transport;
 } WolfCertHttpRequest;
 
 typedef struct {
@@ -119,22 +119,16 @@ typedef struct {
     /* TLS 1.3 post-handshake authentication opt-in. */
     int            allow_post_handshake_auth;
 
-    /* Non-blocking session I/O. When set, the underlying socket is
-     * flipped to O_NONBLOCK right after the TCP connect completes, the
-     * TLS handshake is driven incrementally, and the paired
-     * wolfcert_http_session_request_nb returns WOLFCERT_ERR_WANT_READ /
-     * WOLFCERT_ERR_WANT_WRITE instead of blocking. Callers hand the
-     * result of wolfcert_http_session_fd() to their event loop.
-     *
-     * Out of scope: DNS resolution + the initial TCP connect inside
-     * wolfcert_http_session_open() are still synchronous. */
+    /* Non-blocking session I/O: wolfcert_http_session_request_nb returns
+     * WOLFCERT_ERR_WANT_READ / WOLFCERT_ERR_WANT_WRITE instead of blocking,
+     * and the TLS handshake is driven incrementally. Poll
+     * wolfcert_http_session_fd(), or your transport's own readiness signal.
+     * DNS and the initial connect stay synchronous. */
     int            nonblocking;
 
-    /* Optional pluggable transport; NULL -> built-in wolfcert_posix_connect. */
-    WolfCertConnectFn connect_cb;
-    void*          connect_ctx;
-
     void*          heap;
+
+    WolfCertTransport transport;
 } WolfCertHttpSessionCfg;
 
 WOLFCERT_API int  wolfcert_http_session_open (const WolfCertHttpSessionCfg* cfg,
@@ -150,11 +144,9 @@ WOLFCERT_API int  wolfcert_http_session_request(WolfCertHttpSession* s,
 
 WOLFCERT_API void wolfcert_http_session_close(WolfCertHttpSession* s);
 
-/* Socket descriptor of the open session. Valid for as long as the
- * session is open; after wolfcert_http_session_close the value is
- * undefined. Returned as -1 if the session is not open. Intended for
- * event loops - the caller polls for POLLIN / POLLOUT depending on
- * the last WOLFCERT_ERR_WANT_READ / _WANT_WRITE the library returned. */
+/* Socket descriptor of the open session: poll POLLIN / POLLOUT per the last
+ * WOLFCERT_ERR_WANT_*. The built-in transport keeps it O_NONBLOCK, so do not
+ * transfer on it. -1 under any other transport; undefined after close. */
 WOLFCERT_API int wolfcert_http_session_fd(const WolfCertHttpSession* s);
 
 /* Non-blocking variant of wolfcert_http_session_request. Must be used

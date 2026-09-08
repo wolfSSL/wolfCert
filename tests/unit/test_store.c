@@ -40,6 +40,7 @@
         }                                                                   \
     } while (0)
 
+#ifdef WOLFCERT_HAVE_POSIX_STORE
 static int test_posix(void)
 {
     char dir[] = "/tmp/wolfcert_store_XXXXXX";
@@ -84,6 +85,8 @@ static int test_posix(void)
     return 0;
 }
 
+#endif /* WOLFCERT_HAVE_POSIX_STORE */
+
 static int test_memory(void)
 {
     WolfCertStoreOps* store = wolfcert_store_memory_open(NULL);
@@ -107,8 +110,10 @@ int main(void)
 {
     REQUIRE(test_static_mem_init() == 0);
     REQUIRE(wolfcert_init(NULL) == WOLFCERT_OK);
+#ifdef WOLFCERT_HAVE_POSIX_STORE
     if (test_posix())
         return 1;
+#endif
     if (test_memory())
         return 1;
     wolfcert_cleanup();

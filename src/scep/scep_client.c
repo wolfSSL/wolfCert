@@ -77,8 +77,7 @@ static void fill_common(const WolfCertServerCfg* srv, WolfCertHttpRequest* req)
     req->client_cert_len    = srv->client_cert_len;
     req->client_key         = srv->client_key;
     req->client_key_len     = srv->client_key_len;
-    req->connect_cb         = srv->connect_cb;
-    req->connect_ctx        = srv->connect_ctx;
+    req->transport          = srv->transport;
 }
 
 /* ---- GetCACaps ---------------------------------------------------------- */
@@ -1439,8 +1438,7 @@ static int scep_session_open_common(const WolfCertServerCfg* srv, int nonblockin
         .client_key         = srv->client_key,
         .client_key_len     = srv->client_key_len,
         .nonblocking        = nonblocking,
-        .connect_cb         = srv->connect_cb,
-        .connect_ctx        = srv->connect_ctx,
+        .transport          = srv->transport,
         .heap               = heap,
     };
     rc = wolfcert_http_session_open(&hcfg, &s->http);

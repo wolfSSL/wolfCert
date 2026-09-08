@@ -42,6 +42,14 @@
         }                                                                   \
     } while (0)
 
+#ifndef WOLFCERT_HAVE_BUILTIN_TRANSPORT
+/* Nothing below can open a socket in a build with no built-in transport. */
+int main(void)
+{
+    return 77;
+}
+#else
+
 static int test_url_parser(void)
 {
     WolfCertUrl u;
@@ -474,3 +482,5 @@ int main(void)
     printf("OK\n");
     return 0;
 }
+
+#endif

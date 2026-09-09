@@ -100,6 +100,12 @@ if(WOLFCERT_ENABLE_EST)
         add_executable(test_est_mldsa_roundtrip integration/test_est_mldsa_roundtrip.c)
         target_link_libraries(test_est_mldsa_roundtrip PRIVATE wolfcert Threads::Threads)
         add_test(NAME est_mldsa_roundtrip COMMAND test_est_mldsa_roundtrip)
+
+        add_executable(test_server_stop_idle integration/test_server_stop_idle.c)
+        target_link_libraries(test_server_stop_idle PRIVATE wolfcert Threads::Threads)
+        add_test(NAME server_stop_idle COMMAND test_server_stop_idle)
+        # A stop that cannot interrupt an idle peer hangs the serving thread.
+        set_tests_properties(server_stop_idle PROPERTIES TIMEOUT 60)
     endif()
 endif()
 

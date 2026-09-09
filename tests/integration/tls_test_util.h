@@ -43,7 +43,9 @@
 #include <wolfssl/wolfcrypt/ecc.h>
 
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <netinet/in.h>
+#include <poll.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -242,10 +244,10 @@ static inline void test_tls_close(TestTlsConn* c)
     }
 }
 
-/* Connect to 127.0.0.1:port and handshake, pinning `ca_pem` as the sole trust
- * anchor. Returns 0 on success; the caller closes with test_tls_close(). */
-static inline int test_tls_connect(TestTlsConn* c, uint16_t port,
-                                   const uint8_t* ca_pem, size_t ca_pem_len)
+/* Everything up to the handshake: TCP is connected and the WOLFSSL is bound to
+ * the socket, with `ca_pem` pinned as the sole trust anchor. */
+static inline int test_tls_setup(TestTlsConn* c, uint16_t port,
+                                 const uint8_t* ca_pem, size_t ca_pem_len)
 {
     struct sockaddr_in sa = { 0 };
 
@@ -281,7 +283,54 @@ static inline int test_tls_connect(TestTlsConn* c, uint16_t port,
     if (wolfSSL_set_fd(c->ssl, c->fd) != WOLFSSL_SUCCESS)
         goto fail;
 
-    if (wolfSSL_connect(c->ssl) != WOLFSSL_SUCCESS)
+    return 0;
+fail:
+    test_tls_close(c);
+    return -1;
+}
+
+/* Connect to 127.0.0.1:port and handshake, pinning `ca_pem` as the sole trust
+ * anchor. Returns 0 on success; the caller closes with test_tls_close(). */
+static inline int test_tls_connect(TestTlsConn* c, uint16_t port,
+                                   const uint8_t* ca_pem, size_t ca_pem_len)
+{
+    if (test_tls_setup(c, port, ca_pem, ca_pem_len) != 0)
+        return -1;
+
+    if (wolfSSL_connect(c->ssl) != WOLFSSL_SUCCESS) {
+        test_tls_close(c);
+        return -1;
+    }
+
+    return 0;
+}
+
+/* Send the ClientHello and stop there, returning once the server's flight has
+ * arrived -- proof that the server is inside wolfSSL_accept() awaiting the
+ * rest of the handshake. Returns 0 on success, -1 on error or `timeout_ms`. */
+static inline int test_tls_connect_partial(TestTlsConn* c, uint16_t port,
+                                           const uint8_t* ca_pem,
+                                           size_t ca_pem_len, int timeout_ms)
+{
+    struct pollfd pfd;
+    int flags;
+    int ret;
+
+    if (test_tls_setup(c, port, ca_pem, ca_pem_len) != 0)
+        return -1;
+
+    flags = fcntl(c->fd, F_GETFL, 0);
+    if (flags < 0 || fcntl(c->fd, F_SETFL, flags | O_NONBLOCK) < 0)
+        goto fail;
+
+    ret = wolfSSL_connect(c->ssl);
+    if (ret == WOLFSSL_SUCCESS ||
+            wolfSSL_get_error(c->ssl, ret) != WOLFSSL_ERROR_WANT_READ)
+        goto fail;
+
+    pfd.fd     = c->fd;
+    pfd.events = POLLIN;
+    if (poll(&pfd, 1, timeout_ms) != 1 || (pfd.revents & POLLIN) == 0)
         goto fail;
 
     return 0;

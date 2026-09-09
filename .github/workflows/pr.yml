@@ -129,8 +129,9 @@ jobs:
             wolfssl: no-malloc
             # Non-TLS crypto/cert/PKCS7 units only: TLS + threads over a static
             # pool is a separate wolfSSL concern, out of scope for the
-            # allocation-free validation.
-            ctest_exclude: "http|tls|roundtrip|est"
+            # allocation-free validation. stop_idle is named because its TLS
+            # cases carry no "tls" in the test name.
+            ctest_exclude: "http|tls|roundtrip|est|stop_idle"
           # ---- macOS ----
           - name: cmake-full-macos
             os: macos-latest

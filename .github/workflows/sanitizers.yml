@@ -88,8 +88,10 @@ jobs:
           cmake --build build -j "$(nproc)"
           # The roundtrip tests spin the server on a background pthread while the
           # client drives it on the main thread -> the real concurrency surface.
+          # server_stop_idle belongs here too: it stops the server from a second
+          # thread, which is the one shutdown path nothing else exercises.
           ctest --test-dir build -j "$(nproc)" --output-on-failure \
-            -R 'roundtrip|tls_http'
+            -R 'roundtrip|tls_http|stop_idle'
 
   valgrind:
     name: valgrind (representative subset)

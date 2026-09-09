@@ -197,6 +197,12 @@ struct WolfCertServer {
      * this after serve_fd and breaks out of the keep-alive loop when
      * it's zero. */
     int                     keep_alive;
+    /* Set while the accept loop is serving a connection it armed with
+     * SO_RCVTIMEO/SO_SNDTIMEO. The would-block retries in
+     * wolfcert_io_{recv,send} are bounded only on such a connection: an fd
+     * handed in through wolfcert_server_serve_fd() may be non-blocking and
+     * has no shutdown flag driving it, so retrying there would spin. */
+    int                     poll_timeouts_armed;
     void*                   heap;
 };
 

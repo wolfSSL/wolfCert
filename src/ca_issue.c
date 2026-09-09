@@ -224,14 +224,26 @@ int wolfcert_ca_load(WolfCertCa* ca, WolfCertStoreOps* store, void* heap)
     WolfCertBuffer cert_buf = { .heap = heap };
     WolfCertBuffer key_buf  = { .heap = heap };
 
-    int rc = store->read(store->ctx, "ca.cert.der", &cert_buf);
-    if (rc != WOLFCERT_OK)
-        return rc;
+    int cert_rc = store->read(store->ctx, "ca.cert.der", &cert_buf);
+    int key_rc  = store->read(store->ctx, "ca.key.der", &key_buf);
+    int rc;
 
-    rc = store->read(store->ctx, "ca.key.der", &key_buf);
-    if (rc != WOLFCERT_OK) {
+    if (cert_rc != WOLFCERT_OK || key_rc != WOLFCERT_OK) {
         wolfcert_buffer_free(&cert_buf);
-        return rc;
+        wolfcert_buffer_free(&key_buf);
+
+        if (cert_rc == WOLFCERT_ERR_NOT_FOUND && key_rc == WOLFCERT_ERR_NOT_FOUND)
+            return WOLFCERT_ERR_NOT_FOUND;
+
+        /* Half a pair is a damaged store, not an empty one. Reporting
+         * NOT_FOUND here would let the caller mint a CA over the survivor. */
+        if (cert_rc == WOLFCERT_ERR_NOT_FOUND || key_rc == WOLFCERT_ERR_NOT_FOUND)
+            return WOLFCERT_ERR(WOLFCERT_ERR_PARSE, "ca",
+                "CA store is incomplete: %s is missing",
+                cert_rc == WOLFCERT_ERR_NOT_FOUND ? "ca.cert.der" : "ca.key.der");
+
+        rc = (cert_rc != WOLFCERT_OK) ? cert_rc : key_rc;
+        return WOLFCERT_ERR(rc, "ca", "CA store read failed");
     }
 
     /* Iterate every registered algorithm and see which private-key decoder
@@ -266,7 +278,8 @@ int wolfcert_ca_load(WolfCertCa* ca, WolfCertStoreOps* store, void* heap)
 
     wolfcert_buffer_free(&cert_buf);
     wolfcert_buffer_free(&key_buf);
-    return WOLFCERT_ERR_PARSE;
+    return WOLFCERT_ERR(WOLFCERT_ERR_PARSE, "ca",
+        "stored CA key does not decode as any supported algorithm");
 }
 
 int wolfcert_ca_save(const WolfCertCa* ca, WolfCertStoreOps* store)
@@ -278,7 +291,14 @@ int wolfcert_ca_save(const WolfCertCa* ca, WolfCertStoreOps* store)
     if (rc != WOLFCERT_OK)
         return rc;
 
-    return store->write(store->ctx, "ca.key.der", ca->key_der, ca->key_der_len, 1);
+    rc = store->write(store->ctx, "ca.key.der", ca->key_der, ca->key_der_len, 1);
+
+    /* A certificate without its key is a damaged store that every later load
+     * rejects, so drop the half that landed. */
+    if (rc != WOLFCERT_OK && store->remove != NULL)
+        (void)store->remove(store->ctx, "ca.cert.der");
+
+    return rc;
 }
 
 void wolfcert_ca_free(WolfCertCa* ca)

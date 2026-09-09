@@ -40,7 +40,10 @@ typedef struct {
     uint16_t         bind_port;
     WolfCertStoreOps* ca_store;          /* optional: persist the local CA
                                             across runs; NULL = regen on
-                                            each start */
+                                            each start. A store that fails
+                                            to read or write fails the
+                                            start rather than falling back
+                                            to an ephemeral CA. */
     const char*      challenge_password; /* SCEP challengePassword to accept; NULL disables */
     const char*      http_basic_user;    /* EST HTTP Basic credentials to accept; NULL disables */
     const char*      http_basic_pass;

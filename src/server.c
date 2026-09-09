@@ -221,11 +221,20 @@ int wolfcert_server_start(const WolfCertServerCfgSrv* cfg, WolfCertServer** out)
     }
 
     int rc;
-    if (cfg->ca_store != NULL &&
-        wolfcert_ca_load(&s->ca, cfg->ca_store, heap) == WOLFCERT_OK) {
-        /* loaded existing CA */
+    int have_ca = 0;
+
+    if (cfg->ca_store != NULL) {
+        rc = wolfcert_ca_load(&s->ca, cfg->ca_store, heap);
+        if (rc == WOLFCERT_OK)
+            have_ca = 1;
+        /* Only an empty store means "no CA yet"; an I/O, memory or parse
+         * failure must not silently replace a CA the caller still has.
+         * wolfcert_ca_load() already recorded which one it was. */
+        else if (rc != WOLFCERT_ERR_NOT_FOUND)
+            goto fail;
     }
-    else {
+
+    if (!have_ca) {
         WolfCertKeyType kt = cfg->ca_key_type ? cfg->ca_key_type
                                               : WOLFCERT_DEFAULT_KEY_TYPE;
         int kp = cfg->ca_key_param;
@@ -234,8 +243,13 @@ int wolfcert_server_start(const WolfCertServerCfgSrv* cfg, WolfCertServer** out)
         if (rc != WOLFCERT_OK)
             goto fail;
 
-        if (cfg->ca_store != NULL)
-            wolfcert_ca_save(&s->ca, cfg->ca_store);
+        if (cfg->ca_store != NULL) {
+            rc = wolfcert_ca_save(&s->ca, cfg->ca_store);
+            if (rc != WOLFCERT_OK) {
+                WOLFCERT_ERR(rc, "server", "ca_store save failed");
+                goto fail;
+            }
+        }
     }
 
     rc = ops->start(cfg, s);

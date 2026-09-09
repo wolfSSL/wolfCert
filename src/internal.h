@@ -75,6 +75,13 @@
 #define WOLFCERT_HTTP_AUTH_BUF_SZ 512   /* client Basic-auth header line      */
 #endif
 
+/* Response allowance the client readers add on top of the caller's body cap,
+ * bounding the status line plus header block. Distinct from the read
+ * granularity: a read is clamped to whatever of this allowance is left. */
+#ifndef WOLFCERT_HTTP_HEADER_BUDGET
+#define WOLFCERT_HTTP_HEADER_BUDGET 8192 /* client response header allowance   */
+#endif
+
 /* Heap headroom added on top of (envelope + signer cert) when encoding a SCEP
  * SignedData pkiMessage. wolfSSL's PKCS#7 encoder mutates internal state per
  * call, so it is given a single right-sized one-shot buffer rather than

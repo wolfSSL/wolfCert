@@ -444,6 +444,184 @@ static int test_chunked_size_overflow(void)
     return 0;
 }
 
+/* Size the reply to land exactly on the reader's accumulator allowance: a legal
+ * response the blocking reader accepts, with less than one read quantum of
+ * headroom left at the end. */
+#define NEAR_CAP_MAX_BODY 1024
+#define NEAR_CAP_TOTAL    (NEAR_CAP_MAX_BODY + WOLFCERT_HTTP_HEADER_BUDGET)
+/* The reply is built as head + pad + tail; too small a budget underflows the
+ * unsigned pad and memsets past the buffer. */
+#if NEAR_CAP_TOTAL < 256
+#error "test_session_near_cap_response needs WOLFCERT_HTTP_HEADER_BUDGET >= 256"
+#endif
+
+static void* srv_thread_near_cap(void* arg)
+{
+    struct srv_ctx* sc = (struct srv_ctx*)arg;
+    int cs = accept(sc->listen_fd, NULL, NULL);
+    close(sc->listen_fd);
+    if (cs < 0)
+        return NULL;
+
+    char buf[4096];
+    size_t n = 0;
+    while (n < sizeof(buf) - 1) {
+        ssize_t r = recv(cs, buf + n, sizeof(buf) - 1 - n, 0);
+        if (r <= 0)
+            break;
+        n += (size_t)r;
+        buf[n] = '\0';
+        if (strstr(buf, "\r\n\r\n") != NULL)
+            break;
+    }
+
+    const char* head =
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: text/plain\r\n"
+        "Content-Length: 5\r\n"
+        "X-Pad: ";
+    const char* tail = "\r\n\r\nready";
+    size_t pad = NEAR_CAP_TOTAL - strlen(head) - strlen(tail);
+
+    char response[NEAR_CAP_TOTAL];
+    memcpy(response, head, strlen(head));
+    memset(response + strlen(head), 'A', pad);
+    memcpy(response + strlen(head) + pad, tail, strlen(tail));
+
+    size_t off = 0;
+    while (off < sizeof(response)) {
+        ssize_t w = send(cs, response + off, sizeof(response) - off, 0);
+        if (w <= 0)
+            break;
+        off += (size_t)w;
+    }
+
+    shutdown(cs, SHUT_WR);
+    close(cs);
+    return NULL;
+}
+
+/* A response whose total size stays within the configured allowance must be
+ * accepted even when the reader is left with less than one read quantum of
+ * headroom. */
+static int test_session_near_cap_response(void)
+{
+    struct srv_ctx sc = { 0 };
+    pthread_t tid;
+    int port = 0;
+    sc.listen_fd = listen_loopback(&port);
+    REQUIRE(sc.listen_fd >= 0);
+    REQUIRE(pthread_create(&tid, NULL, srv_thread_near_cap, &sc) == 0);
+
+    char base[128];
+    char url[160];
+    snprintf(base, sizeof(base), "http://127.0.0.1:%d", port);
+    snprintf(url, sizeof(url), "http://127.0.0.1:%d/test", port);
+
+    WolfCertHttpSessionCfg cfg = {
+        .base_url = base,
+        .nonblocking = 1,
+        .max_response_bytes = NEAR_CAP_MAX_BODY,
+    };
+    WolfCertHttpSession* s = NULL;
+    REQUIRE(wolfcert_http_session_open(&cfg, &s) == WOLFCERT_OK);
+
+    WolfCertHttpRequest req = { .method = "GET", .url = url };
+    WolfCertHttpResponse resp = { 0 };
+    REQUIRE(drive_nb(s, &req, &resp) == WOLFCERT_OK);
+    REQUIRE(resp.status_code == 200);
+    REQUIRE(resp.body_len == 5);
+    REQUIRE(memcmp(resp.body, "ready", 5) == 0);
+    wolfcert_http_response_free(&resp);
+
+    wolfcert_http_session_close(s);
+    pthread_join(tid, NULL);
+    return 0;
+}
+
+static void* srv_thread_eof_cap(void* arg)
+{
+    struct srv_ctx* sc = (struct srv_ctx*)arg;
+    int cs = accept(sc->listen_fd, NULL, NULL);
+    close(sc->listen_fd);
+    if (cs < 0)
+        return NULL;
+
+    char buf[4096];
+    size_t n = 0;
+    while (n < sizeof(buf) - 1) {
+        ssize_t r = recv(cs, buf + n, sizeof(buf) - 1 - n, 0);
+        if (r <= 0)
+            break;
+        n += (size_t)r;
+        buf[n] = '\0';
+        if (strstr(buf, "\r\n\r\n") != NULL)
+            break;
+    }
+
+    /* No Content-Length and no chunking: the body runs to the close. */
+    const char* head =
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: text/plain\r\n"
+        "Connection: close\r\n"
+        "X-Pad: ";
+    const char* tail = "\r\n\r\nready";
+    size_t pad = NEAR_CAP_TOTAL - strlen(head) - strlen(tail);
+
+    char response[NEAR_CAP_TOTAL];
+    memcpy(response, head, strlen(head));
+    memset(response + strlen(head), 'A', pad);
+    memcpy(response + strlen(head) + pad, tail, strlen(tail));
+
+    size_t off = 0;
+    while (off < sizeof(response)) {
+        ssize_t w = send(cs, response + off, sizeof(response) - off, 0);
+        if (w <= 0)
+            break;
+        off += (size_t)w;
+    }
+
+    close(cs);
+    return NULL;
+}
+
+/* An EOF-delimited response that fills the allowance exactly is complete: the
+ * reader must look for the close rather than reject the full accumulator. */
+static int test_session_eof_cap_response(void)
+{
+    struct srv_ctx sc = { 0 };
+    pthread_t tid;
+    int port = 0;
+    sc.listen_fd = listen_loopback(&port);
+    REQUIRE(sc.listen_fd >= 0);
+    REQUIRE(pthread_create(&tid, NULL, srv_thread_eof_cap, &sc) == 0);
+
+    char base[128];
+    char url[160];
+    snprintf(base, sizeof(base), "http://127.0.0.1:%d", port);
+    snprintf(url, sizeof(url), "http://127.0.0.1:%d/test", port);
+
+    WolfCertHttpSessionCfg cfg = {
+        .base_url = base,
+        .nonblocking = 1,
+        .max_response_bytes = NEAR_CAP_MAX_BODY,
+    };
+    WolfCertHttpSession* s = NULL;
+    REQUIRE(wolfcert_http_session_open(&cfg, &s) == WOLFCERT_OK);
+
+    WolfCertHttpRequest req = { .method = "GET", .url = url };
+    WolfCertHttpResponse resp = { 0 };
+    REQUIRE(drive_nb(s, &req, &resp) == WOLFCERT_OK);
+    REQUIRE(resp.status_code == 200);
+    REQUIRE(resp.body_len >= 5);
+    REQUIRE(memcmp(resp.body + resp.body_len - 5, "ready", 5) == 0);
+    wolfcert_http_response_free(&resp);
+
+    wolfcert_http_session_close(s);
+    pthread_join(tid, NULL);
+    return 0;
+}
+
 /* Capture the request headers a client sends so the test can inspect
  * which headers were emitted on the wire. */
 struct capture_ctx {
@@ -579,6 +757,10 @@ int main(void)
     if (test_session_retry_after_reset())
         return 1;
     if (test_chunked_size_overflow())
+        return 1;
+    if (test_session_near_cap_response())
+        return 1;
+    if (test_session_eof_cap_response())
         return 1;
     if (test_request_transfer_encoding())
         return 1;

@@ -134,12 +134,16 @@ the request completes) so it never counts against the stack budget.
 | `WOLFCERT_HTTP_QUERY_SZ` | `8192` | sized to hold a base64 GET `PKIOperation` message; on the SCEP server it extends the heap read buffer (`REQ_BUF_SZ + QUERY_SZ`) that `query` points into |
 | `WOLFCERT_HTTP_AUTH_BUF_SZ` | `512` | client Basic-auth header line (`http.c`) |
 | `WOLFCERT_HTTP_MAX_PATH_LEN` | `8192` | client-side ceiling on a request URL's path+query (`http.c`) |
+| `WOLFCERT_HTTP_HEADER_BUDGET` | `8192` | client response allowance added to the caller's body cap, bounding the status line plus header block. Both the blocking and the non-blocking reader grow their accumulator to `max_response_bytes + this` (`http.c`) |
 | `WOLFCERT_SCEP_MAX_GET_URL` | `8192` | client cap on a GET `PKIOperation` URL; a larger message is refused with `WOLFCERT_ERR_UNSUPPORTED` so the caller POSTs (`internal.h`) |
 
 Shrinking `WOLFCERT_HTTP_REQ_BUF_SZ` lowers the largest request header
 block the server accepts; `WOLFCERT_HTTP_PATH_SZ` / `WOLFCERT_HTTP_QUERY_SZ`
 lower the longest request path / query; `WOLFCERT_HTTP_AUTH_BUF_SZ` lowers the
-longest Basic-auth credential the client can send. A POST-only SCEP deployment
+longest Basic-auth credential the client can send. `WOLFCERT_HTTP_HEADER_BUDGET`
+trims the client's response accumulator, and with it the largest response
+header block it will accept, so keep it above the headers your CA actually
+sends. A POST-only SCEP deployment
 can trim `WOLFCERT_HTTP_QUERY_SZ` (and, on the client, `WOLFCERT_SCEP_MAX_GET_URL`
 and `WOLFCERT_HTTP_MAX_PATH_LEN`) back down. Example:
 

@@ -1104,7 +1104,8 @@ static int http_read_response(WolfCertConn* c,
                               WolfCertHttpResponse* resp,
                               void* heap)
 {
-    DynBuf rx = { .heap = heap, .max = max_body + 8192 };
+    DynBuf rx = { .heap = heap,
+                  .max = max_body + WOLFCERT_HTTP_HEADER_BUDGET };
     int hdr_end = read_headers(c, &rx);
     if (hdr_end < 0) {
         WOLFCERT_XFREE(rx.buf, heap);
@@ -1469,6 +1470,12 @@ static int nb_write(WolfCertConn* c, const uint8_t* buf, size_t len, size_t* off
     return WOLFCERT_OK;
 }
 
+/* Total accumulator allowance: the body cap plus the header budget. */
+static size_t nb_rx_max(const WolfCertHttpSession* s)
+{
+    return s->max_body + WOLFCERT_HTTP_HEADER_BUDGET;
+}
+
 /* Ensure the rx buffer has room for `need` more bytes. */
 static int nb_rx_reserve(WolfCertHttpSession* s, size_t need)
 {
@@ -1476,7 +1483,7 @@ static int nb_rx_reserve(WolfCertHttpSession* s, size_t need)
     if (want <= s->sm_rx_cap)
         return WOLFCERT_OK;
 
-    size_t max = s->max_body + 8192;
+    size_t max = nb_rx_max(s);
     if (want > max)
         return WOLFCERT_ERR_PROTOCOL;
 
@@ -1503,14 +1510,36 @@ static int nb_rx_reserve(WolfCertHttpSession* s, size_t need)
 static int nb_read_some(WolfCertHttpSession* s, int* ended)
 {
     *ended = 0;
-    int rc = nb_rx_reserve(s, WOLFCERT_HTTP_READ_CHUNK);
-    if (rc != WOLFCERT_OK)
-        return rc;
+
+    /* Read at most what the allowance still permits, so a response that
+     * ends inside the final quantum is not rejected before it is read. */
+    size_t room = nb_rx_max(s) - s->sm_rx_len;
+    uint8_t probe;
+    uint8_t* dst;
+
+    if (room == 0) {
+        /* An EOF-delimited body ending exactly on the allowance is legal, so
+         * a full accumulator still has to look for the close. */
+        dst  = &probe;
+        room = 1;
+    }
+    else {
+        if (room > WOLFCERT_HTTP_READ_CHUNK)
+            room = WOLFCERT_HTTP_READ_CHUNK;
+
+        int rc = nb_rx_reserve(s, room);
+        if (rc != WOLFCERT_OK)
+            return rc;
+
+        dst = s->sm_rx + s->sm_rx_len;
+    }
 
     if (s->conn.ssl) {
-        int r = wolfSSL_read(s->conn.ssl, s->sm_rx + s->sm_rx_len,
-                             WOLFCERT_HTTP_READ_CHUNK);
+        int r = wolfSSL_read(s->conn.ssl, dst, (int)room);
         if (r > 0) {
+            if (dst == &probe)
+                return WOLFCERT_ERR_PROTOCOL;
+
             s->sm_rx_len += (size_t)r;
             return WOLFCERT_OK;
         }
@@ -1533,12 +1562,14 @@ static int nb_read_some(WolfCertHttpSession* s, int* ended)
         return WOLFCERT_ERR_IO;
     }
 
-    int r = s->conn.t.read(s->conn.t.ctx, s->conn.handle,
-                           s->sm_rx + s->sm_rx_len,
-                           WOLFCERT_HTTP_READ_CHUNK, s->conn.io_timeout_ms);
+    int r = s->conn.t.read(s->conn.t.ctx, s->conn.handle, dst,
+                           room, s->conn.io_timeout_ms);
     if (r > 0) {
-        if ((size_t)r > WOLFCERT_HTTP_READ_CHUNK)
+        if ((size_t)r > room)
             return WOLFCERT_ERR_IO;
+        if (dst == &probe)
+            return WOLFCERT_ERR_PROTOCOL;
+
         s->sm_rx_len += (size_t)r;
         return WOLFCERT_OK;
     }

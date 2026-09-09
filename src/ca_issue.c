@@ -213,6 +213,58 @@ int wolfcert_ca_generate(WolfCertCa* ca, WolfCertKeyType type, int param, void* 
     return WOLFCERT_OK;
 }
 
+/* Confirm the stored certificate is a CA and carries the public half of the
+ * stored private key. A mismatched pair would otherwise start a server whose
+ * signatures and PKCS#7 decryption do not match the CA it advertises. */
+static int ca_check_stored_pair(const WolfCertKeyAlg* alg, WolfCertKey* key,
+                                const uint8_t* cert_der, size_t cert_len,
+                                void* heap)
+{
+    DecodedCert* dc = (DecodedCert*)WOLFCERT_XMALLOC(sizeof(*dc), heap);
+    if (dc == NULL)
+        return WOLFCERT_ERR_MEMORY;
+
+    wc_InitDecodedCert(dc, cert_der, (word32)cert_len, heap);
+
+    int rc = wc_ParseCert(dc, CERT_TYPE, NO_VERIFY, NULL);
+    if (rc != 0) {
+        rc = WOLFCERT_ERR(WOLFCERT_ERR_PARSE, "ca",
+                          "stored CA certificate does not parse");
+    }
+    else if (!dc->isCA ||
+             (dc->extKeyUsageSet && (dc->extKeyUsage & KEYUSE_KEY_CERT_SIGN) == 0)) {
+        /* Signing with a leaf produces a chain no relying party accepts, and
+         * /cacerts would advertise it as the trust anchor. */
+        rc = WOLFCERT_ERR(WOLFCERT_ERR_PARSE, "ca",
+                          "stored CA certificate is not a CA "
+                          "(basicConstraints/keyUsage)");
+    }
+    else if (dc->keyOID != (word32)alg->key_oid || dc->publicKey == NULL) {
+        rc = WOLFCERT_ERR(WOLFCERT_ERR_PARSE, "ca",
+                          "stored CA certificate and key use different algorithms");
+    }
+    else {
+        rc = alg->pub_check(key, dc->publicKey, dc->pubKeySize);
+        if (rc != WOLFCERT_OK)
+            rc = WOLFCERT_ERR(rc, "ca",
+                              "stored CA certificate does not match the stored key");
+    }
+
+    wc_FreeDecodedCert(dc);
+    WOLFCERT_XFREE(dc, heap);
+    return rc;
+}
+
+/* The stored bytes are the CA private key, so every exit wipes them before
+ * releasing the buffer, as wolfcert_ca_free() does for the loaded copy. */
+static void ca_key_buf_free(WolfCertBuffer* key_buf)
+{
+    if (key_buf->data != NULL && key_buf->len > 0)
+        wc_ForceZero(key_buf->data, (word32)key_buf->len);
+
+    wolfcert_buffer_free(key_buf);
+}
+
 int wolfcert_ca_load(WolfCertCa* ca, WolfCertStoreOps* store, void* heap)
 {
     if (ca == NULL || store == NULL)
@@ -230,7 +282,7 @@ int wolfcert_ca_load(WolfCertCa* ca, WolfCertStoreOps* store, void* heap)
 
     if (cert_rc != WOLFCERT_OK || key_rc != WOLFCERT_OK) {
         wolfcert_buffer_free(&cert_buf);
-        wolfcert_buffer_free(&key_buf);
+        ca_key_buf_free(&key_buf);
 
         if (cert_rc == WOLFCERT_ERR_NOT_FOUND && key_rc == WOLFCERT_ERR_NOT_FOUND)
             return WOLFCERT_ERR_NOT_FOUND;
@@ -263,6 +315,14 @@ int wolfcert_ca_load(WolfCertCa* ca, WolfCertStoreOps* store, void* heap)
             continue;
 
         if (a->priv_decode(&shim, key_buf.data, (word32)key_buf.len) == WOLFCERT_OK) {
+            rc = ca_check_stored_pair(a, &shim, cert_buf.data, cert_buf.len, heap);
+            if (rc != WOLFCERT_OK) {
+                a->free_(&shim);
+                wolfcert_buffer_free(&cert_buf);
+                ca_key_buf_free(&key_buf);
+                return rc;
+            }
+
             ca->type = a->type;
             ca->impl = shim.impl;
             ca->cert_der     = cert_buf.data;
@@ -277,7 +337,7 @@ int wolfcert_ca_load(WolfCertCa* ca, WolfCertStoreOps* store, void* heap)
     }
 
     wolfcert_buffer_free(&cert_buf);
-    wolfcert_buffer_free(&key_buf);
+    ca_key_buf_free(&key_buf);
     return WOLFCERT_ERR(WOLFCERT_ERR_PARSE, "ca",
         "stored CA key does not decode as any supported algorithm");
 }

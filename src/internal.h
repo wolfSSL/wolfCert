@@ -148,11 +148,13 @@ typedef struct {
 } WolfCertCa;
 
 int  wolfcert_ca_generate(WolfCertCa* ca, WolfCertKeyType type, int param, void* heap);
-int  wolfcert_ca_load(WolfCertCa* ca, WolfCertStoreOps* store, void* heap);
+WOLFCERT_TEST_VIS int  wolfcert_ca_load(WolfCertCa* ca, WolfCertStoreOps* store,
+                                        void* heap);
 int  wolfcert_ca_save(const WolfCertCa* ca, WolfCertStoreOps* store);
-void wolfcert_ca_free(WolfCertCa* ca);
-int  wolfcert_ca_issue (WolfCertCa* ca, const uint8_t* csr_der, size_t csr_len,
-                        uint8_t** out_cert, size_t* out_len);
+WOLFCERT_TEST_VIS void wolfcert_ca_free(WolfCertCa* ca);
+WOLFCERT_TEST_VIS int  wolfcert_ca_issue(WolfCertCa* ca, const uint8_t* csr_der,
+                                         size_t csr_len, uint8_t** out_cert,
+                                         size_t* out_len);
 
 /* ---- server vtable ------------------------------------------------------ */
 

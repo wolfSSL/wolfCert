@@ -59,6 +59,11 @@ typedef struct WolfCertKeyAlg {
      * Returns written length (>0) on success, negative on error. */
     int  (*priv_to_der)(const struct WolfCertKey* key,
                         uint8_t* buf, word32 cap);
+    /* Confirm the private key belongs to the given public key. An
+     * implementation may adopt `pub` into `key` when the private encoding
+     * carries no public half (ML-DSA), so a key that fails must be freed. */
+    int  (*pub_check) (struct WolfCertKey* key,
+                       const uint8_t* pub, word32 pub_len);
     /* wc_*_free + free(key->impl). */
     void (*free_)     (struct WolfCertKey* key);
 } WolfCertKeyAlg;

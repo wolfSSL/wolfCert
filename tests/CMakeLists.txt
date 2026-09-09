@@ -131,6 +131,7 @@ if(WOLFCERT_ENABLE_SCEP AND WOLFCERT_ENABLE_SERVER)
     add_test(NAME scep_async_roundtrip COMMAND test_scep_async_roundtrip)
 
     add_executable(test_server_ca_store unit/test_server_ca_store.c)
+    target_include_directories(test_server_ca_store PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_server_ca_store PRIVATE wolfcert Threads::Threads)
     add_test(NAME server_ca_store COMMAND test_server_ca_store)
 endif()

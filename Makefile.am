@@ -201,6 +201,7 @@ test_scep_poll_roundtrip_LDADD   = libwolfcert.la $(WOLFSSL_LIBS) -lpthread
 test_scep_async_roundtrip_SOURCES = tests/integration/test_scep_async_roundtrip.c
 test_scep_async_roundtrip_LDADD   = libwolfcert.la $(WOLFSSL_LIBS) -lpthread
 test_server_ca_store_SOURCES = tests/unit/test_server_ca_store.c
+test_server_ca_store_CPPFLAGS = $(AM_CPPFLAGS) -I$(top_srcdir)/src
 test_server_ca_store_LDADD   = libwolfcert.la $(WOLFSSL_LIBS) -lpthread
 endif
 endif

@@ -44,7 +44,7 @@ If you must keep your own transport, for example on an RTOS with a proprietary s
 | your own pkiStatus parse against `WS_PKI_SUCCESS` / `WS_PKI_FAILURE` / `WS_PKI_PENDING` | `WolfCertScepResult.status`, `WOLFCERT_SCEP_STATUS_SUCCESS` / `_FAILURE` / `_PENDING` |
 | `wolfSCEP_reply_error`, `wolfSCEP_get_error` | `wolfcert_strerror` and `wolfcert_last_error_message` |
 | `wolfSCEP_Debugging_ON` / `_OFF` | `wolfcert_set_log_cb` and `wolfcert_set_log_level` |
-| your own CA fingerprint check | `wolfcert_scep_verify_ca_fingerprint` |
+| your own CA fingerprint check | `wolfcert_scep_verify_ca_fingerprint`, or `wolfcert-client --ca-fingerprint` from the CLI |
 | no equivalent | `wolfcert_scep_renewal_req` (either messageType, see below), `wolfcert_scep_get_cert_initial`, `wolfcert_scep_get_next_ca_cert`, the keep-alive and async session API, and all of EST |
 
 `WS_REQUEST_CERT` and `WS_REQUEST_CRL` need no entry. Both fall through to the default case of `wolfSCEP_request()` and return `WS_BAD_ARGUMENT`, so no working integration can be using them.

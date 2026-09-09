@@ -108,10 +108,11 @@ The CLI also covers TLS / mutual TLS (`--trust`, `--client-cert`,
 `--client-key`), TLS 1.3 post-handshake auth (`--pha`), SCEP polling
 (`--poll-attempts`, `--poll-interval-ms`), `getnextca`, and `/csrattrs`
 key-policy pinning (`--csrattrs-auto`). The SCEP-specific knobs are
-`--ca-id` (select one CA on a multi-CA responder), `--txid-mode` (`random`
-or `pubkey`, the RFC 8894 §3.2.1 public-key derivation) and
-`--content-cipher` (`auto`, `aes128`, `aes256`, `des3` - force one for a
-peer that requires it, since no GetCACaps keyword advertises AES-256).
+`--ca-fingerprint` (see below), `--ca-id` (select one CA on a multi-CA
+responder), `--txid-mode` (`random` or `pubkey`, the RFC 8894 §3.2.1
+public-key derivation) and `--content-cipher` (`auto`, `aes128`, `aes256`,
+`des3` - force one for a peer that requires it, since no GetCACaps keyword
+advertises AES-256).
 Options that belong to one protocol are rejected under the other rather
 than silently ignored. Run `wolfcert-client --help` and
 `wolfcert-server --help` for the full set.
@@ -119,6 +120,44 @@ than silently ignored. Run `wolfcert-client --help` and
 EST mandates authenticating the server (RFC 7030), so an EST enroll needs
 `--trust PEMFILE` (or a caller-supplied trust anchor). Without it the client
 refuses rather than hand its credentials and CSR to an unverified server.
+
+SCEP instead authenticates the CA by fingerprint. Whoever answers `GetCACert`
+becomes both the recipient that decrypts your CSR (and its
+`challengePassword`) and the trust anchor for the certificate you are handed
+back, so pin it. Read the fingerprint once over a path you trust:
+
+```sh
+./wolfcert-client getcacerts --proto scep --url http://127.0.0.1:8088/scep \
+    --out-cert ca.pem
+# getcacerts: certificate 0 is sha256:3F:A1:...
+```
+
+then require it on every later run:
+
+```sh
+./wolfcert-client enroll --proto scep --url http://127.0.0.1:8088/scep \
+    --ca-fingerprint sha256:3F:A1:... \
+    --key-type rsa:2048 --subject "CN=device-2" \
+    --out-key dev.key --out-cert dev.crt
+```
+
+Only the certificate matching the fingerprint is used, as the envelope
+recipient and as the sole trust anchor for the reply; anything else the
+server sends alongside it is ignored. A response with no match is refused.
+Without the flag the client warns and trusts whatever it is served, which is
+fine against a test server and not fine anywhere else. A CA that answers
+`GetCACert` with a separate registration authority needs that RA's
+fingerprint for `enroll`, since the RA is what signs the reply.
+`getnextca` wants the CA's own fingerprint instead - RFC 8894 section
+4.6.1 has the current CA sign the roll-over. `getcacerts` prints one line
+per served certificate, so both values come out of one trusted read.
+
+The pin covers `GetCACert` alone. `GetCACaps` travels the same
+unauthenticated transport, so whoever controls the path can strip the
+`AES` keyword and push content encryption down to 3DES: pass
+`--content-cipher aes128` (or `aes256`) where the transport is not
+trusted. The signature digest floors at SHA-256 and needs no such
+override.
 
 To call the library directly, see `examples/enroll_est.c`,
 `examples/enroll_scep.c`, and `examples/enroll_cryptocb.c`.

@@ -113,6 +113,29 @@ static int test_url_origin(void)
     WOLFCERT_XFREE(origin, NULL); origin = NULL;
     wolfcert_http_url_free(&u);
 
+    /* An IPv6 literal is re-bracketed, so parse -> origin -> parse round-trips
+     * instead of collapsing into an unparsable "https://::1:8443". */
+    REQUIRE(wolfcert_http_url_parse("https://[::1]:8443/p", &u, NULL) == WOLFCERT_OK);
+    REQUIRE(wolfcert_http_url_origin(&u, NULL, &origin) == WOLFCERT_OK);
+    REQUIRE(strcmp(origin, "https://[::1]:8443") == 0);
+    wolfcert_http_url_free(&u);
+    REQUIRE(wolfcert_http_url_parse(origin, &u, NULL) == WOLFCERT_OK);
+    REQUIRE(strcmp(u.host, "::1") == 0);
+    REQUIRE(u.port == 8443);
+    WOLFCERT_XFREE(origin, NULL); origin = NULL;
+    wolfcert_http_url_free(&u);
+
+    /* Same for the default port, where no ":port" suffix follows the host. */
+    REQUIRE(wolfcert_http_url_parse("https://[2001:db8::1]/p", &u, NULL) == WOLFCERT_OK);
+    REQUIRE(wolfcert_http_url_origin(&u, NULL, &origin) == WOLFCERT_OK);
+    REQUIRE(strcmp(origin, "https://[2001:db8::1]") == 0);
+    wolfcert_http_url_free(&u);
+    REQUIRE(wolfcert_http_url_parse(origin, &u, NULL) == WOLFCERT_OK);
+    REQUIRE(strcmp(u.host, "2001:db8::1") == 0);
+    REQUIRE(u.port == 443);
+    WOLFCERT_XFREE(origin, NULL); origin = NULL;
+    wolfcert_http_url_free(&u);
+
     /* NULL url and NULL out are rejected. */
     REQUIRE(wolfcert_http_url_origin(NULL, NULL, &origin) == WOLFCERT_ERR_BAD_ARG);
     REQUIRE(wolfcert_http_url_parse("https://h/x", &u, NULL) == WOLFCERT_OK);
@@ -150,6 +173,33 @@ static int listen_loopback(int* port)
         return -1;
     }
     *port = ntohs(sa.sin_port);
+    return ls;
+}
+
+/* Same on ::1. Returns -1 when the host has no IPv6 loopback, which the
+ * callers treat as "skip" rather than "fail". */
+static int listen_loopback6(int* port)
+{
+    struct sockaddr_in6 sa;
+    socklen_t slen = sizeof(sa);
+    int yes = 1;
+    int ls = socket(AF_INET6, SOCK_STREAM, 0);
+
+    if (ls < 0)
+        return -1;
+
+    setsockopt(ls, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+    memset(&sa, 0, sizeof(sa));
+    sa.sin6_family = AF_INET6;
+    sa.sin6_port   = htons(0);
+    sa.sin6_addr   = in6addr_loopback;
+    if (bind(ls, (struct sockaddr*)&sa, sizeof(sa)) < 0 || listen(ls, 1) < 0 ||
+            getsockname(ls, (struct sockaddr*)&sa, &slen) < 0) {
+        close(ls);
+        return -1;
+    }
+
+    *port = ntohs(sa.sin6_port);
     return ls;
 }
 
@@ -463,6 +513,60 @@ static int test_request_transfer_encoding(void)
     return 0;
 }
 
+/* RFC 3986 section 3.2.2: an IPv6 literal stays bracketed in the Host header,
+ * or a virtual-host match against "::1:8443" fails. Both request builders
+ * carry their own copy of the bracketing, so drive each one. */
+static int ipv6_host_header(int use_session)
+{
+    struct capture_ctx cc = { 0 };
+    pthread_t tid;
+    char base[128];
+    char url[160];
+    char expect[64];
+    int port = 0;
+
+    cc.listen_fd = listen_loopback6(&port);
+    if (cc.listen_fd < 0) {
+        printf("no IPv6 loopback, skipping Host-header check\n");
+        return 0;
+    }
+    REQUIRE(pthread_create(&tid, NULL, srv_thread_capture, &cc) == 0);
+
+    snprintf(base, sizeof(base), "http://[::1]:%d", port);
+    snprintf(url, sizeof(url), "http://[::1]:%d/p", port);
+    snprintf(expect, sizeof(expect), "Host: [::1]:%d\r\n", port);
+
+    WolfCertHttpRequest req = { .method = "GET", .url = url };
+    WolfCertHttpResponse resp = { 0 };
+
+    if (use_session) {
+        WolfCertHttpSessionCfg cfg = { .base_url = base };
+        WolfCertHttpSession* s = NULL;
+
+        REQUIRE(wolfcert_http_session_open(&cfg, &s) == WOLFCERT_OK);
+        REQUIRE(wolfcert_http_session_request(s, &req, &resp) == WOLFCERT_OK);
+        wolfcert_http_session_close(s);
+    }
+    else {
+        REQUIRE(wolfcert_http_request(&req, &resp) == WOLFCERT_OK);
+    }
+
+    REQUIRE(resp.status_code == 200);
+    wolfcert_http_response_free(&resp);
+    pthread_join(tid, NULL);
+
+    REQUIRE(strstr(cc.request, expect) != NULL);
+    return 0;
+}
+
+static int test_request_host_header_ipv6(void)
+{
+    if (ipv6_host_header(0))
+        return 1;
+
+    return ipv6_host_header(1);
+}
+
 int main(void)
 {
     REQUIRE(wolfcert_init(NULL) == WOLFCERT_OK);
@@ -477,6 +581,8 @@ int main(void)
     if (test_chunked_size_overflow())
         return 1;
     if (test_request_transfer_encoding())
+        return 1;
+    if (test_request_host_header_ipv6())
         return 1;
     wolfcert_cleanup();
     printf("OK\n");

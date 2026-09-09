@@ -101,6 +101,14 @@ WOLFCERT_TEST_VIS void wolfcert_http_url_free(WolfCertUrl* u)
     u->scheme = u->host = u->path = NULL;
 }
 
+/* wolfcert_http_url_parse stores an IPv6 literal with its brackets stripped, so
+ * a host carrying a colon is one: anything re-emitted into a URL or a Host
+ * header has to bracket it again (RFC 3986 section 3.2.2). */
+static int host_is_ip_literal(const char* host)
+{
+    return strchr(host, ':') != NULL;
+}
+
 /* Build the "scheme://host[:port]" origin for a parsed URL into a freshly
  * allocated buffer (owned by the caller, free with WOLFCERT_XFREE). The default
  * port (443 for TLS, 80 otherwise) is omitted. Shared by the EST and SCEP
@@ -108,23 +116,30 @@ WOLFCERT_TEST_VIS void wolfcert_http_url_free(WolfCertUrl* u)
 WOLFCERT_TEST_VIS int wolfcert_http_url_origin(const WolfCertUrl* u, void* heap,
                                                char** out_origin)
 {
-    size_t origin_len;
-    char*  origin;
+    size_t      origin_len;
+    char*       origin;
+    const char* open_br;
+    const char* close_br;
 
     if (u == NULL || u->scheme == NULL || u->host == NULL || out_origin == NULL)
         return WOLFCERT_ERR_BAD_ARG;
 
-    /* scheme + "://" (3) + host + the optional ":65535" and NUL; 16 leaves the
-     * port suffix room to spare rather than sizing it to the digit. */
+    open_br  = host_is_ip_literal(u->host) ? "[" : "";
+    close_br = host_is_ip_literal(u->host) ? "]" : "";
+
+    /* scheme + "://" (3) + host + the optional brackets, ":65535" and NUL; 16
+     * leaves that suffix room to spare rather than sizing it to the digit. */
     origin_len = strlen(u->scheme) + 3 + strlen(u->host) + 16;
     origin = (char*)WOLFCERT_XMALLOC(origin_len, heap);
     if (origin == NULL)
         return WOLFCERT_ERR_MEMORY;
 
     if ((u->tls && u->port == 443) || (!u->tls && u->port == 80))
-        snprintf(origin, origin_len, "%s://%s", u->scheme, u->host);
+        snprintf(origin, origin_len, "%s://%s%s%s", u->scheme,
+                 open_br, u->host, close_br);
     else
-        snprintf(origin, origin_len, "%s://%s:%d", u->scheme, u->host, u->port);
+        snprintf(origin, origin_len, "%s://%s%s%s:%d", u->scheme,
+                 open_br, u->host, close_br, u->port);
 
     *out_origin = origin;
     return WOLFCERT_OK;
@@ -1015,6 +1030,9 @@ static int http_write_request(WolfCertConn* c, const WolfCertUrl* u,
         snprintf(port_frag, sizeof(port_frag), ":%d", u->port);
     }
 
+    const char* open_br  = host_is_ip_literal(u->host) ? "[" : "";
+    const char* close_br = host_is_ip_literal(u->host) ? "]" : "";
+
     size_t head_cap = 1024 + (req->content_type ? strlen(req->content_type) : 0)
                            + (req->content_transfer_encoding ?
                               strlen(req->content_transfer_encoding) : 0)
@@ -1028,7 +1046,7 @@ static int http_write_request(WolfCertConn* c, const WolfCertUrl* u,
 
     int hn = snprintf(head, head_cap,
         "%s %s HTTP/1.1\r\n"
-        "Host: %s%s\r\n"
+        "Host: %s%s%s%s\r\n"
         "User-Agent: wolfCert/%s\r\n"
         "Connection: %s\r\n"
         "%s%s%s"
@@ -1038,7 +1056,7 @@ static int http_write_request(WolfCertConn* c, const WolfCertUrl* u,
         "%s"
         "\r\n",
         req->method, u->path,
-        u->host, port_frag,
+        open_br, u->host, close_br, port_frag,
         WOLFCERT_VERSION_STRING,
         keep_alive ? "keep-alive" : "close",
         req->accept ? "Accept: " : "",
@@ -1554,6 +1572,9 @@ static int build_head(WolfCertHttpSession* s, const WolfCertHttpRequest* req,
     if ((u->tls && u->port != 443) || (!u->tls && u->port != 80))
         snprintf(port_frag, sizeof(port_frag), ":%d", u->port);
 
+    const char* open_br  = host_is_ip_literal(u->host) ? "[" : "";
+    const char* close_br = host_is_ip_literal(u->host) ? "]" : "";
+
     size_t head_cap = 1024 + (req->content_type ? strlen(req->content_type) : 0)
                            + (req->content_transfer_encoding ?
                               strlen(req->content_transfer_encoding) : 0)
@@ -1567,7 +1588,7 @@ static int build_head(WolfCertHttpSession* s, const WolfCertHttpRequest* req,
 
     int hn = snprintf(head, head_cap,
         "%s %s HTTP/1.1\r\n"
-        "Host: %s%s\r\n"
+        "Host: %s%s%s%s\r\n"
         "User-Agent: wolfCert/%s\r\n"
         "Connection: keep-alive\r\n"
         "%s%s%s"
@@ -1577,7 +1598,7 @@ static int build_head(WolfCertHttpSession* s, const WolfCertHttpRequest* req,
         "%s"
         "\r\n",
         req->method, u->path,
-        u->host, port_frag,
+        open_br, u->host, close_br, port_frag,
         WOLFCERT_VERSION_STRING,
         req->accept ? "Accept: " : "",
         req->accept ? req->accept : "",

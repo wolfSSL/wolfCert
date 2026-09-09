@@ -650,12 +650,23 @@ int wolfcert_ca_issue(WolfCertCa* ca,
     if (rc == 0) {
         wc_InitCert_ex(nc, heap, WOLFCERT_DEVID_SOFTWARE);
 
-        COPY_SUBJ(subjectCN, nc->subject.commonName);
-        COPY_SUBJ(subjectO,  nc->subject.org);
-        COPY_SUBJ(subjectOU, nc->subject.unit);
-        COPY_SUBJ(subjectC,  nc->subject.country);
-        COPY_SUBJ(subjectST, nc->subject.state);
-        COPY_SUBJ(subjectL,  nc->subject.locality);
+        COPY_SUBJ(subjectCN,    nc->subject.commonName);
+        COPY_SUBJ(subjectO,     nc->subject.org);
+        COPY_SUBJ(subjectOU,    nc->subject.unit);
+        COPY_SUBJ(subjectC,     nc->subject.country);
+        COPY_SUBJ(subjectST,    nc->subject.state);
+        COPY_SUBJ(subjectL,     nc->subject.locality);
+        COPY_SUBJ(subjectSN,    nc->subject.sur);
+        /* wolfSSL only stores subject ids up to ASN_USER_ID, so givenName
+         * never arrives; copy it anyway for when that gap closes. */
+        COPY_SUBJ(subjectGN,    nc->subject.givenName);
+        COPY_SUBJ(subjectEmail, nc->subject.email);
+        COPY_SUBJ(subjectSND,   nc->subject.serialDev);
+        COPY_SUBJ(subjectUID,   nc->subject.userId);
+        COPY_SUBJ(subjectPC,    nc->subject.postalCode);
+#ifdef WOLFSSL_CERT_EXT
+        COPY_SUBJ(subjectBC,    nc->subject.busCat);
+#endif
 
         if (wc_SetIssuerBuffer(nc, ca->cert_der, (int)ca->cert_der_len) != 0)
             rc = WOLFCERT_ERR_CRYPTO;

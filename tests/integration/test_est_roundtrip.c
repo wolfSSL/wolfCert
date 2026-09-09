@@ -208,6 +208,71 @@ static int enroll_check_san(const WolfCertServerCfg* client_cfg)
     return 0;
 }
 
+static int rdn_is(const char* p, int len, const char* want)
+{
+    return p != NULL && len == (int)strlen(want) &&
+           memcmp(p, want, (size_t)len) == 0;
+}
+
+/* Regression: every subject RDN the CSR builder accepts must survive into the
+ * issued certificate. The CA rebuilds the subject field by field, so a name
+ * component it has no copy for is dropped without any error. givenName is
+ * absent below because wolfSSL's decoder never reports it back. */
+static int enroll_check_subject_rdns(const WolfCertServerCfg* client_cfg)
+{
+    WolfCertKeyCfg kcfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
+                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+    WolfCertKey* dk = NULL;
+    REQUIRE(wolfcert_key_generate(&kcfg, &dk) == WOLFCERT_OK);
+
+    WolfCertCertMeta meta = {
+        .subject_dn = "CN=device-rdn,O=Acme,OU=Devices,C=US,ST=Washington,"
+                      "L=Seattle,SN=Doe,"
+                      "emailAddress=jane@example.com,serialNumber=SRL-42,"
+                      "UID=factory-1,postalCode=98109"
+#ifdef WOLFSSL_CERT_EXT
+                      ",businessCategory=Manufacturing"
+#endif
+    };
+    WolfCertBuffer csr = { 0 };
+    REQUIRE(wolfcert_csr_build(dk, &meta, &csr) == WOLFCERT_OK);
+
+    WolfCertBuffer issued = { 0 };
+    REQUIRE(wolfcert_est_simple_enroll(client_cfg, csr.data, csr.len, &issued)
+            == WOLFCERT_OK);
+
+    DerBuffer* der = NULL;
+    REQUIRE(wc_PemToDer(issued.data, (long)issued.len, CERT_TYPE, &der,
+                        NULL, NULL, NULL) == 0);
+
+    DecodedCert dc;
+    wc_InitDecodedCert(&dc, der->buffer, der->length, NULL);
+    REQUIRE(wc_ParseCert(&dc, CERT_TYPE, NO_VERIFY, NULL) == 0);
+
+    REQUIRE(rdn_is(dc.subjectCN, dc.subjectCNLen, "device-rdn"));
+    REQUIRE(rdn_is(dc.subjectO,  dc.subjectOLen,  "Acme"));
+    REQUIRE(rdn_is(dc.subjectOU, dc.subjectOULen, "Devices"));
+    REQUIRE(rdn_is(dc.subjectC,  dc.subjectCLen,  "US"));
+    REQUIRE(rdn_is(dc.subjectST, dc.subjectSTLen, "Washington"));
+    REQUIRE(rdn_is(dc.subjectL,  dc.subjectLLen,  "Seattle"));
+    /* The guard: everything below was dropped by the issuer. */
+    REQUIRE(rdn_is(dc.subjectSN,  dc.subjectSNLen,  "Doe"));
+    REQUIRE(rdn_is(dc.subjectEmail, dc.subjectEmailLen, "jane@example.com"));
+    REQUIRE(rdn_is(dc.subjectSND, dc.subjectSNDLen, "SRL-42"));
+    REQUIRE(rdn_is(dc.subjectUID, dc.subjectUIDLen, "factory-1"));
+    REQUIRE(rdn_is(dc.subjectPC,  dc.subjectPCLen,  "98109"));
+#ifdef WOLFSSL_CERT_EXT
+    REQUIRE(rdn_is(dc.subjectBC,  dc.subjectBCLen,  "Manufacturing"));
+#endif
+
+    wc_FreeDecodedCert(&dc);
+    wc_FreeDer(&der);
+    wolfcert_buffer_free(&csr);
+    wolfcert_buffer_free(&issued);
+    wolfcert_key_free(dk);
+    return 0;
+}
+
 /* HTTP Basic (RFC 7030 section 3.2.3) must authenticate a keep-alive session
  * too, not just the one-shot calls: the credentials have to ride every request
  * on the connection. Enrolls with the good credentials from `client_cfg`, then
@@ -339,6 +404,10 @@ int main(void)
 
     /* SAN round-trip incl. rfc822 (email) regression guard. */
     if (enroll_check_san(&client_cfg))
+        return 1;
+
+    /* Full subject-RDN round-trip guard. */
+    if (enroll_check_subject_rdns(&client_cfg))
         return 1;
 
     /* Keep-alive session against the same Basic-auth-protected server. */

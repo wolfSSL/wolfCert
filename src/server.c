@@ -73,10 +73,8 @@ static int tls_setup(WolfCertServer* s, const WolfCertServerCfgSrv* cfg)
 {
     int rc = WOLFCERT_OK;
 
-    if (cfg->tls_cert_pem == NULL || cfg->tls_key_pem == NULL) {
-        /* plaintext: nothing to do */
+    if (cfg->tls_cert_pem == NULL || cfg->tls_key_pem == NULL)
         return WOLFCERT_OK;
-    }
 
     if (cfg->tls_cert_pem_len == 0 || cfg->tls_key_pem_len == 0) {
         return WOLFCERT_ERR_BAD_ARG;
@@ -176,6 +174,13 @@ int wolfcert_server_start(const WolfCertServerCfgSrv* cfg, WolfCertServer** out)
     const WolfCertServerOps* ops = lookup_ops(cfg->protocol);
     if (ops == NULL)
         return WOLFCERT_ERR_UNSUPPORTED;
+
+    /* RFC 7030 has no plaintext mode. Reject here rather than in tls_setup(),
+     * which runs after the CA has been generated and written to the store. */
+    if (cfg->protocol == WOLFCERT_PROTO_EST &&
+            (cfg->tls_cert_pem == NULL || cfg->tls_key_pem == NULL))
+        return WOLFCERT_ERR(WOLFCERT_ERR_TLS, "server",
+            "EST requires TLS: set tls_cert_pem and tls_key_pem (RFC 7030)");
 
     void* heap = cfg->heap ? cfg->heap : wolfcert_default_heap();
     WolfCertServer* s = (WolfCertServer*)WOLFCERT_XMALLOC(sizeof(*s), heap);

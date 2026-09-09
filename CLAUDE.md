@@ -96,9 +96,10 @@ Unit tests live in `tests/unit/`; end-to-end flows in
 After a build with `-DWOLFCERT_ENABLE_CLI=ON` (the default):
 
 ```sh
-build/wolfcert-server --proto est  --listen 127.0.0.1:8443
+build/wolfcert-server --proto est --listen 127.0.0.1:8443 \
+    --tls-cert server.crt --tls-key server.key
 build/wolfcert-client enroll --proto est \
-    --url http://127.0.0.1:8443/.well-known/est \
+    --url https://127.0.0.1:8443/.well-known/est --trust server.crt \
     --key-type ecc:256 --subject "CN=dev" \
     --out-key dev.key --out-cert dev.crt
 ```

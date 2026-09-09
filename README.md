@@ -85,7 +85,10 @@ on the include path. See [`docs/EMBEDDED.md`](docs/EMBEDDED.md#configuring-wolfc
 Start the bundled test server (issues from an auto-generated local CA):
 
 ```sh
-./wolfcert-server --proto est  --listen 127.0.0.1:8443
+# EST is TLS-only (RFC 7030), so it needs a server identity for the
+# listen address; SCEP authenticates at the pkiMessage layer instead.
+./wolfcert-server --proto est  --listen 127.0.0.1:8443 \
+    --tls-cert server.crt --tls-key server.key
 ./wolfcert-server --proto scep --listen 127.0.0.1:8088
 ```
 
@@ -94,7 +97,7 @@ Enroll a certificate from the CLI:
 ```sh
 # EST
 ./wolfcert-client enroll --proto est \
-    --url http://127.0.0.1:8443/.well-known/est \
+    --url https://127.0.0.1:8443/.well-known/est --trust server.crt \
     --key-type ecc:256 --subject "CN=device-1,O=Acme" \
     --san-dns device-1.local --out-key dev.key --out-cert dev.crt
 

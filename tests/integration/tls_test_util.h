@@ -35,15 +35,20 @@
 #include <sys/types.h>   /* pid_t, referenced by wolfssl/wolfcrypt/random.h */
 
 #include <wolfssl/options.h>
+#include <wolfssl/ssl.h>
 #include <wolfssl/wolfcrypt/asn.h>
 #include <wolfssl/wolfcrypt/asn_public.h>
 #include <wolfssl/wolfcrypt/random.h>
 #include <wolfssl/wolfcrypt/rsa.h>
 #include <wolfssl/wolfcrypt/ecc.h>
 
+#include <arpa/inet.h>
+#include <netinet/in.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
 /* A key algorithm + parameter the current build supports, for client
  * enrollments where the algorithm is incidental to what the test verifies. */
@@ -208,6 +213,93 @@ static inline int gen_server_identity(uint8_t** cert_pem, size_t* cert_pem_len,
 {
     return mint_self_id("127.0.0.1", 0, cert_pem, cert_pem_len,
                         key_pem, key_pem_len);
+}
+
+/* A raw TLS client against the in-tree test server, for the tests that need
+ * to script byte-exact HTTP rather than go through wolfcert_est_*. Each
+ * test_tls_write() becomes one TLS record and so one wolfSSL_read() on the
+ * server, which is what the segmentation-sensitive framing tests rely on. */
+typedef struct {
+    WOLFSSL_CTX* ctx;
+    WOLFSSL*     ssl;
+    int          fd;
+} TestTlsConn;
+
+static inline void test_tls_close(TestTlsConn* c)
+{
+    if (c->ssl != NULL) {
+        wolfSSL_shutdown(c->ssl);
+        wolfSSL_free(c->ssl);
+        c->ssl = NULL;
+    }
+    if (c->ctx != NULL) {
+        wolfSSL_CTX_free(c->ctx);
+        c->ctx = NULL;
+    }
+    if (c->fd >= 0) {
+        close(c->fd);
+        c->fd = -1;
+    }
+}
+
+/* Connect to 127.0.0.1:port and handshake, pinning `ca_pem` as the sole trust
+ * anchor. Returns 0 on success; the caller closes with test_tls_close(). */
+static inline int test_tls_connect(TestTlsConn* c, uint16_t port,
+                                   const uint8_t* ca_pem, size_t ca_pem_len)
+{
+    struct sockaddr_in sa = { 0 };
+
+    memset(c, 0, sizeof(*c));
+    c->fd = -1;
+
+    c->ctx = wolfSSL_CTX_new(wolfTLS_client_method());
+    if (c->ctx == NULL)
+        return -1;
+
+    if (wolfSSL_CTX_load_verify_buffer(c->ctx, ca_pem, (long)ca_pem_len,
+                                       WOLFSSL_FILETYPE_PEM)
+            != WOLFSSL_SUCCESS)
+        goto fail;
+
+    wolfSSL_CTX_set_verify(c->ctx, WOLFSSL_VERIFY_PEER, NULL);
+
+    c->fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (c->fd < 0)
+        goto fail;
+
+    sa.sin_family = AF_INET;
+    sa.sin_port   = htons(port);
+    if (inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr) != 1)
+        goto fail;
+    if (connect(c->fd, (struct sockaddr*)&sa, sizeof(sa)) < 0)
+        goto fail;
+
+    c->ssl = wolfSSL_new(c->ctx);
+    if (c->ssl == NULL)
+        goto fail;
+
+    if (wolfSSL_set_fd(c->ssl, c->fd) != WOLFSSL_SUCCESS)
+        goto fail;
+
+    if (wolfSSL_connect(c->ssl) != WOLFSSL_SUCCESS)
+        goto fail;
+
+    return 0;
+fail:
+    test_tls_close(c);
+    return -1;
+}
+
+/* Write `len` bytes as a single TLS record. Returns 0 on success. */
+static inline int test_tls_write(TestTlsConn* c, const void* buf, size_t len)
+{
+    return wolfSSL_write(c->ssl, buf, (int)len) == (int)len ? 0 : -1;
+}
+
+/* One wolfSSL_read(). Returns the byte count, or <= 0 at close/error. */
+static inline int test_tls_read(TestTlsConn* c, void* buf, size_t len)
+{
+    return wolfSSL_read(c->ssl, buf, (int)len);
 }
 
 #endif /* WOLFCERT_TLS_TEST_UTIL_H */

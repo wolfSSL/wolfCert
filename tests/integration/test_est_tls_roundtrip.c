@@ -71,6 +71,30 @@ int main(void)
     size_t tls_key_len  = 0;
     REQUIRE(gen_server_identity(&tls_cert, &tls_cert_len, &tls_key, &tls_key_len) == 0);
 
+    /* RFC 7030 has no plaintext mode, so an EST listener configured without a
+     * TLS identity must be refused at start rather than serve /simpleenroll
+     * over cleartext HTTP. */
+    WolfCertStoreOps* plain_store = wolfcert_store_memory_open(NULL);
+    REQUIRE(plain_store != NULL);
+    WolfCertServerCfgSrv plain = {
+        .protocol  = WOLFCERT_PROTO_EST,
+        .bind_host = "127.0.0.1",
+        .bind_port = 0,
+        .ca_store  = plain_store,
+    };
+    WolfCertServer* plain_srv = NULL;
+    REQUIRE(wolfcert_server_start(&plain, &plain_srv) == WOLFCERT_ERR_TLS);
+    REQUIRE(plain_srv == NULL);
+
+    /* The rejection must land before the CA is minted, so the caller is not
+     * left with a CA it never asked for -- one the next start would adopt. */
+    WolfCertBuffer leftover = { 0 };
+    REQUIRE(plain_store->read(plain_store->ctx, "ca.cert.der", &leftover)
+            == WOLFCERT_ERR_NOT_FOUND);
+    REQUIRE(plain_store->read(plain_store->ctx, "ca.key.der", &leftover)
+            == WOLFCERT_ERR_NOT_FOUND);
+    wolfcert_store_memory_close(plain_store);
+
     WolfCertServerCfgSrv cfg = {
         .protocol         = WOLFCERT_PROTO_EST,
         .bind_host        = "127.0.0.1",

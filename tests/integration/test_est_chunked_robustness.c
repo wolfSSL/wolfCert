@@ -34,8 +34,10 @@
  *   5. Keep-alive correctness when the last-chunk trailer CRLF arrives
  *      in its own segment, so a following request is not corrupted.
  *
- * The target is `src/est/est_server.c`'s parse_request chunked path;
- * no TLS is involved so we can script the byte-exact request here.
+ * The target is `src/est/est_server.c`'s parse_request chunked path.
+ * EST mandates TLS (RFC 7030), so the byte-exact requests are scripted
+ * through a raw TLS client that pins the server's minted identity; one
+ * test_tls_write() is one TLS record, hence one read on the server.
  */
 
 #define _POSIX_C_SOURCE 200809L
@@ -69,42 +71,35 @@
         }                                                                   \
     } while (0)
 
+/* The server's minted TLS identity, pinned by every client below. */
+static uint8_t* g_tls_cert = NULL;
+static size_t   g_tls_cert_len = 0;
+
 static void* server_thread(void* arg)
 {
     wolfcert_server_run((WolfCertServer*)arg);
     return NULL;
 }
 
-/* Dial 127.0.0.1:port, send `req` of `req_len` bytes, return the
+/* Dial 127.0.0.1:port over TLS, send `req` of `req_len` bytes, return the
  * first line of the response (up to the CRLF or buffer cap). */
 static int send_and_read_status(uint16_t port,
                                 const void* req, size_t req_len,
                                 char* status_line, size_t cap)
 {
-    int cs = socket(AF_INET, SOCK_STREAM, 0);
-    if (cs < 0)
-        return -1;
-    struct sockaddr_in sa = { .sin_family = AF_INET,
-                              .sin_port = htons(port),
-                              .sin_addr.s_addr = htonl(INADDR_LOOPBACK) };
-    if (connect(cs, (struct sockaddr*)&sa, sizeof(sa)) < 0) {
-        close(cs);
-        return -1;
-    }
-    const char* p = req;
-    size_t left = req_len;
-    while (left > 0) {
-        ssize_t w = send(cs, p, left, 0);
-        if (w <= 0) {
-            close(cs);
-            return -1;
-        }
-        p += w;
-        left -= (size_t)w;
-    }
+    TestTlsConn c;
     size_t n = 0;
+
+    if (test_tls_connect(&c, port, g_tls_cert, g_tls_cert_len) != 0)
+        return -1;
+
+    if (test_tls_write(&c, req, req_len) != 0) {
+        test_tls_close(&c);
+        return -1;
+    }
+
     while (n + 1 < cap) {
-        ssize_t r = recv(cs, status_line + n, cap - 1 - n, 0);
+        int r = test_tls_read(&c, status_line + n, cap - 1 - n);
         if (r <= 0)
             break;
         n += (size_t)r;
@@ -113,7 +108,7 @@ static int send_and_read_status(uint16_t port,
         if (memchr(status_line, '\n', n) != NULL)
             break;
     }
-    close(cs);
+    test_tls_close(&c);
     status_line[n < cap ? n : cap - 1] = '\0';
     return (int)n;
 }
@@ -218,24 +213,20 @@ static int accept_multisegment_chunked_body(uint16_t port)
         "\r\n";
     const char* seg2 = "10\r\nAAAA";                /* size line + 4/16 bytes */
     const char* seg3 = "AAAAAAAAAAAA\r\n0\r\n\r\n"; /* last 12 bytes + terminator */
-    struct sockaddr_in sa = { .sin_family = AF_INET,
-                              .sin_port = htons(port),
-                              .sin_addr.s_addr = htonl(INADDR_LOOPBACK) };
+    TestTlsConn c;
     char status[128] = { 0 };
     size_t n = 0;
-    int cs = socket(AF_INET, SOCK_STREAM, 0);
 
-    REQUIRE(cs >= 0);
-    REQUIRE(connect(cs, (struct sockaddr*)&sa, sizeof(sa)) == 0);
+    REQUIRE(test_tls_connect(&c, port, g_tls_cert, g_tls_cert_len) == 0);
 
-    REQUIRE(send(cs, hdr, strlen(hdr), 0) == (ssize_t)strlen(hdr));
+    REQUIRE(test_tls_write(&c, hdr, strlen(hdr)) == 0);
     nap_ms(80);
-    (void)send(cs, seg2, strlen(seg2), 0);
+    (void)test_tls_write(&c, seg2, strlen(seg2));
     nap_ms(80);
-    (void)send(cs, seg3, strlen(seg3), 0);
+    (void)test_tls_write(&c, seg3, strlen(seg3));
 
     while (n + 1 < sizeof(status)) {
-        ssize_t r = recv(cs, status + n, sizeof(status) - 1 - n, 0);
+        int r = test_tls_read(&c, status + n, sizeof(status) - 1 - n);
         if (r <= 0)
             break;
         n += (size_t)r;
@@ -243,7 +234,7 @@ static int accept_multisegment_chunked_body(uint16_t port)
         if (memchr(status, '\n', n) != NULL)
             break;
     }
-    close(cs);
+    test_tls_close(&c);
 
     REQUIRE(strstr(status, "Bad CSR") != NULL);
     return 0;
@@ -337,32 +328,26 @@ static int keepalive_after_split_trailer(uint16_t port)
         "Host: 127.0.0.1\r\n"
         "Connection: close\r\n"
         "\r\n";
-    struct sockaddr_in sa = { .sin_family = AF_INET,
-                              .sin_port = htons(port),
-                              .sin_addr.s_addr = htonl(INADDR_LOOPBACK) };
+    TestTlsConn c;
     char* req1_head = NULL;
     char* req1_tail = NULL;
     size_t req1_head_len = 0;
     char resp[4096] = { 0 };
     size_t n = 0;
-    int cs;
 
     REQUIRE(build_split_enroll(&req1_head, &req1_head_len, &req1_tail) == 0);
 
-    cs = socket(AF_INET, SOCK_STREAM, 0);
-    REQUIRE(cs >= 0);
-    REQUIRE(connect(cs, (struct sockaddr*)&sa, sizeof(sa)) == 0);
+    REQUIRE(test_tls_connect(&c, port, g_tls_cert, g_tls_cert_len) == 0);
 
     /* Request #1: last-chunk line first, trailer CRLF withheld into its
      * own segment so a premature "0\r\n" completion leaves it unread. */
-    REQUIRE(send(cs, req1_head, req1_head_len, 0) == (ssize_t)req1_head_len);
+    REQUIRE(test_tls_write(&c, req1_head, req1_head_len) == 0);
     nap_ms(80);
-    REQUIRE(send(cs, req1_tail, strlen(req1_tail), 0)
-            == (ssize_t)strlen(req1_tail));
+    REQUIRE(test_tls_write(&c, req1_tail, strlen(req1_tail)) == 0);
 
     /* Wait for request #1's response head before sending request #2. */
     while (n + 1 < sizeof(resp)) {
-        ssize_t r = recv(cs, resp + n, sizeof(resp) - 1 - n, 0);
+        int r = test_tls_read(&c, resp + n, sizeof(resp) - 1 - n);
         if (r <= 0)
             break;
         n += (size_t)r;
@@ -372,18 +357,18 @@ static int keepalive_after_split_trailer(uint16_t port)
     }
     REQUIRE(strstr(resp, "200") != NULL); /* enrollment issued a cert */
 
-    REQUIRE(send(cs, req2, strlen(req2), 0) == (ssize_t)strlen(req2));
+    REQUIRE(test_tls_write(&c, req2, strlen(req2)) == 0);
 
     /* Drain until the server closes (request #2 asked for Connection:
      * close), appending onto the same buffer. */
     while (n + 1 < sizeof(resp)) {
-        ssize_t r = recv(cs, resp + n, sizeof(resp) - 1 - n, 0);
+        int r = test_tls_read(&c, resp + n, sizeof(resp) - 1 - n);
         if (r <= 0)
             break;
         n += (size_t)r;
         resp[n] = '\0';
     }
-    close(cs);
+    test_tls_close(&c);
     free(req1_head);
     free(req1_tail);
 
@@ -402,9 +387,16 @@ int main(void)
 
     REQUIRE(wolfcert_init(NULL) == WOLFCERT_OK);
 
+    uint8_t* tls_key = NULL;
+    size_t tls_key_len = 0;
+    REQUIRE(gen_server_identity(&g_tls_cert, &g_tls_cert_len,
+                                &tls_key, &tls_key_len) == 0);
+
     WolfCertServerCfgSrv cfg = {
         .protocol = WOLFCERT_PROTO_EST,
         .bind_host = "127.0.0.1", .bind_port = 0,
+        .tls_cert_pem = g_tls_cert, .tls_cert_pem_len = g_tls_cert_len,
+        .tls_key_pem  = tls_key,    .tls_key_pem_len  = tls_key_len,
     };
     WolfCertServer* srv = NULL;
     REQUIRE(wolfcert_server_start(&cfg, &srv) == WOLFCERT_OK);
@@ -426,6 +418,8 @@ int main(void)
     wolfcert_server_stop(srv);
     pthread_join(tid, NULL);
     wolfcert_server_free(srv);
+    free(g_tls_cert);
+    free(tls_key);
     if (rc != 0)
         return rc;
 

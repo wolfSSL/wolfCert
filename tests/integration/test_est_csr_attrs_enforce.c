@@ -188,51 +188,41 @@ static int enroll_without_challenge(WolfCertServer* s)
     return 0;
 }
 
-/* Dial 127.0.0.1:port over plain TCP, send the request, and read the whole
+/* Dial 127.0.0.1:port over TLS, send the request, and read the whole
  * response (headers + body) into `resp`. A receive timeout keeps a
  * misbehaving server from hanging the test. Returns bytes read, or -1. */
 static int send_and_read_all(uint16_t port, const void* req, size_t req_len,
                              char* resp, size_t cap)
 {
     struct timeval tv = { .tv_sec = 5, .tv_usec = 0 };
-    struct sockaddr_in sa = { .sin_family = AF_INET,
-                              .sin_port = htons(port),
-                              .sin_addr.s_addr = htonl(INADDR_LOOPBACK) };
-    const char* p = req;
-    size_t left = req_len;
+    TestTlsConn c;
     size_t n = 0;
-    int cs = socket(AF_INET, SOCK_STREAM, 0);
-    if (cs < 0)
+
+    if (test_tls_connect(&c, port, g_ca, g_ca_len) != 0)
         return -1;
-    setsockopt(cs, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-    if (connect(cs, (struct sockaddr*)&sa, sizeof(sa)) < 0) {
-        close(cs);
+
+    setsockopt(c.fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+    if (test_tls_write(&c, req, req_len) != 0) {
+        test_tls_close(&c);
         return -1;
     }
-    while (left > 0) {
-        ssize_t w = send(cs, p, left, 0);
-        if (w <= 0) {
-            close(cs);
-            return -1;
-        }
-        p += (size_t)w;
-        left -= (size_t)w;
-    }
+
     while (n + 1 < cap) {
-        ssize_t r = recv(cs, resp + n, cap - 1 - n, 0);
+        int r = test_tls_read(&c, resp + n, cap - 1 - n);
         if (r <= 0)
             break;
         n += (size_t)r;
     }
     resp[n] = '\0';
-    close(cs);
+    test_tls_close(&c);
     return (int)n;
 }
 
-/* Raw plain-HTTP probe of the enforcement 400 body: build a real CSR that
- * omits challengePassword, POST it to /simpleenroll, and assert the response
- * both fails with 400 and names the exact missing OID in dotted form. This is
- * the end-to-end check that the value-result OID copy in csr_attrs_enforce
+/* Raw-HTTP probe of the enforcement 400 body: build a real CSR that omits
+ * challengePassword, POST it to /simpleenroll, and assert the response both
+ * fails with 400 and names the exact missing OID in dotted form. This is the
+ * end-to-end check that the value-result OID copy in csr_attrs_enforce
  * renders the correct bytes; the client path above only observes rejection,
  * not the body. */
 static int reject_body_names_missing_oid(uint16_t port)
@@ -379,15 +369,14 @@ int main(void)
     pthread_join(tid2, NULL);
     wolfcert_server_free(srv2);
     wolfcert_buffer_free(&policy2);
-    free(tls_cert);
-    free(tls_key);
     if (rc != 0)
         return rc;
 
-    /* Plain-HTTP server (no TLS) with the same bare-OID policy, so the raw
-     * 400 body is readable: asserts it names the missing OID in dotted form.
-     * The client path above proves rejection; this proves the reported OID
-     * content (i.e. the value-result OID copy renders the right bytes). */
+    /* Third server with the same bare-OID policy, driven by a raw HTTP
+     * request so the 400 body is readable: asserts it names the missing OID
+     * in dotted form. The client path above proves rejection; this proves the
+     * reported OID content (i.e. the value-result OID copy renders the right
+     * bytes). */
     WolfCertBuffer policy_raw = { 0 };
     REQUIRE(build_policy(&policy_raw) == WOLFCERT_OK);
     WolfCertServerCfgSrv cfg_raw = {
@@ -396,6 +385,8 @@ int main(void)
         .csr_attributes_der = policy_raw.data,
         .csr_attributes_len = policy_raw.len,
         .est_require_csr_attributes = 1,
+        .tls_cert_pem = tls_cert, .tls_cert_pem_len = tls_cert_len,
+        .tls_key_pem  = tls_key,  .tls_key_pem_len  = tls_key_len,
     };
     WolfCertServer* srv_raw = NULL;
     REQUIRE(wolfcert_server_start(&cfg_raw, &srv_raw) == WOLFCERT_OK);
@@ -408,6 +399,8 @@ int main(void)
     pthread_join(tid_raw, NULL);
     wolfcert_server_free(srv_raw);
     wolfcert_buffer_free(&policy_raw);
+    free(tls_cert);
+    free(tls_key);
     if (rc != 0)
         return rc;
 

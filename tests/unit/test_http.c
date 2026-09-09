@@ -76,6 +76,43 @@ static int test_url_parser(void)
 
     REQUIRE(wolfcert_http_url_parse("ftp://nope/", &u, NULL) == WOLFCERT_ERR_UNSUPPORTED);
 
+    /* A pathless URL carrying a query: SCEP builds exactly this shape. The
+     * query must not be absorbed into the host, and the request target has to
+     * keep a leading slash. */
+    REQUIRE(wolfcert_http_url_parse("http://ca.example?operation=GetCACaps", &u, NULL) == WOLFCERT_OK);
+    REQUIRE(strcmp(u.host, "ca.example") == 0);
+    REQUIRE(u.port == 80);
+    REQUIRE(strcmp(u.path, "/?operation=GetCACaps") == 0);
+    wolfcert_http_url_free(&u);
+
+    REQUIRE(wolfcert_http_url_parse("http://ca.example:8080?operation=PKIOperation", &u, NULL) == WOLFCERT_OK);
+    REQUIRE(strcmp(u.host, "ca.example") == 0);
+    REQUIRE(u.port == 8080);
+    REQUIRE(strcmp(u.path, "/?operation=PKIOperation") == 0);
+    wolfcert_http_url_free(&u);
+
+    REQUIRE(wolfcert_http_url_parse("https://[::1]?operation=GetCACaps", &u, NULL) == WOLFCERT_OK);
+    REQUIRE(strcmp(u.host, "::1") == 0);
+    REQUIRE(u.port == 443);
+    REQUIRE(strcmp(u.path, "/?operation=GetCACaps") == 0);
+    wolfcert_http_url_free(&u);
+
+    /* RFC 7230 section 5.3: the fragment is client-side only, so it must not
+     * reach the request target. */
+    REQUIRE(wolfcert_http_url_parse("http://ca.example#frag", &u, NULL) == WOLFCERT_OK);
+    REQUIRE(strcmp(u.host, "ca.example") == 0);
+    REQUIRE(strcmp(u.path, "/") == 0);
+    wolfcert_http_url_free(&u);
+
+    REQUIRE(wolfcert_http_url_parse("http://ca.example/p#frag", &u, NULL) == WOLFCERT_OK);
+    REQUIRE(strcmp(u.host, "ca.example") == 0);
+    REQUIRE(strcmp(u.path, "/p") == 0);
+    wolfcert_http_url_free(&u);
+
+    REQUIRE(wolfcert_http_url_parse("http://ca.example/p?q=1#frag", &u, NULL) == WOLFCERT_OK);
+    REQUIRE(strcmp(u.path, "/p?q=1") == 0);
+    wolfcert_http_url_free(&u);
+
     /* A URL with no explicit scheme defaults to TLS (https). */
     REQUIRE(wolfcert_http_url_parse("ca.example.com:8443/p", &u, NULL) == WOLFCERT_OK);
     REQUIRE(strcmp(u.scheme, "https") == 0);

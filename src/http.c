@@ -224,7 +224,8 @@ WOLFCERT_TEST_VIS int wolfcert_http_url_parse(const char* url, WolfCertUrl* out,
     }
     else {
         host_end = host_start;
-        while (*host_end && *host_end != ':' && *host_end != '/') {
+        while (*host_end && *host_end != ':' && *host_end != '/'
+                && *host_end != '?' && *host_end != '#') {
             ++host_end;
         }
 
@@ -253,17 +254,31 @@ WOLFCERT_TEST_VIS int wolfcert_http_url_parse(const char* url, WolfCertUrl* out,
         host_end = end;
     }
 
-    size_t plen = *host_end ? strlen(host_end) : 1;
+    /* A pathless authority may still be followed by a query or a fragment, so
+     * the request target gets a synthesized leading slash. RFC 7230 section
+     * 5.3: the fragment is client-side only and never goes on the wire. */
+    const char* frag = strchr(host_end, '#');
+    size_t tlen = frag ? (size_t)(frag - host_end) : strlen(host_end);
+    size_t plen = (*host_end == '/') ? tlen : tlen + 1;
     if (plen > WOLFCERT_HTTP_MAX_PATH_LEN) {
         wolfcert_http_url_free(out);
         return WOLFCERT_ERR_PARSE;
     }
 
-    out->path = (*host_end == '\0') ? wolfcert_strdup("/", heap)
-                                    : wolfcert_strdup(host_end, heap);
+    out->path = (char*)WOLFCERT_XMALLOC(plen + 1, heap);
     if (out->path == NULL) {
         wolfcert_http_url_free(out);
         return WOLFCERT_ERR_MEMORY;
+    }
+
+    if (*host_end == '/') {
+        memcpy(out->path, host_end, tlen);
+        out->path[tlen] = '\0';
+    }
+    else {
+        out->path[0] = '/';
+        memcpy(out->path + 1, host_end, tlen);
+        out->path[tlen + 1] = '\0';
     }
 
     return WOLFCERT_OK;

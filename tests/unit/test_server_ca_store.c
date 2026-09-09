@@ -22,6 +22,9 @@
 #include "internal.h"
 #include "../test_static_mem.h"
 
+#include <wolfssl/options.h>
+#include <wolfssl/wolfcrypt/asn.h>
+
 #include <stdio.h>
 #include <string.h>
 
@@ -471,6 +474,58 @@ static int test_mismatched_ca_rejected(void)
     return 0;
 }
 
+/* RFC 5280 section 4.2.1.3: the CA signs certificates and, for SCEP, both
+ * signs CertReps and decrypts the pkcsPKIEnvelope, so its certificate must
+ * assert those usages rather than omitting the extension. */
+static int ca_key_usage_set(WolfCertKeyType type)
+{
+    WolfCertStoreOps* store = wolfcert_store_memory_open(NULL);
+    WolfCertBuffer cert = { 0 };
+    WolfCertBuffer key  = { 0 };
+    DecodedCert dc;
+    int rc = 0;
+
+    REQUIRE(store != NULL);
+
+    if (generate_ca_into(store, type, &cert, &key))
+        return 1;
+
+    wc_InitDecodedCert(&dc, cert.data, (word32)cert.len, NULL);
+    REQUIRE(wc_ParseCert(&dc, CERT_TYPE, NO_VERIFY, NULL) == 0);
+
+    if (dc.extKeyUsageSet == 0 ||
+            (dc.extKeyUsage & KEYUSE_KEY_CERT_SIGN) == 0 ||
+            (dc.extKeyUsage & KEYUSE_CRL_SIGN) == 0 ||
+            (dc.extKeyUsage & KEYUSE_DIGITAL_SIG) == 0) {
+        rc = 1;
+    }
+    /* keyEncipherment belongs to the RSA CA alone: it decrypts the SCEP
+     * pkcsPKIEnvelope, which no other key type is used for. */
+    else if (((dc.extKeyUsage & KEYUSE_KEY_ENCIPHER) != 0) !=
+            (type == WOLFCERT_KEY_RSA)) {
+        rc = 1;
+    }
+
+    wc_FreeDecodedCert(&dc);
+    wolfcert_buffer_free(&cert);
+    wolfcert_buffer_free(&key);
+    wolfcert_store_memory_close(store);
+
+    REQUIRE(rc == 0);
+    return 0;
+}
+
+static int test_ca_key_usage(void)
+{
+    size_t i;
+
+    for (i = 0; i < sizeof(CA_KEY_TYPES) / sizeof(CA_KEY_TYPES[0]); ++i) {
+        if (ca_key_usage_set(CA_KEY_TYPES[i]))
+            return 1;
+    }
+    return 0;
+}
+
 static int test_corrupt_ca_cert_rejected(void)
 {
     WolfCertStoreOps* src   = wolfcert_store_memory_open(NULL);
@@ -605,6 +660,8 @@ int main(void)
     if (test_leaf_ca_rejected())
         return 1;
 #endif
+    if (test_ca_key_usage())
+        return 1;
 
     wolfcert_cleanup();
     printf("OK\n");

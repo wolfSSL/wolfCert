@@ -95,6 +95,17 @@ static int gen_self_signed_cert(WolfCertCa* ca)
     cert->daysValid  = 3650;
     cert->sigType    = alg->ctc_sig_default;
 
+    /* RFC 5280 section 4.2.1.3: this key signs certificates and SCEP CertReps,
+     * and on RSA it also decrypts the pkcsPKIEnvelope. */
+    const char* usage = ca->type == WOLFCERT_KEY_RSA
+                        ? "keyCertSign,cRLSign,digitalSignature,keyEncipherment"
+                        : "keyCertSign,cRLSign,digitalSignature";
+    int ku = wc_SetKeyUsage(cert, usage);
+    if (ku != 0) {
+        wc_CertFree(cert);
+        return WOLFCERT_ERR_WC(ku, "ca", "SetKeyUsage");
+    }
+
     WC_RNG rng;
     if (wc_InitRng_ex(&rng, ca->heap, WOLFCERT_DEVID_SOFTWARE) != 0) {
         wc_CertFree(cert);

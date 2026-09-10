@@ -33,7 +33,8 @@ add_executable(test_http unit/test_http.c)
 target_include_directories(test_http PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(test_http PRIVATE wolfcert Threads::Threads)
 add_test(NAME http COMMAND test_http)
-set_tests_properties(http PROPERTIES SKIP_RETURN_CODE 77)
+# Bad response framing shows up as a hang, not a wrong answer.
+set_tests_properties(http PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 30)
 
 add_executable(test_parse_negative unit/test_parse_negative.c)
 target_include_directories(test_parse_negative PRIVATE ${CMAKE_SOURCE_DIR}/src)

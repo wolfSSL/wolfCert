@@ -393,6 +393,55 @@ static int keepalive_after_split_trailer(uint16_t port)
     return 0;
 }
 
+/* Set by note_sigpipe(); a server write must leave it clear. */
+static volatile sig_atomic_t g_sigpipe_raised;
+
+static void note_sigpipe(int sig)
+{
+    (void)sig;
+    g_sigpipe_raised = 1;
+}
+
+/* Queue a full request, then close the peer: the queued bytes still reach the
+ * handler's response write. Own server, so no constraint on the accept loop. */
+static int no_sigpipe_on_response(void)
+{
+    static const char http_req[] =
+        "GET /nope HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
+    WolfCertServerCfgSrv cfg = {
+        .protocol = WOLFCERT_PROTO_EST,
+        .bind_host = "127.0.0.1", .bind_port = 0,
+    };
+    WolfCertServer*  srv = NULL;
+    struct sigaction sa, old;
+    int              sv[2];
+
+    REQUIRE(wolfcert_server_start(&cfg, &srv) == WOLFCERT_OK);
+    REQUIRE(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0);
+    REQUIRE(write(sv[1], http_req, sizeof(http_req) - 1)
+            == (ssize_t)(sizeof(http_req) - 1));
+    close(sv[1]);
+
+    /* Catch, not ignore, so "not raised" differs from "raised and
+     * swallowed"; main() ignores it for the other cases. */
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = note_sigpipe;
+    sigemptyset(&sa.sa_mask);
+    REQUIRE(sigaction(SIGPIPE, &sa, &old) == 0);
+    g_sigpipe_raised = 0;
+
+    /* An unwritable peer errors either way; the signal is the assertion. */
+    (void)wolfcert_server_serve_fd(srv, sv[0]);
+
+    REQUIRE(sigaction(SIGPIPE, &old, NULL) == 0);
+    close(sv[0]);
+    wolfcert_server_free(srv);
+
+    REQUIRE(g_sigpipe_raised == 0);
+
+    return 0;
+}
+
 int main(void)
 {
     /* A truncated request makes the server respond and close while the
@@ -422,6 +471,8 @@ int main(void)
         rc = accept_multisegment_chunked_body(port);
     if (rc == 0)
         rc = keepalive_after_split_trailer(port);
+    if (rc == 0)
+        rc = no_sigpipe_on_response();
 
     wolfcert_server_stop(srv);
     pthread_join(tid, NULL);

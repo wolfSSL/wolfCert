@@ -18,6 +18,7 @@ add_test(NAME store COMMAND test_store)
 
 if(WOLFCERT_ENABLE_BUILTIN_TRANSPORT)
     add_executable(test_net unit/test_net.c)
+    target_include_directories(test_net PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_net PRIVATE wolfcert)
     add_test(NAME net COMMAND test_net)
 endif()

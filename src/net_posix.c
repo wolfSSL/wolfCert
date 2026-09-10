@@ -26,6 +26,7 @@
 
 #define _POSIX_C_SOURCE 200809L
 #define _DEFAULT_SOURCE
+#define _DARWIN_C_SOURCE
 
 #include <wolfcert/http.h>
 #include <wolfcert/errors.h>
@@ -41,6 +42,27 @@
 #include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
+
+/* WOLFCERT_SEND_FLAGS suppresses SIGPIPE per send(), leaving the process
+ * signal disposition to the embedding application. */
+#ifdef MSG_NOSIGNAL
+#define WOLFCERT_SEND_FLAGS MSG_NOSIGNAL
+#else
+#define WOLFCERT_SEND_FLAGS 0
+#endif
+
+void wolfcert_sock_nosigpipe(int fd)
+{
+#ifdef SO_NOSIGPIPE
+    int on = 1;
+
+    /* Advisory: an fd that is not a socket fails here with ENOTSOCK, which is
+     * not an error for the caller. */
+    (void)setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof(on));
+#else
+    (void)fd;
+#endif
+}
 
 static long mono_ms(void)
 {
@@ -143,6 +165,8 @@ int wolfcert_posix_connect(const char* host, int port, int timeout_ms, void* ctx
         fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
         if (fd < 0)
             continue;
+
+        wolfcert_sock_nosigpipe(fd);
 
         if (connect_timeout(fd, rp->ai_addr, rp->ai_addrlen, attempt_ms) == 0)
             break;
@@ -279,7 +303,7 @@ static int posix_write(void* ctx, void* conn, const uint8_t* buf, size_t len,
             return rc;
 
         do {
-            n = send(fd, buf, len, 0);
+            n = send(fd, buf, len, WOLFCERT_SEND_FLAGS);
         } while (n < 0 && errno == EINTR);
 
         if (n > 0)

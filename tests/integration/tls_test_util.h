@@ -50,7 +50,17 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <time.h>
 #include <unistd.h>
+
+static inline void test_sleep_ms(long ms)
+{
+    struct timespec ts;
+
+    ts.tv_sec  = ms / 1000;
+    ts.tv_nsec = (ms % 1000) * 1000000L;
+    nanosleep(&ts, NULL);
+}
 
 /* A key algorithm + parameter the current build supports, for client
  * enrollments where the algorithm is incidental to what the test verifies. */

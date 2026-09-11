@@ -160,6 +160,9 @@ WOLFCERT_TEST_VIS int  wolfcert_ca_load(WolfCertCa* ca, WolfCertStoreOps* store,
                                         void* heap);
 int  wolfcert_ca_save(const WolfCertCa* ca, WolfCertStoreOps* store);
 WOLFCERT_TEST_VIS void wolfcert_ca_free(WolfCertCa* ca);
+/* wolfcert_buffer_free() after wiping: for a buffer that held key material. */
+void wolfcert_buffer_free_secure(WolfCertBuffer* buf);
+
 /* Rebuild an issued certificate's subject from a decoded CSR. */
 WOLFCERT_TEST_VIS int  wolfcert_copy_csr_subject(const DecodedCert* dc, Cert* nc);
 WOLFCERT_TEST_VIS int  wolfcert_ca_issue(WolfCertCa* ca, const uint8_t* csr_der,

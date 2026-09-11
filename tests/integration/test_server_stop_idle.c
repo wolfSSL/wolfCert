@@ -108,15 +108,6 @@ static void* server_thread(void* arg)
     return NULL;
 }
 
-static void sleep_ms(int ms)
-{
-    struct timespec ts;
-
-    ts.tv_sec  = ms / 1000;
-    ts.tv_nsec = (long)(ms % 1000) * 1000000L;
-    nanosleep(&ts, NULL);
-}
-
 #ifdef WOLFCERT_HAVE_SCEP
 /* Connect to 127.0.0.1:port. Returns the fd, or -1. */
 static int connect_loopback(uint16_t port)
@@ -186,7 +177,7 @@ static int stop_and_wait(ServerCtx* ctx)
         if (WOLFSSL_ATOMIC_LOAD(ctx->returned))
             return 0;
 
-        sleep_ms(POLL_STEP_MS);
+        test_sleep_ms(POLL_STEP_MS);
     }
 
     return -1;
@@ -235,7 +226,7 @@ static void* trickle_thread(void* arg)
         if (send(ctx->fd, "a", 1, 0) != 1)
             break;
 
-        sleep_ms(TRICKLE_STEP_MS);
+        test_sleep_ms(TRICKLE_STEP_MS);
     }
 
     return NULL;
@@ -365,7 +356,7 @@ int main(void)
     memset(&trickle, 0, sizeof(trickle));
     trickle.fd = fd;
     REQUIRE(pthread_create(&ttid, NULL, trickle_thread, &trickle) == 0);
-    sleep_ms(TRICKLE_STEP_MS * 5);
+    test_sleep_ms(TRICKLE_STEP_MS * 5);
 
     stop_rc = stop_and_wait(&ctx);
     WOLFSSL_ATOMIC_STORE(trickle.halt, 1);
@@ -394,7 +385,7 @@ int main(void)
     for (waited = 0; waited < STOP_DEADLINE_MS &&
             !WOLFSSL_ATOMIC_LOAD(serve_ctx.returned);
             waited += POLL_STEP_MS) {
-        sleep_ms(POLL_STEP_MS);
+        test_sleep_ms(POLL_STEP_MS);
     }
 
     if (!WOLFSSL_ATOMIC_LOAD(serve_ctx.returned))

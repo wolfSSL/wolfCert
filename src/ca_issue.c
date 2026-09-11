@@ -269,16 +269,6 @@ static int ca_check_stored_pair(const WolfCertKeyAlg* alg, WolfCertKey* key,
     return rc;
 }
 
-/* The stored bytes are the CA private key, so every exit wipes them before
- * releasing the buffer, as wolfcert_ca_free() does for the loaded copy. */
-static void ca_key_buf_free(WolfCertBuffer* key_buf)
-{
-    if (key_buf->data != NULL && key_buf->len > 0)
-        wc_ForceZero(key_buf->data, (word32)key_buf->len);
-
-    wolfcert_buffer_free(key_buf);
-}
-
 int wolfcert_ca_load(WolfCertCa* ca, WolfCertStoreOps* store, void* heap)
 {
     if (ca == NULL || store == NULL)
@@ -296,7 +286,7 @@ int wolfcert_ca_load(WolfCertCa* ca, WolfCertStoreOps* store, void* heap)
 
     if (cert_rc != WOLFCERT_OK || key_rc != WOLFCERT_OK) {
         wolfcert_buffer_free(&cert_buf);
-        ca_key_buf_free(&key_buf);
+        wolfcert_buffer_free_secure(&key_buf);
 
         if (cert_rc == WOLFCERT_ERR_NOT_FOUND && key_rc == WOLFCERT_ERR_NOT_FOUND)
             return WOLFCERT_ERR_NOT_FOUND;
@@ -335,7 +325,7 @@ int wolfcert_ca_load(WolfCertCa* ca, WolfCertStoreOps* store, void* heap)
             if (rc != WOLFCERT_OK) {
                 a->free_(&shim);
                 wolfcert_buffer_free(&cert_buf);
-                ca_key_buf_free(&key_buf);
+                wolfcert_buffer_free_secure(&key_buf);
                 return rc;
             }
 
@@ -353,7 +343,7 @@ int wolfcert_ca_load(WolfCertCa* ca, WolfCertStoreOps* store, void* heap)
     }
 
     wolfcert_buffer_free(&cert_buf);
-    ca_key_buf_free(&key_buf);
+    wolfcert_buffer_free_secure(&key_buf);
     return WOLFCERT_ERR(WOLFCERT_ERR_PARSE, "ca",
         "stored CA key does not decode as any supported algorithm");
 }

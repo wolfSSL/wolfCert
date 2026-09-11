@@ -136,8 +136,7 @@ int main(void)
     pthread_t tid;
     REQUIRE(pthread_create(&tid, NULL, srv_thread, &sc) == 0);
     for (int i = 0; i < 200 && WOLFSSL_ATOMIC_LOAD(sc.port) == 0; ++i) {
-        const struct timespec ts = { 0, 5 * 1000 * 1000 };
-        nanosleep(&ts, NULL);
+        test_sleep_ms(5);
     }
     REQUIRE(WOLFSSL_ATOMIC_LOAD(sc.port) != 0);
 

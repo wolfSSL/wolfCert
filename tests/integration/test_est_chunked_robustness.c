@@ -113,18 +113,6 @@ static int send_and_read_status(uint16_t port,
     return (int)n;
 }
 
-/* Sleep helper that nudges the request segments below toward landing in
- * distinct recv() calls rather than being coalesced into one buffer.
- * Best-effort only: TCP guarantees no recv() boundaries, so this just
- * makes the intended segmentation likely, not certain. */
-static void nap_ms(long ms)
-{
-    struct timespec ts;
-    ts.tv_sec = ms / 1000;
-    ts.tv_nsec = (ms % 1000) * 1000000L;
-    nanosleep(&ts, NULL);
-}
-
 /* Shape #1: a chunk-size line longer than 8 hex digits. The parser
  * must reject this rather than letting the shift-accumulate silently
  * wrap. */
@@ -220,9 +208,11 @@ static int accept_multisegment_chunked_body(uint16_t port)
     REQUIRE(test_tls_connect(&c, port, g_tls_cert, g_tls_cert_len) == 0);
 
     REQUIRE(test_tls_write(&c, hdr, strlen(hdr)) == 0);
-    nap_ms(80);
+    /* Best-effort segmentation: TCP guarantees no recv() boundaries, so the
+     * sleeps only make the intended split likely. */
+    test_sleep_ms(80);
     (void)test_tls_write(&c, seg2, strlen(seg2));
-    nap_ms(80);
+    test_sleep_ms(80);
     (void)test_tls_write(&c, seg3, strlen(seg3));
 
     while (n + 1 < sizeof(status)) {
@@ -342,7 +332,7 @@ static int keepalive_after_split_trailer(uint16_t port)
     /* Request #1: last-chunk line first, trailer CRLF withheld into its
      * own segment so a premature "0\r\n" completion leaves it unread. */
     REQUIRE(test_tls_write(&c, req1_head, req1_head_len) == 0);
-    nap_ms(80);
+    test_sleep_ms(80);
     REQUIRE(test_tls_write(&c, req1_tail, strlen(req1_tail)) == 0);
 
     /* Wait for request #1's response head before sending request #2. */

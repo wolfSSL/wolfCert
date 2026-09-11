@@ -444,8 +444,7 @@ int wolfcert_store_write_key(WolfCertStoreOps* store, const char* key_name,
         return rc;
 
     rc = store->write(store->ctx, key_name, pem.data, pem.len, 1);
-    wc_ForceZero(pem.data, (word32)pem.len);
-    wolfcert_buffer_free(&pem);
+    wolfcert_buffer_free_secure(&pem);
 
     return rc;
 }
@@ -464,8 +463,7 @@ int wolfcert_store_read_key(WolfCertStoreOps* store, const char* key_name,
         return rc;
 
     rc = wolfcert_key_from_pem(pem.data, pem.len, store->heap, out_key);
-    wc_ForceZero(pem.data, (word32)pem.len);
-    wolfcert_buffer_free(&pem);
+    wolfcert_buffer_free_secure(&pem);
 
     return rc;
 }

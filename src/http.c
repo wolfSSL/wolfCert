@@ -101,12 +101,15 @@ WOLFCERT_TEST_VIS void wolfcert_http_url_free(WolfCertUrl* u)
     u->scheme = u->host = u->path = NULL;
 }
 
-/* wolfcert_http_url_parse stores an IPv6 literal with its brackets stripped, so
- * a host carrying a colon is one: re-emitting it needs the brackets back, in a
- * URL (RFC 3986 section 3.2.2) and in a Host header (RFC 7230 section 5.4). */
+/* An IPv6 literal is stored with its brackets stripped, and re-emitting it
+ * needs them back in a URL (RFC 3986 section 3.2.2) and in a Host header
+ * (RFC 7230 section 5.4). */
 static int host_is_ip_literal(const char* host)
 {
-    return strchr(host, ':') != NULL;
+    uint8_t ip[16];
+    size_t  ip_len = 0;
+
+    return wolfcert_parse_ip(host, ip, &ip_len) == WOLFCERT_OK && ip_len == 16;
 }
 
 /* Build the "scheme://host[:port]" origin for a parsed URL into a freshly
@@ -1114,13 +1117,19 @@ static int http_write_request(WolfCertConn* c, const WolfCertUrl* u,
  * requests - HTTP/1.1 pipelining is effectively dead on the wire, and
  * the async state machine has its own per-request residual tracking
  * that doesn't depend on this helper. */
+/* The response allowance: the body cap the caller asked for, plus the header
+ * budget. Both readers size their buffer from this one spelling. */
+static size_t rx_max(size_t max_body)
+{
+    return max_body + WOLFCERT_HTTP_HEADER_BUDGET;
+}
+
 static int http_read_response(WolfCertConn* c,
                               size_t max_body,
                               WolfCertHttpResponse* resp,
                               void* heap)
 {
-    DynBuf rx = { .heap = heap,
-                  .max = max_body + WOLFCERT_HTTP_HEADER_BUDGET };
+    DynBuf rx = { .heap = heap, .max = rx_max(max_body) };
     int hdr_end = read_headers(c, &rx);
     if (hdr_end < 0) {
         WOLFCERT_XFREE(rx.buf, heap);
@@ -1486,11 +1495,6 @@ static int nb_write(WolfCertConn* c, const uint8_t* buf, size_t len, size_t* off
 }
 
 /* Total accumulator allowance: the body cap plus the header budget. */
-static size_t nb_rx_max(const WolfCertHttpSession* s)
-{
-    return s->max_body + WOLFCERT_HTTP_HEADER_BUDGET;
-}
-
 /* Ensure the rx buffer has room for `need` more bytes. */
 static int nb_rx_reserve(WolfCertHttpSession* s, size_t need)
 {
@@ -1498,7 +1502,7 @@ static int nb_rx_reserve(WolfCertHttpSession* s, size_t need)
     if (want <= s->sm_rx_cap)
         return WOLFCERT_OK;
 
-    size_t max = nb_rx_max(s);
+    size_t max = rx_max(s->max_body);
     if (want > max)
         return WOLFCERT_ERR_PROTOCOL;
 
@@ -1528,7 +1532,7 @@ static int nb_read_some(WolfCertHttpSession* s, int* ended)
 
     /* Read at most what the allowance still permits, so a response that
      * ends inside the final quantum is not rejected before it is read. */
-    size_t room = nb_rx_max(s) - s->sm_rx_len;
+    size_t room = rx_max(s->max_body) - s->sm_rx_len;
     uint8_t probe;
     uint8_t* dst;
 

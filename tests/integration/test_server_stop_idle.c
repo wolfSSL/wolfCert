@@ -82,6 +82,14 @@
 #define STOP_DEADLINE_MS 5000
 #define POLL_STEP_MS     10
 
+/* The accept loop is what these cases exercise, so any compiled-in protocol
+ * will do for the TLS listener; SCEP is absent from any NO_RSA build. */
+#if defined(WOLFCERT_HAVE_EST)
+    #define TLS_LISTENER_PROTO WOLFCERT_PROTO_EST
+#else
+    #define TLS_LISTENER_PROTO WOLFCERT_PROTO_SCEP
+#endif
+
 typedef struct {
     WolfCertServer*    srv;
     int                run_rc;
@@ -279,7 +287,7 @@ int main(void)
                                 &tls_key, &tls_key_len) == 0);
 
     memset(&cfg, 0, sizeof(cfg));
-    cfg.protocol         = WOLFCERT_PROTO_EST;
+    cfg.protocol         = TLS_LISTENER_PROTO;
     cfg.bind_host        = "127.0.0.1";
     cfg.bind_port        = 0;
     cfg.tls_cert_pem     = tls_cert;

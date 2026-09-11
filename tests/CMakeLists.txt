@@ -101,12 +101,22 @@ if(WOLFCERT_ENABLE_EST)
         target_link_libraries(test_est_mldsa_roundtrip PRIVATE wolfcert Threads::Threads)
         add_test(NAME est_mldsa_roundtrip COMMAND test_est_mldsa_roundtrip)
 
-        add_executable(test_server_stop_idle integration/test_server_stop_idle.c)
-        target_link_libraries(test_server_stop_idle PRIVATE wolfcert Threads::Threads)
-        add_test(NAME server_stop_idle COMMAND test_server_stop_idle)
-        # A stop that cannot interrupt an idle peer hangs the serving thread.
-        set_tests_properties(server_stop_idle PROPERTIES TIMEOUT 60)
     endif()
+endif()
+
+# Protocol-agnostic server coverage: gated on the server alone, so a build with
+# either protocol disabled keeps it.
+if(WOLFCERT_ENABLE_SERVER)
+    add_executable(test_server_stop_idle integration/test_server_stop_idle.c)
+    target_link_libraries(test_server_stop_idle PRIVATE wolfcert Threads::Threads)
+    add_test(NAME server_stop_idle COMMAND test_server_stop_idle)
+    # A stop that cannot interrupt an idle peer hangs the serving thread.
+    set_tests_properties(server_stop_idle PROPERTIES TIMEOUT 60)
+
+    add_executable(test_server_ca_store unit/test_server_ca_store.c)
+    target_include_directories(test_server_ca_store PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_server_ca_store PRIVATE wolfcert Threads::Threads)
+    add_test(NAME server_ca_store COMMAND test_server_ca_store)
 endif()
 
 if(WOLFCERT_ENABLE_SCEP)
@@ -130,10 +140,6 @@ if(WOLFCERT_ENABLE_SCEP AND WOLFCERT_ENABLE_SERVER)
     target_link_libraries(test_scep_async_roundtrip PRIVATE wolfcert Threads::Threads)
     add_test(NAME scep_async_roundtrip COMMAND test_scep_async_roundtrip)
 
-    add_executable(test_server_ca_store unit/test_server_ca_store.c)
-    target_include_directories(test_server_ca_store PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(test_server_ca_store PRIVATE wolfcert Threads::Threads)
-    add_test(NAME server_ca_store COMMAND test_server_ca_store)
 endif()
 
 # The CLI's protocol scoping and keyword validation. Most cases need no

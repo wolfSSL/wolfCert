@@ -21,11 +21,13 @@
 #include <wolfcert/server.h>
 #include "internal.h"
 #include "../test_static_mem.h"
+#include "../integration/tls_test_util.h"
 
 #include <wolfssl/options.h>
 #include <wolfssl/wolfcrypt/asn.h>
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define REQUIRE(cond) \
@@ -44,10 +46,34 @@
     #define CA_KEY_PARAM  0
 #endif
 
+/* The CA store is protocol-agnostic; the listener just needs a protocol that
+ * was compiled in, and SCEP is absent from any NO_RSA build. EST has no
+ * plaintext mode, so that variant carries a throwaway server identity. */
+#if defined(WOLFCERT_HAVE_EST)
+    #define CA_STORE_PROTO WOLFCERT_PROTO_EST
+    #define CA_STORE_NEEDS_TLS 1
+#else
+    #define CA_STORE_PROTO WOLFCERT_PROTO_SCEP
+    #define CA_STORE_NEEDS_TLS 0
+#endif
+
+#if CA_STORE_NEEDS_TLS
+static uint8_t* srv_cert_pem;
+static size_t   srv_cert_pem_len;
+static uint8_t* srv_key_pem;
+static size_t   srv_key_pem_len;
+#endif
+
 static void ca_store_cfg(WolfCertServerCfgSrv* cfg, WolfCertStoreOps* store)
 {
     memset(cfg, 0, sizeof(*cfg));
-    cfg->protocol     = WOLFCERT_PROTO_SCEP;
+    cfg->protocol     = CA_STORE_PROTO;
+#if CA_STORE_NEEDS_TLS
+    cfg->tls_cert_pem     = srv_cert_pem;
+    cfg->tls_cert_pem_len = srv_cert_pem_len;
+    cfg->tls_key_pem      = srv_key_pem;
+    cfg->tls_key_pem_len  = srv_key_pem_len;
+#endif
     cfg->bind_host    = "127.0.0.1";
     cfg->ca_store     = store;
     cfg->ca_key_type  = CA_KEY_TYPE;
@@ -749,6 +775,11 @@ int main(void)
     REQUIRE(test_static_mem_init() == 0);
     REQUIRE(wolfcert_init(NULL) == WOLFCERT_OK);
 
+#if CA_STORE_NEEDS_TLS
+    REQUIRE(gen_server_identity(&srv_cert_pem, &srv_cert_pem_len,
+                                &srv_key_pem, &srv_key_pem_len) == 0);
+#endif
+
     if (test_corrupt_ca_rejected())
         return 1;
     if (test_load_io_error_rejected())
@@ -778,6 +809,10 @@ int main(void)
     if (test_ca_key_usage())
         return 1;
 
+#if CA_STORE_NEEDS_TLS
+    free(srv_cert_pem);
+    free(srv_key_pem);
+#endif
     wolfcert_cleanup();
     printf("OK\n");
     return 0;

@@ -38,6 +38,11 @@
 #endif
 #ifdef WOLFCERT_HAVE_MLDSA
 #  include <wolfssl/wolfcrypt/wc_mldsa.h>
+/* Checked here, not in check_config.h: dilithium.h derives this macro only
+ * once settings.h has been parsed. */
+#  ifndef WOLFSSL_MLDSA_CHECK_KEY
+#    error "wolfSSL is missing wc_MlDsaKey_CheckKey(); wolfCert's ML-DSA support needs it. Rebuild wolfSSL without WOLFSSL_DILITHIUM_NO_CHECK_KEY / WOLFSSL_MLDSA_VERIFY_ONLY."
+#  endif
 #endif
 
 #include <string.h>
@@ -216,27 +221,40 @@ static int ecc_pub_check(struct WolfCertKey* k, const uint8_t* pub,
                          word32 pub_len)
 {
     ecc_key* cert_key;
-    byte mine[ECC_X963_CAP];
-    byte theirs[ECC_X963_CAP];
-    word32 mine_len = sizeof(mine);
-    word32 theirs_len = sizeof(theirs);
+    byte* mine;
+    byte* theirs;
+    word32 mine_len = ECC_X963_CAP;
+    word32 theirs_len = ECC_X963_CAP;
     word32 idx = 0;
     int rc;
 
-    cert_key = (ecc_key*)WOLFCERT_XMALLOC(sizeof(*cert_key), k->heap);
-    if (cert_key == NULL)
+    mine = (byte*)WOLFCERT_XMALLOC(2 * ECC_X963_CAP, k->heap);
+    if (mine == NULL)
         return WOLFCERT_ERR_MEMORY;
+    theirs = mine + ECC_X963_CAP;
+
+    cert_key = (ecc_key*)WOLFCERT_XMALLOC(sizeof(*cert_key), k->heap);
+    if (cert_key == NULL) {
+        WOLFCERT_XFREE(mine, k->heap);
+        return WOLFCERT_ERR_MEMORY;
+    }
 
     rc = wc_ecc_init_ex(cert_key, k->heap, k->dev_id);
     if (rc != 0) {
         WOLFCERT_XFREE(cert_key, k->heap);
+        WOLFCERT_XFREE(mine, k->heap);
         return WOLFCERT_ERR_WC(rc, "keygen", "ecc_init_ex");
     }
 
     /* A SEC1 private key need not carry its public point, so derive it when
      * the decoder did not supply one. */
-    if (((ecc_key*)k->impl)->type == ECC_PRIVATEKEY_ONLY)
-        (void)wc_ecc_make_pub((ecc_key*)k->impl, NULL);
+    if (((ecc_key*)k->impl)->type == ECC_PRIVATEKEY_ONLY) {
+        rc = wc_ecc_make_pub((ecc_key*)k->impl, NULL);
+        if (rc != 0) {
+            rc = WOLFCERT_ERR_WC(rc, "keygen", "ecc_make_pub");
+            goto out;
+        }
+    }
 
     rc = wc_EccPublicKeyDecode(pub, &idx, cert_key, pub_len);
     if (rc != 0)
@@ -257,6 +275,7 @@ static int ecc_pub_check(struct WolfCertKey* k, const uint8_t* pub,
 out:
     wc_ecc_free(cert_key);
     WOLFCERT_XFREE(cert_key, k->heap);
+    WOLFCERT_XFREE(mine, k->heap);
     return rc;
 }
 
@@ -491,13 +510,6 @@ static int mldsa_priv_to_der(const struct WolfCertKey* k, uint8_t* buf, word32 c
     /* PKCS#8 v1 PrivateKeyInfo (no public-key field). */
     return wc_MlDsaKey_PrivateKeyToDer((MlDsaKey*)k->impl, buf, cap);
 }
-
-/* Reloading an ML-DSA CA from a store needs wc_MlDsaKey_CheckKey(); say so
- * here rather than letting the link fail. */
-#ifndef WOLFSSL_MLDSA_CHECK_KEY
-#error "wolfCert's ML-DSA support needs wc_MlDsaKey_CheckKey(): rebuild wolfSSL " \
-       "without WOLFSSL_DILITHIUM_NO_CHECK_KEY / WOLFSSL_MLDSA_VERIFY_ONLY."
-#endif
 
 /* Unlike its siblings this hook mutates `key`: the certificate's public half
  * is adopted into it, since none can be derived from a PKCS#8 v1 private key.

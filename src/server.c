@@ -43,12 +43,17 @@
 
 #include <wolfssl/ssl.h>
 
-/* Shutdown cadence: how often wolfcert_server_run() wakes to re-check the
- * stopping flag while idle at the listener, and the send/receive timeouts put
- * on an accepted connection so a stalled peer cannot hold the handler. Bounds
- * shutdown latency; not performance-critical. */
+/* How often wolfcert_server_run() wakes to re-check the stopping flag while
+ * idle at the listener. Bounds shutdown latency; not performance-critical. */
 #ifndef WOLFCERT_SERVER_POLL_MS
 #define WOLFCERT_SERVER_POLL_MS 200
+#endif
+
+/* Send/receive timeout on an accepted connection, so a stalled peer cannot
+ * hold the handler. Separate from the listener cadence: every expiry is a
+ * retry, so lowering this spins the handler rather than speeding shutdown. */
+#ifndef WOLFCERT_SERVER_IO_TIMEOUT_MS
+#define WOLFCERT_SERVER_IO_TIMEOUT_MS WOLFCERT_SERVER_POLL_MS
 #endif
 
 /* A timeout armed on the accepted connection surfaces as WANT_READ or
@@ -406,8 +411,8 @@ int wolfcert_server_run(WolfCertServer* srv)
         /* Bound how long a read or write on this connection can block, so a
          * peer that goes silent or stops reading cannot hold the handler past
          * wolfcert_server_stop(). */
-        poll_to.tv_sec  = WOLFCERT_SERVER_POLL_MS / 1000;
-        poll_to.tv_usec = (WOLFCERT_SERVER_POLL_MS % 1000) * 1000;
+        poll_to.tv_sec  = WOLFCERT_SERVER_IO_TIMEOUT_MS / 1000;
+        poll_to.tv_usec = (WOLFCERT_SERVER_IO_TIMEOUT_MS % 1000) * 1000;
         if (setsockopt(cs, SOL_SOCKET, SO_RCVTIMEO, &poll_to,
                        sizeof(poll_to)) != 0 ||
                 setsockopt(cs, SOL_SOCKET, SO_SNDTIMEO, &poll_to,
@@ -490,9 +495,9 @@ int wolfcert_server_stop(WolfCertServer* srv)
     if (srv == NULL)
         return WOLFCERT_ERR_BAD_ARG;
 
-    /* Signal the accept loop to exit. Both the listener poll and the reads on
-     * an accepted connection use a WOLFCERT_SERVER_POLL_MS timeout and
-     * re-check this flag, so no fd surgery is needed here --
+    /* Signal the accept loop to exit. The listener poll and the reads on an
+     * accepted connection are both bounded and re-check this flag, so no fd
+     * surgery is needed here --
      * wolfcert_server_free() closes listen_fd after the serving thread is
      * joined. Setting the flag from another thread (test harness) or a signal
      * handler (wolfcert-server CLI) is safe: the store is atomic. */

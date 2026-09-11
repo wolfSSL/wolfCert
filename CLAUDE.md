@@ -32,7 +32,12 @@ configure time if the installed wolfSSL lacks any of `HAVE_PKCS7`,
 `WOLFSSL_KEY_GEN`, `WOLF_CRYPTO_CB`, `WOLFSSL_BASE64_ENCODE`,
 `OPENSSL_EXTRA`, `WOLFSSL_ALT_NAMES`, or `WOLFSSL_CERT_NAME_ALL`, or if
 it was built with `NO_AES` / `NO_SHA256`, or if it provides neither
-TLS 1.2 nor TLS 1.3.
+TLS 1.2 nor TLS 1.3. With ML-DSA enabled it additionally needs
+`WOLFSSL_MLDSA_CHECK_KEY` (`wc_MlDsaKey_CheckKey()`), which reloading an
+ML-DSA CA from a store calls -- checked when `src/key_algs.c` compiles,
+since only `dilithium.h` resolves that macro. `--enable-mldsa` gives it by
+default; it is lost only if wolfSSL is built with
+`WOLFSSL_DILITHIUM_NO_CHECK_KEY` or `WOLFSSL_MLDSA_VERIFY_ONLY`.
 
 **Key algorithms are gated** by `WOLFCERT_HAVE_<ALG>` (RSA, ECC,
 ED25519, ED448, MLDSA). RSA, ECC, Ed25519, Ed448 and ML-DSA are each

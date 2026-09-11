@@ -1535,12 +1535,15 @@ static int nb_read_some(WolfCertHttpSession* s, int* ended)
     size_t room = rx_max(s->max_body) - s->sm_rx_len;
     uint8_t probe;
     uint8_t* dst;
+    int probing = 0;
 
     if (room == 0) {
         /* An EOF-delimited body ending exactly on the allowance is legal, so
-         * a full accumulator still has to look for the close. */
-        dst  = &probe;
-        room = 1;
+         * a full accumulator still has to look for the close. Any byte that
+         * arrives instead puts the response over the allowance. */
+        dst     = &probe;
+        room    = 1;
+        probing = 1;
     }
     else {
         if (room > WOLFCERT_HTTP_READ_CHUNK)
@@ -1556,7 +1559,7 @@ static int nb_read_some(WolfCertHttpSession* s, int* ended)
     if (s->conn.ssl) {
         int r = wolfSSL_read(s->conn.ssl, dst, (int)room);
         if (r > 0) {
-            if (dst == &probe)
+            if (probing)
                 return WOLFCERT_ERR_PROTOCOL;
 
             s->sm_rx_len += (size_t)r;
@@ -1586,7 +1589,7 @@ static int nb_read_some(WolfCertHttpSession* s, int* ended)
     if (r > 0) {
         if ((size_t)r > room)
             return WOLFCERT_ERR_IO;
-        if (dst == &probe)
+        if (probing)
             return WOLFCERT_ERR_PROTOCOL;
 
         s->sm_rx_len += (size_t)r;

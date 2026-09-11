@@ -288,11 +288,10 @@ int wolfcert_server_start(const WolfCertServerCfgSrv* cfg, WolfCertServer** out)
             goto fail;
 
         if (cfg->ca_store != NULL) {
+            /* Not re-wrapped: it would lose ca_save's rollback diagnostic. */
             rc = wolfcert_ca_save(&s->ca, cfg->ca_store);
-            if (rc != WOLFCERT_OK) {
-                WOLFCERT_ERR(rc, "server", "ca_store save failed");
+            if (rc != WOLFCERT_OK)
                 goto fail;
-            }
         }
     }
 

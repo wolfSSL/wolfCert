@@ -142,6 +142,61 @@ static int test_save_failure_rejected(void)
     return 0;
 }
 
+/* Stub backend whose two CA reads fail differently, so the precedence between
+ * an absent half and a genuinely failing read can be driven either way. */
+typedef struct {
+    int cert_rc;
+    int key_rc;
+} SplitCtx;
+
+static int split_read(void* ctx_, const char* key, WolfCertBuffer* out)
+{
+    SplitCtx* ctx = (SplitCtx*)ctx_;
+
+    (void)out;
+    return strcmp(key, "ca.cert.der") == 0 ? ctx->cert_rc : ctx->key_rc;
+}
+
+/* A read that failed for a reason other than absence must be reported as
+ * itself: calling the store "incomplete" hides an actionable I/O or memory
+ * failure behind a parse error. */
+static int mixed_read_failure(int cert_rc, int key_rc, int want)
+{
+    SplitCtx ctx = { cert_rc, key_rc };
+    WolfCertStoreOps store;
+    WolfCertServerCfgSrv cfg;
+    WolfCertServer* srv = NULL;
+
+    memset(&store, 0, sizeof(store));
+    store.read   = split_read;
+    store.write  = stub_write;
+    store.remove = stub_remove;
+    store.ctx    = &ctx;
+
+    ca_store_cfg(&cfg, &store);
+    REQUIRE(wolfcert_server_start(&cfg, &srv) == want);
+    REQUIRE(srv == NULL);
+    return 0;
+}
+
+static int test_mixed_read_failure(void)
+{
+    if (mixed_read_failure(WOLFCERT_ERR_NOT_FOUND, WOLFCERT_ERR_IO,
+                           WOLFCERT_ERR_IO))
+        return 1;
+    if (mixed_read_failure(WOLFCERT_ERR_IO, WOLFCERT_ERR_NOT_FOUND,
+                           WOLFCERT_ERR_IO))
+        return 1;
+    if (mixed_read_failure(WOLFCERT_ERR_NOT_FOUND, WOLFCERT_ERR_MEMORY,
+                           WOLFCERT_ERR_MEMORY))
+        return 1;
+
+    /* Both absent is still an empty store, which bootstraps rather than
+     * failing; one absent beside one good read is still incomplete. */
+    return mixed_read_failure(WOLFCERT_ERR_NOT_FOUND, WOLFCERT_OK,
+                              WOLFCERT_ERR_PARSE);
+}
+
 /* Backend that forwards to a real store but fails the nth write, so a
  * bootstrap can be interrupted between the certificate and the key. */
 typedef struct {
@@ -173,6 +228,13 @@ static int flaky_remove(void* ctx_, const char* key)
     WolfCertStoreOps* in = ((FlakyCtx*)ctx_)->inner;
 
     return in->remove(in->ctx, key);
+}
+
+static int failing_remove(void* ctx_, const char* key)
+{
+    (void)ctx_;
+    (void)key;
+    return WOLFCERT_ERR_IO;
 }
 
 /* A key write that fails once the certificate has landed must take the
@@ -212,6 +274,55 @@ static int test_save_rollback(void)
     wolfcert_buffer_free(&left);
     wolfcert_store_memory_close(mem);
     return 0;
+}
+
+/* A rollback the store cannot perform must not be reported as a plain write
+ * failure: the certificate stays behind and poisons every later start, so the
+ * diagnostic has to say so. */
+static int rollback_unavailable(int have_remove)
+{
+    WolfCertStoreOps* mem = wolfcert_store_memory_open(NULL);
+    FlakyCtx fctx;
+    WolfCertStoreOps store;
+    WolfCertServerCfgSrv cfg;
+    WolfCertServer* srv = NULL;
+    WolfCertBuffer left = { 0 };
+
+    REQUIRE(mem != NULL);
+
+    memset(&fctx, 0, sizeof(fctx));
+    fctx.inner   = mem;
+    fctx.fail_at = 2;
+
+    memset(&store, 0, sizeof(store));
+    store.read   = flaky_read;
+    store.write  = flaky_write;
+    store.remove = have_remove ? failing_remove : NULL;
+    store.ctx    = &fctx;
+
+    ca_store_cfg(&cfg, &store);
+    REQUIRE(wolfcert_server_start(&cfg, &srv) == WOLFCERT_ERR_IO);
+    REQUIRE(srv == NULL);
+    REQUIRE(strstr(wolfcert_last_error_message(), "rolled back") != NULL);
+
+    /* The certificate really is still there, and the next start refuses it. */
+    REQUIRE(mem->read(mem->ctx, "ca.cert.der", &left) == WOLFCERT_OK);
+    wolfcert_buffer_free(&left);
+
+    fctx.fail_at = 0;
+    REQUIRE(wolfcert_server_start(&cfg, &srv) == WOLFCERT_ERR_PARSE);
+    REQUIRE(srv == NULL);
+
+    wolfcert_store_memory_close(mem);
+    return 0;
+}
+
+static int test_rollback_unavailable(void)
+{
+    if (rollback_unavailable(0))
+        return 1;
+
+    return rollback_unavailable(1);
 }
 
 /* A store holding one half of the pair is damaged, not empty: starting
@@ -645,6 +756,10 @@ int main(void)
     if (test_save_failure_rejected())
         return 1;
     if (test_save_rollback())
+        return 1;
+    if (test_rollback_unavailable())
+        return 1;
+    if (test_mixed_read_failure())
         return 1;
     if (test_partial_store_rejected())
         return 1;

@@ -298,15 +298,17 @@ int wolfcert_ca_load(WolfCertCa* ca, WolfCertStoreOps* store, void* heap)
         if (cert_rc == WOLFCERT_ERR_NOT_FOUND && key_rc == WOLFCERT_ERR_NOT_FOUND)
             return WOLFCERT_ERR_NOT_FOUND;
 
+        /* An absent half is only damage once the other half read back. */
+        if (cert_rc != WOLFCERT_OK && cert_rc != WOLFCERT_ERR_NOT_FOUND)
+            return WOLFCERT_ERR(cert_rc, "ca", "CA store read failed");
+        if (key_rc != WOLFCERT_OK && key_rc != WOLFCERT_ERR_NOT_FOUND)
+            return WOLFCERT_ERR(key_rc, "ca", "CA store read failed");
+
         /* Half a pair is a damaged store, not an empty one. Reporting
          * NOT_FOUND here would let the caller mint a CA over the survivor. */
-        if (cert_rc == WOLFCERT_ERR_NOT_FOUND || key_rc == WOLFCERT_ERR_NOT_FOUND)
-            return WOLFCERT_ERR(WOLFCERT_ERR_PARSE, "ca",
-                "CA store is incomplete: %s is missing",
-                cert_rc == WOLFCERT_ERR_NOT_FOUND ? "ca.cert.der" : "ca.key.der");
-
-        rc = (cert_rc != WOLFCERT_OK) ? cert_rc : key_rc;
-        return WOLFCERT_ERR(rc, "ca", "CA store read failed");
+        return WOLFCERT_ERR(WOLFCERT_ERR_PARSE, "ca",
+            "CA store is incomplete: %s is missing",
+            cert_rc == WOLFCERT_ERR_NOT_FOUND ? "ca.cert.der" : "ca.key.der");
     }
 
     /* Iterate every registered algorithm and see which private-key decoder
@@ -363,11 +365,16 @@ int wolfcert_ca_save(const WolfCertCa* ca, WolfCertStoreOps* store)
         return rc;
 
     rc = store->write(store->ctx, "ca.key.der", ca->key_der, ca->key_der_len, 1);
+    if (rc == WOLFCERT_OK)
+        return rc;
 
     /* A certificate without its key is a damaged store that every later load
-     * rejects, so drop the half that landed. */
-    if (rc != WOLFCERT_OK && store->remove != NULL)
-        (void)store->remove(store->ctx, "ca.cert.der");
+     * rejects, and the vtable has no primitive but remove to undo it. */
+    if (store->remove == NULL ||
+            store->remove(store->ctx, "ca.cert.der") != WOLFCERT_OK)
+        return WOLFCERT_ERR(rc, "ca",
+            "CA key write failed and ca.cert.der could not be rolled back: "
+            "the store is left incomplete and must be cleared before restart");
 
     return rc;
 }

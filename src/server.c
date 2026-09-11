@@ -235,8 +235,6 @@ int wolfcert_server_start(const WolfCertServerCfgSrv* cfg, WolfCertServer** out)
     if (ops == NULL)
         return WOLFCERT_ERR_UNSUPPORTED;
 
-    /* RFC 7030 has no plaintext mode. Reject here rather than in tls_setup(),
-     * which runs after the CA has been generated and written to the store. */
     if (cfg->protocol == WOLFCERT_PROTO_EST &&
             (cfg->tls_cert_pem == NULL || cfg->tls_key_pem == NULL))
         return WOLFCERT_ERR(WOLFCERT_ERR_TLS, "server",

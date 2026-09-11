@@ -97,8 +97,7 @@ static int test_url_parser(void)
     REQUIRE(strcmp(u.path, "/?operation=GetCACaps") == 0);
     wolfcert_http_url_free(&u);
 
-    /* RFC 7230 section 5.3: the fragment is client-side only, so it must not
-     * reach the request target. */
+    /* A fragment must not reach the request target. */
     REQUIRE(wolfcert_http_url_parse("http://ca.example#frag", &u, NULL) == WOLFCERT_OK);
     REQUIRE(strcmp(u.host, "ca.example") == 0);
     REQUIRE(strcmp(u.path, "/") == 0);
@@ -728,9 +727,8 @@ static int test_request_transfer_encoding(void)
     return 0;
 }
 
-/* RFC 3986 section 3.2.2: an IPv6 literal stays bracketed in the Host header,
- * or a virtual-host match against "::1:8443" fails. Both request builders
- * carry their own copy of the bracketing, so drive each one. */
+/* Both request builders carry their own copy of the bracketing, so drive
+ * each one: an unbracketed IPv6 Host header fails a virtual-host match. */
 static int ipv6_host_header(int use_session)
 {
     struct capture_ctx cc = { 0 };

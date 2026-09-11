@@ -57,8 +57,9 @@ typedef struct {
      * the protocol handler. tls_client_ca_pem, when set, enables mutual
      * TLS (WOLFSSL_VERIFY_PEER) against the supplied client-CA bundle.
      *
-     * Mandatory for WOLFCERT_PROTO_EST (RFC 7030 has no plaintext mode):
-     * wolfcert_server_start() returns WOLFCERT_ERR_TLS without them.
+     * Mandatory for WOLFCERT_PROTO_EST, which RFC 7030 section 3.1 defines
+     * over TLS only: wolfcert_server_start() returns WOLFCERT_ERR_TLS
+     * without them.
      * Optional for WOLFCERT_PROTO_SCEP, which authenticates at the
      * pkiMessage layer and may be served over cleartext HTTP.
      *

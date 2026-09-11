@@ -102,8 +102,8 @@ WOLFCERT_TEST_VIS void wolfcert_http_url_free(WolfCertUrl* u)
 }
 
 /* wolfcert_http_url_parse stores an IPv6 literal with its brackets stripped, so
- * a host carrying a colon is one: anything re-emitted into a URL or a Host
- * header has to bracket it again (RFC 3986 section 3.2.2). */
+ * a host carrying a colon is one: re-emitting it needs the brackets back, in a
+ * URL (RFC 3986 section 3.2.2) and in a Host header (RFC 7230 section 5.4). */
 static int host_is_ip_literal(const char* host)
 {
     return strchr(host, ':') != NULL;
@@ -254,9 +254,9 @@ WOLFCERT_TEST_VIS int wolfcert_http_url_parse(const char* url, WolfCertUrl* out,
         host_end = end;
     }
 
-    /* A pathless authority may still be followed by a query or a fragment, so
-     * the request target gets a synthesized leading slash. RFC 7230 section
-     * 5.3: the fragment is client-side only and never goes on the wire. */
+    /* RFC 7230 section 5.3.1 synthesizes the leading slash for an empty path;
+     * section 5.1 excludes the fragment from the target, so it never goes on
+     * the wire. */
     const char* frag = strchr(host_end, '#');
     size_t tlen = frag ? (size_t)(frag - host_end) : strlen(host_end);
     size_t plen = (*host_end == '/') ? tlen : tlen + 1;

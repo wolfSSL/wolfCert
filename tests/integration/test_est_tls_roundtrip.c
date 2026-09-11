@@ -71,9 +71,7 @@ int main(void)
     size_t tls_key_len  = 0;
     REQUIRE(gen_server_identity(&tls_cert, &tls_cert_len, &tls_key, &tls_key_len) == 0);
 
-    /* RFC 7030 has no plaintext mode, so an EST listener configured without a
-     * TLS identity must be refused at start rather than serve /simpleenroll
-     * over cleartext HTTP. */
+    /* An EST listener with no TLS identity must be refused at start. */
     WolfCertStoreOps* plain_store = wolfcert_store_memory_open(NULL);
     REQUIRE(plain_store != NULL);
     WolfCertServerCfgSrv plain = {

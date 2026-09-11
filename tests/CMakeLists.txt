@@ -9,6 +9,7 @@ target_link_libraries(test_keygen PRIVATE wolfcert)
 add_test(NAME keygen COMMAND test_keygen)
 
 add_executable(test_csr unit/test_csr.c)
+target_include_directories(test_csr PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(test_csr PRIVATE wolfcert)
 add_test(NAME csr COMMAND test_csr)
 

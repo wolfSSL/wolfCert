@@ -133,6 +133,24 @@ static inline int test_sign_selfcert(Cert* cert, uint8_t* der, int der_sz,
 #endif
 }
 
+/* Sign the (already populated) CSR into `der`. Returns the signed DER length,
+ * or <= 0 on error. */
+static inline int test_sign_certreq(Cert* req, uint8_t* der, int der_sz,
+                                    test_signkey* key, WC_RNG* rng)
+{
+#if !defined(NO_RSA)
+    if (wc_MakeCertReq(req, der, (word32)der_sz, key, NULL) <= 0)
+        return -1;
+    return wc_SignCert(req->bodySz, req->sigType, der, (word32)der_sz,
+                       key, NULL, rng);
+#else
+    if (wc_MakeCertReq(req, der, (word32)der_sz, NULL, key) <= 0)
+        return -1;
+    return wc_SignCert(req->bodySz, req->sigType, der, (word32)der_sz,
+                       NULL, key, rng);
+#endif
+}
+
 /* Serialize the private key to DER. Returns DER length, or <= 0 on error. */
 static inline int test_signkey_to_der(test_signkey* key, uint8_t* der,
                                       int der_sz)

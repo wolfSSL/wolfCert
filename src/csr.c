@@ -73,6 +73,7 @@ static const struct rdn_field rdn_fields[] = {
     { "UID",              3,  offsetof(CertName, userId),     CTC_NAME_SIZE },
     { "userId",           6,  offsetof(CertName, userId),     CTC_NAME_SIZE },
     { "postalCode",       10, offsetof(CertName, postalCode), CTC_NAME_SIZE },
+    { "street",            6, offsetof(CertName, street),     CTC_NAME_SIZE },
 #ifdef WOLFSSL_CERT_EXT
     { "businessCategory", 16, offsetof(CertName, busCat),     CTC_NAME_SIZE },
 #endif

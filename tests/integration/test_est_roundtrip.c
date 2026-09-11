@@ -208,6 +208,65 @@ static int enroll_check_san(const WolfCertServerCfg* client_cfg)
     return 0;
 }
 
+/* wolfcert_csr_build() leaves wolfSSL's UTF8String default in place, so a
+ * PrintableString CSR has to be built straight on wolfSSL. */
+static int enroll_raw_csr(const WolfCertServerCfg* client_cfg,
+                          int want_rc, DecodedCert* dc, DerBuffer** der)
+{
+    WC_RNG rng;
+    test_signkey key;
+    Cert req;
+    byte csr[8192];
+    WolfCertBuffer issued = { 0 };
+    int sz;
+
+    REQUIRE(wc_InitRng(&rng) == 0);
+    REQUIRE(test_signkey_make(&key, &rng) == 0);
+
+    REQUIRE(wc_InitCert(&req) == 0);
+    strcpy(req.subject.commonName, "device-enc");
+    req.subject.commonNameEnc = CTC_PRINTABLE;
+    strcpy(req.subject.org, "Acme");
+    req.subject.orgEnc = CTC_PRINTABLE;
+    req.sigType = TEST_CERT_SIGTYPE;
+
+    sz = test_sign_certreq(&req, csr, sizeof(csr), &key, &rng);
+    REQUIRE(sz > 0);
+
+    REQUIRE(wolfcert_est_simple_enroll(client_cfg, csr, (size_t)sz, &issued)
+            == want_rc);
+
+    if (want_rc == WOLFCERT_OK) {
+        REQUIRE(wc_PemToDer(issued.data, (long)issued.len, CERT_TYPE, der,
+                            NULL, NULL, NULL) == 0);
+        wc_InitDecodedCert(dc, (*der)->buffer, (*der)->length, NULL);
+        REQUIRE(wc_ParseCert(dc, CERT_TYPE, NO_VERIFY, NULL) == 0);
+    }
+
+    wolfcert_buffer_free(&issued);
+    test_signkey_free(&key);
+    wc_FreeRng(&rng);
+    return 0;
+}
+
+/* The DirectoryString choice the requester used has to survive: a
+ * PrintableString RDN coming back as UTF8String changes the subject. */
+static int enroll_preserves_string_encoding(const WolfCertServerCfg* client_cfg)
+{
+    DecodedCert dc;
+    DerBuffer* der = NULL;
+
+    if (enroll_raw_csr(client_cfg, WOLFCERT_OK, &dc, &der))
+        return 1;
+
+    REQUIRE(dc.subjectCNEnc == CTC_PRINTABLE);
+    REQUIRE(dc.subjectOEnc  == CTC_PRINTABLE);
+
+    wc_FreeDecodedCert(&dc);
+    wc_FreeDer(&der);
+    return 0;
+}
+
 static int rdn_is(const char* p, int len, const char* want)
 {
     return p != NULL && len == (int)strlen(want) &&
@@ -275,7 +334,7 @@ static int enroll_check_subject_rdns(const WolfCertServerCfg* client_cfg)
 
     WolfCertCertMeta meta = {
         .subject_dn = "CN=device-rdn,O=Acme,OU=Devices,C=US,ST=Washington,"
-                      "L=Seattle,SN=Doe,"
+                      "L=Seattle,street=1 Pike Place,SN=Doe,"
                       "emailAddress=jane@example.com,serialNumber=SRL-42,"
                       "UID=factory-1,postalCode=98109"
 #ifdef WOLFSSL_CERT_EXT
@@ -309,6 +368,7 @@ static int enroll_check_subject_rdns(const WolfCertServerCfg* client_cfg)
     REQUIRE(rdn_is(dc.subjectSND, dc.subjectSNDLen, "SRL-42"));
     REQUIRE(rdn_is(dc.subjectUID, dc.subjectUIDLen, "factory-1"));
     REQUIRE(rdn_is(dc.subjectPC,  dc.subjectPCLen,  "98109"));
+    REQUIRE(rdn_is(dc.subjectStreet, dc.subjectStreetLen, "1 Pike Place"));
 #ifdef WOLFSSL_CERT_EXT
     REQUIRE(rdn_is(dc.subjectBC,  dc.subjectBCLen,  "Manufacturing"));
 #endif
@@ -456,6 +516,8 @@ int main(void)
 
     /* Full subject-RDN round-trip guard. */
     if (enroll_givenname_dropped(&client_cfg))
+        return 1;
+    if (enroll_preserves_string_encoding(&client_cfg))
         return 1;
     if (enroll_check_subject_rdns(&client_cfg))
         return 1;

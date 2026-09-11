@@ -125,6 +125,7 @@ test_smoke_LDADD    = libwolfcert.la $(WOLFSSL_LIBS)
 test_keygen_SOURCES = tests/unit/test_keygen.c
 test_keygen_LDADD   = libwolfcert.la $(WOLFSSL_LIBS)
 test_csr_SOURCES    = tests/unit/test_csr.c
+test_csr_CPPFLAGS = $(AM_CPPFLAGS) -I$(top_srcdir)/src
 test_csr_LDADD      = libwolfcert.la $(WOLFSSL_LIBS)
 test_store_SOURCES  = tests/unit/test_store.c
 test_store_LDADD    = libwolfcert.la $(WOLFSSL_LIBS)

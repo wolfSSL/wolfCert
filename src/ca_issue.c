@@ -695,14 +695,56 @@ static int flatten_csr_san(DecodedCert* dc, Cert* nc, void* heap)
     return WOLFCERT_OK;
 }
 
+/* Truncating would issue a certificate stating a subject the CSR did not ask
+ * for, so an over-long RDN is refused instead. */
 #define COPY_SUBJ(field, dst)                                                 \
-    do {                                                                     \
-        if (dc.field != NULL && dc.field##Len > 0) {                           \
-            size_t n = (size_t)dc.field##Len < CTC_NAME_SIZE - 1              \
-                       ? (size_t)dc.field##Len : CTC_NAME_SIZE - 1;           \
-            memcpy(dst, dc.field, n); dst[n] = '\0';                          \
-        }                                                                    \
+    do {                                                                      \
+        if (dc->field != NULL && dc->field##Len > 0) {                        \
+            if ((size_t)dc->field##Len >= sizeof(dst))                        \
+                return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "ca",               \
+                    "CSR subject %s is %d bytes, limit %d", #field,           \
+                    dc->field##Len, (int)sizeof(dst) - 1);                    \
+            memcpy(dst, dc->field, (size_t)dc->field##Len);                   \
+            dst[dc->field##Len] = '\0';                                       \
+        }                                                                     \
     } while (0)
+
+#define COPY_SUBJ_E(field, dst, encdst)                                       \
+    do {                                                                      \
+        COPY_SUBJ(field, dst);                                                \
+        if (dc->field != NULL && dc->field##Len > 0)                          \
+            encdst = dc->field##Enc;                                          \
+    } while (0)
+
+/* wolfSSL has no API to carry a decoded subject into a Cert, so it is rebuilt
+ * RDN by RDN and a component with no copy here is dropped without an error. */
+WOLFCERT_TEST_VIS int wolfcert_copy_csr_subject(const DecodedCert* dc, Cert* nc)
+{
+    COPY_SUBJ_E(subjectCN,     nc->subject.commonName, nc->subject.commonNameEnc);
+    COPY_SUBJ_E(subjectO,      nc->subject.org,        nc->subject.orgEnc);
+    COPY_SUBJ_E(subjectOU,     nc->subject.unit,       nc->subject.unitEnc);
+    COPY_SUBJ_E(subjectC,      nc->subject.country,    nc->subject.countryEnc);
+    COPY_SUBJ_E(subjectST,     nc->subject.state,      nc->subject.stateEnc);
+    COPY_SUBJ_E(subjectL,      nc->subject.locality,   nc->subject.localityEnc);
+    COPY_SUBJ_E(subjectStreet, nc->subject.street,     nc->subject.streetEnc);
+    COPY_SUBJ_E(subjectSN,     nc->subject.sur,        nc->subject.surEnc);
+    /* wolfSSL's GetRDN() reaches subjectGN only through a table that stops
+     * short of ASN_GIVEN_NAME, so this copy has nothing to read yet. */
+    COPY_SUBJ_E(subjectGN,     nc->subject.givenName,  nc->subject.givenNameEnc);
+    COPY_SUBJ(subjectEmail,    nc->subject.email);
+    COPY_SUBJ_E(subjectSND,    nc->subject.serialDev,  nc->subject.serialDevEnc);
+    COPY_SUBJ_E(subjectUID,    nc->subject.userId,     nc->subject.userIdEnc);
+    COPY_SUBJ_E(subjectPC,     nc->subject.postalCode, nc->subject.postalCodeEnc);
+#ifdef WOLFSSL_CERT_EXT
+    COPY_SUBJ_E(subjectBC,     nc->subject.busCat,     nc->subject.busCatEnc);
+    /* No subjectJC/subjectJS: wolfSSL decodes the jurisdiction RDNs but its
+     * generator has no encoder entry for them, so a copy would never emit. */
+#endif
+    return WOLFCERT_OK;
+}
+
+#undef COPY_SUBJ_E
+#undef COPY_SUBJ
 
 int wolfcert_ca_issue(WolfCertCa* ca,
                       const uint8_t* csr_der, size_t csr_len,
@@ -748,25 +790,9 @@ int wolfcert_ca_issue(WolfCertCa* ca,
     if (rc == 0) {
         wc_InitCert_ex(nc, heap, WOLFCERT_DEVID_SOFTWARE);
 
-        COPY_SUBJ(subjectCN,    nc->subject.commonName);
-        COPY_SUBJ(subjectO,     nc->subject.org);
-        COPY_SUBJ(subjectOU,    nc->subject.unit);
-        COPY_SUBJ(subjectC,     nc->subject.country);
-        COPY_SUBJ(subjectST,    nc->subject.state);
-        COPY_SUBJ(subjectL,     nc->subject.locality);
-        COPY_SUBJ(subjectSN,    nc->subject.sur);
-        /* wolfSSL only stores subject ids up to ASN_USER_ID, so givenName
-         * never arrives; copy it anyway for when that gap closes. */
-        COPY_SUBJ(subjectGN,    nc->subject.givenName);
-        COPY_SUBJ(subjectEmail, nc->subject.email);
-        COPY_SUBJ(subjectSND,   nc->subject.serialDev);
-        COPY_SUBJ(subjectUID,   nc->subject.userId);
-        COPY_SUBJ(subjectPC,    nc->subject.postalCode);
-#ifdef WOLFSSL_CERT_EXT
-        COPY_SUBJ(subjectBC,    nc->subject.busCat);
-#endif
-
-        if (wc_SetIssuerBuffer(nc, ca->cert_der, (int)ca->cert_der_len) != 0)
+        rc = wolfcert_copy_csr_subject(&dc, nc);
+        if (rc == WOLFCERT_OK &&
+                wc_SetIssuerBuffer(nc, ca->cert_der, (int)ca->cert_der_len) != 0)
             rc = WOLFCERT_ERR_CRYPTO;
     }
 

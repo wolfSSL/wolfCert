@@ -40,6 +40,7 @@
 #if defined(HAVE_GETPID) && !defined(WOLFSSL_NO_GETPID)
     #include <sys/types.h>
 #endif
+#include <wolfssl/wolfcrypt/asn.h>
 #include <wolfssl/wolfcrypt/asn_public.h>
 #include <wolfssl/wolfcrypt/ecc.h>
 #include <wolfssl/wolfcrypt/rsa.h>
@@ -159,6 +160,8 @@ WOLFCERT_TEST_VIS int  wolfcert_ca_load(WolfCertCa* ca, WolfCertStoreOps* store,
                                         void* heap);
 int  wolfcert_ca_save(const WolfCertCa* ca, WolfCertStoreOps* store);
 WOLFCERT_TEST_VIS void wolfcert_ca_free(WolfCertCa* ca);
+/* Rebuild an issued certificate's subject from a decoded CSR. */
+WOLFCERT_TEST_VIS int  wolfcert_copy_csr_subject(const DecodedCert* dc, Cert* nc);
 WOLFCERT_TEST_VIS int  wolfcert_ca_issue(WolfCertCa* ca, const uint8_t* csr_der,
                                          size_t csr_len, uint8_t** out_cert,
                                          size_t* out_len);

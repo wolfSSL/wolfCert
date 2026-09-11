@@ -51,21 +51,35 @@
 #define WOLFCERT_SERVER_POLL_MS 200
 #endif
 
+/* A timeout armed on the accepted connection surfaces as WANT_READ or
+ * WANT_WRITE depending on which direction stalled, and either is resumable. */
+static int tls_want_io(WOLFSSL* ssl, int ret)
+{
+    int err = wolfSSL_get_error(ssl, ret);
+
+    return err == WOLFSSL_ERROR_WANT_READ || err == WOLFSSL_ERROR_WANT_WRITE;
+}
+
 ssize_t wolfcert_io_recv(WolfCertServer* srv, int fd, void* buf, size_t len)
 {
     ssize_t r;
 
+    /* A trickling peer never times out, so the loops below never see this. */
+    if (srv != NULL && WOLFSSL_ATOMIC_LOAD(srv->stopping))
+        return -1;
+
     /* A connection the accept loop armed carries a receive timeout, so its
-     * expiry is a retry rather than an error: wolfSSL reports it as WANT_READ,
+     * expiry is a retry rather than an error: wolfSSL reports it as a want,
      * a raw socket as EAGAIN. Retrying stops once shutdown is requested. */
     if (srv != NULL && srv->tls_current != NULL) {
         int tr;
 
+        /* wolfSSL_read() wants a write whenever the record layer must send
+         * first, as post-handshake auth and a key update both do. */
         do {
             tr = wolfSSL_read(srv->tls_current, buf, (int)len);
         }
-        while (tr <= 0 &&
-               wolfSSL_get_error(srv->tls_current, tr) == WOLFSSL_ERROR_WANT_READ &&
+        while (tr <= 0 && tls_want_io(srv->tls_current, tr) &&
                !WOLFSSL_ATOMIC_LOAD(srv->stopping));
 
         return tr <= 0 ? -1 : (ssize_t)tr;
@@ -86,6 +100,9 @@ ssize_t wolfcert_io_send(WolfCertServer* srv, int fd, const void* buf, size_t le
 {
     ssize_t r;
 
+    if (srv != NULL && WOLFSSL_ATOMIC_LOAD(srv->stopping))
+        return -1;
+
     /* Mirrors wolfcert_io_recv: the send timeout bounds a peer that stops
      * reading, and its expiry is a retry rather than an error. Callers write
      * through send_all(), so a short write is already handled. */
@@ -95,8 +112,7 @@ ssize_t wolfcert_io_send(WolfCertServer* srv, int fd, const void* buf, size_t le
         do {
             tr = wolfSSL_write(srv->tls_current, buf, (int)len);
         }
-        while (tr <= 0 &&
-               wolfSSL_get_error(srv->tls_current, tr) == WOLFSSL_ERROR_WANT_WRITE &&
+        while (tr <= 0 && tls_want_io(srv->tls_current, tr) &&
                !WOLFSSL_ATOMIC_LOAD(srv->stopping));
 
         return tr <= 0 ? -1 : (ssize_t)tr;
@@ -411,14 +427,12 @@ int wolfcert_server_run(WolfCertServer* srv)
             if (ssl != NULL) {
                 wolfSSL_set_fd(ssl, cs);
 
-                /* A timed-out handshake read surfaces as WANT_READ, which
-                 * is resumable: keep going until it completes, genuinely
-                 * fails, or shutdown is requested. */
+                /* A stalled flight is resumable either way round: a large
+                 * chain blocks on the send timeout, not the receive one. */
                 do {
                     ret = wolfSSL_accept(ssl);
                 }
-                while (ret != WOLFSSL_SUCCESS &&
-                       wolfSSL_get_error(ssl, ret) == WOLFSSL_ERROR_WANT_READ &&
+                while (ret != WOLFSSL_SUCCESS && tls_want_io(ssl, ret) &&
                        !WOLFSSL_ATOMIC_LOAD(srv->stopping));
 
                 if (ret == WOLFSSL_SUCCESS) {

@@ -32,6 +32,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 #define REQUIRE(cond) \
@@ -463,8 +464,406 @@ static int test_request_transfer_encoding(void)
     return 0;
 }
 
+/* Read one request head off the connection. */
+static int srv_recv_request(int cs)
+{
+    char buf[4096];
+    size_t n = 0;
+
+    while (n < sizeof(buf) - 1) {
+        ssize_t r = recv(cs, buf + n, sizeof(buf) - 1 - n, 0);
+        if (r <= 0)
+            return -1;
+        n += (size_t)r;
+        buf[n] = '\0';
+        if (strstr(buf, "\r\n\r\n") != NULL)
+            return 0;
+    }
+
+    return -1;
+}
+
+/* Bound a server-side recv so a client that never sends the next request
+ * fails the test with a REQUIRE instead of deadlocking it. */
+static void srv_recv_timeout(int cs, int secs)
+{
+    struct timeval tv = { .tv_sec = secs, .tv_usec = 0 };
+
+    setsockopt(cs, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+}
+
+/* One fixed chunked body, sent whole after the headers, then close. */
+struct chunk_srv { int listen_fd; const char* body; const char* tail; };
+
+static void* srv_chunk_body_thread(void* arg)
+{
+    struct chunk_srv* cs_ctx = (struct chunk_srv*)arg;
+    int cs = accept(cs_ctx->listen_fd, NULL, NULL);
+
+    close(cs_ctx->listen_fd);
+    if (cs < 0)
+        return NULL;
+
+    if (srv_recv_request(cs) == 0) {
+        const char* head =
+            "HTTP/1.1 200 OK\r\n"
+            "Transfer-Encoding: chunked\r\n"
+            "Connection: close\r\n"
+            "\r\n";
+
+        send(cs, head, strlen(head), 0);
+        send(cs, cs_ctx->body, strlen(cs_ctx->body), 0);
+        if (cs_ctx->tail != NULL) {
+            usleep(50000);
+            send(cs, cs_ctx->tail, strlen(cs_ctx->tail), 0);
+        }
+    }
+
+    shutdown(cs, SHUT_WR);
+    close(cs);
+    return NULL;
+}
+
+/* Drive one chunked body through the blocking client and check what it
+ * decodes to. A non-NULL tail follows body as a second segment; a NULL
+ * want_body expects no body at all. */
+static int chunk_body_case(const char* body, const char* tail, int want_rc,
+                           const char* want_body, size_t want_len)
+{
+    struct chunk_srv ctx = { 0 };
+    pthread_t tid;
+    int port = 0;
+    char url[128];
+    WolfCertHttpResponse resp = { 0 };
+
+    ctx.listen_fd = listen_loopback(&port);
+    REQUIRE(ctx.listen_fd >= 0);
+    ctx.body = body;
+    ctx.tail = tail;
+    REQUIRE(pthread_create(&tid, NULL, srv_chunk_body_thread, &ctx) == 0);
+
+    snprintf(url, sizeof(url), "http://127.0.0.1:%d/test", port);
+    WolfCertHttpRequest req = { .method = "GET", .url = url };
+
+    REQUIRE(wolfcert_http_request(&req, &resp) == want_rc);
+    REQUIRE(resp.body_len == want_len);
+    if (want_body != NULL)
+        REQUIRE(memcmp(resp.body, want_body, want_len) == 0);
+    else
+        REQUIRE(resp.body == NULL);
+
+    wolfcert_http_response_free(&resp);
+    pthread_join(tid, NULL);
+    return 0;
+}
+
+/* A chunk payload that is literally the bytes "0\r\n\r\n", delivered
+ * before the chunks that follow it. */
+static int test_chunked_terminator_in_payload(void)
+{
+    return chunk_body_case("5\r\n0\r\n\r\n", "\r\n4\r\nrest\r\n0\r\n\r\n",
+                           WOLFCERT_OK, "0\r\n\r\nrest", 9);
+}
+
+/* A "10" size line whose payload opens with CRLF, so the wire carries
+ * '1','0','\r','\n','\r','\n' across the size-line boundary. */
+static int test_chunked_size_line_ends_in_zero(void)
+{
+    return chunk_body_case("10\r\n\r\nAAAAAA", "AAAAAAAA\r\n0\r\n\r\n",
+                           WOLFCERT_OK, "\r\nAAAAAAAAAAAAAA", 16);
+}
+
+/* A trailer field after the last chunk, so "0\r\n" is never followed by
+ * a second CRLF. */
+static int test_chunked_trailer_fields(void)
+{
+    return chunk_body_case("5\r\nhello\r\n0\r\nX-Checksum: abc\r\n\r\n", NULL,
+                           WOLFCERT_OK, "hello", 5);
+}
+
+/* The peer closing part-way through a chunk is a truncated response, not
+ * a complete one. */
+static int test_chunked_truncated_close(void)
+{
+    return chunk_body_case("5\r\nhel", NULL, WOLFCERT_ERR_IO, NULL, 0);
+}
+
+/* A body of nothing but the last chunk decodes to no body at all. */
+static int test_chunked_empty_body(void)
+{
+    return chunk_body_case("0\r\n\r\n", NULL, WOLFCERT_OK, NULL, 0);
+}
+
+/* A trailer line with no field name is malformed framing, even though
+ * the trailer itself is discarded. */
+static int test_chunked_trailer_no_colon(void)
+{
+    return chunk_body_case("5\r\nhello\r\n0\r\ngarbage\r\n\r\n", NULL,
+                           WOLFCERT_ERR_PROTOCOL, NULL, 0);
+}
+
+/* An empty field name is malformed too. */
+static int test_chunked_trailer_empty_name(void)
+{
+    return chunk_body_case("5\r\nhello\r\n0\r\n: v\r\n\r\n", NULL,
+                           WOLFCERT_ERR_PROTOCOL, NULL, 0);
+}
+
+/* Several well-formed trailer fields are accepted. */
+static int test_chunked_trailer_multiple(void)
+{
+    return chunk_body_case("5\r\nhello\r\n0\r\nX-A: 1\r\nX-B: 2\r\n\r\n", NULL,
+                           WOLFCERT_OK, "hello", 5);
+}
+
+/* A leading colon leaves no field name, even when a later colon on the
+ * same line would look like one. */
+static int test_chunked_trailer_leading_colon(void)
+{
+    return chunk_body_case("5\r\nhello\r\n0\r\n:a:b\r\n\r\n", NULL,
+                           WOLFCERT_ERR_PROTOCOL, NULL, 0);
+}
+
+/* RFC 9112 section 7.1 allows either case, so uppercase decodes too. */
+static int test_chunked_uppercase_hex_size(void)
+{
+    return chunk_body_case("A\r\n0123456789\r\n0\r\n\r\n", NULL,
+                           WOLFCERT_OK, "0123456789", 10);
+}
+
+/* RFC 9112 section 7.1.1: a chunk-size line may carry extensions after a
+ * ';', and a recipient must ignore ones it does not recognize. */
+static int test_chunked_extension(void)
+{
+    return chunk_body_case("4;name=value\r\nbody\r\n0\r\n\r\n", NULL,
+                           WOLFCERT_OK, "body", 4);
+}
+
+/* A non-hex chunk-size line is a framing error, not a zero-length chunk
+ * ending the body early. */
+static int test_chunked_bad_hex_size(void)
+{
+    return chunk_body_case("4\r\nbody\r\nzz\r\nxx\r\n0\r\n\r\n", NULL,
+                           WOLFCERT_ERR_PROTOCOL, NULL, 0);
+}
+
+/* A chunk-size line with no digits at all is a framing error. */
+static int test_chunked_empty_size(void)
+{
+    return chunk_body_case("\r\n0\r\n\r\n", NULL,
+                           WOLFCERT_ERR_PROTOCOL, NULL, 0);
+}
+
+/* RFC 9112 section 7.1 puts no bound on the digit count of a chunk-size
+ * line, so a zero-padded one decodes like any other. */
+static int test_chunked_padded_size(void)
+{
+    return chunk_body_case("000000004\r\nbody\r\n0\r\n\r\n", NULL,
+                           WOLFCERT_OK, "body", 4);
+}
+
+/* Two trailer-terminated responses on one keep-alive connection, with
+ * the first response's trailer split across two writes. */
+struct trailer_split_srv { int listen_fd; const char* seg1; const char* seg2; };
+
+static void* srv_trailer_split_thread(void* arg)
+{
+    struct trailer_split_srv* ctx = (struct trailer_split_srv*)arg;
+    int cs = accept(ctx->listen_fd, NULL, NULL);
+    const char* second =
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Length: 6\r\n"
+        "Connection: keep-alive\r\n"
+        "\r\n"
+        "second";
+
+    close(ctx->listen_fd);
+    if (cs < 0)
+        return NULL;
+
+    srv_recv_timeout(cs, 2);
+    if (srv_recv_request(cs) == 0) {
+        send(cs, ctx->seg1, strlen(ctx->seg1), 0);
+        usleep(50000);
+        send(cs, ctx->seg2, strlen(ctx->seg2), 0);
+
+        if (srv_recv_request(cs) == 0)
+            send(cs, second, strlen(second), 0);
+    }
+
+    shutdown(cs, SHUT_WR);
+    close(cs);
+    return NULL;
+}
+
+/* A reader that calls the body complete before the whole trailer has
+ * arrived leaves the rest on the socket, and the second request reads
+ * it as a status line. */
+static int trailer_split_case(const char* seg1, const char* seg2)
+{
+    struct trailer_split_srv ctx = { 0 };
+    pthread_t tid;
+    int port = 0;
+    char base[128];
+    char url[160];
+    WolfCertHttpSession* s = NULL;
+    WolfCertHttpResponse resp1 = { 0 };
+    WolfCertHttpResponse resp2 = { 0 };
+
+    ctx.listen_fd = listen_loopback(&port);
+    REQUIRE(ctx.listen_fd >= 0);
+    ctx.seg1 = seg1;
+    ctx.seg2 = seg2;
+    REQUIRE(pthread_create(&tid, NULL, srv_trailer_split_thread, &ctx) == 0);
+
+    snprintf(base, sizeof(base), "http://127.0.0.1:%d", port);
+    snprintf(url, sizeof(url), "http://127.0.0.1:%d/test", port);
+
+    WolfCertHttpSessionCfg cfg = { .base_url = base };
+    REQUIRE(wolfcert_http_session_open(&cfg, &s) == WOLFCERT_OK);
+
+    WolfCertHttpRequest req = { .method = "GET", .url = url };
+
+    REQUIRE(wolfcert_http_session_request(s, &req, &resp1) == WOLFCERT_OK);
+    REQUIRE(resp1.body_len == 5);
+    REQUIRE(memcmp(resp1.body, "hello", 5) == 0);
+    wolfcert_http_response_free(&resp1);
+
+    REQUIRE(wolfcert_http_session_request(s, &req, &resp2) == WOLFCERT_OK);
+    REQUIRE(resp2.status_code == 200);
+    REQUIRE(resp2.body_len == 6);
+    REQUIRE(memcmp(resp2.body, "second", 6) == 0);
+    wolfcert_http_response_free(&resp2);
+
+    wolfcert_http_session_close(s);
+    pthread_join(tid, NULL);
+    return 0;
+}
+
+#define WC_CHUNK_HEAD \
+    "HTTP/1.1 200 OK\r\n" \
+    "Transfer-Encoding: chunked\r\n" \
+    "Connection: keep-alive\r\n" \
+    "\r\n" \
+    "5\r\nhello\r\n0\r\n"
+
+/* A whole trailer-terminated response on a keep-alive connection: a
+ * reader waiting for a bare "0\r\n\r\n" never finishes it. */
+static int test_chunked_trailer_keepalive(void)
+{
+    return trailer_split_case(WC_CHUNK_HEAD "X-T: 1\r\n\r\n", "");
+}
+
+/* The trailer field line is cut mid-name. */
+static int test_chunked_trailer_split_field(void)
+{
+    return trailer_split_case(WC_CHUNK_HEAD "X-Che", "cksum: abc\r\n\r\n");
+}
+
+/* The CRLF that closes the trailer section arrives on its own. */
+static int test_chunked_trailer_split_terminator(void)
+{
+    return trailer_split_case(WC_CHUNK_HEAD "X-Checksum: abc\r\n", "\r\n");
+}
+
+/* A segment boundary can fall inside the chunk-size line itself, before
+ * its CRLF has arrived. */
+static int test_chunked_size_line_split(void)
+{
+    return chunk_body_case("1", "0\r\nAAAAAAAAAAAAAAAA\r\n0\r\n\r\n",
+                           WOLFCERT_OK, "AAAAAAAAAAAAAAAA", 16);
+}
+
+/* RFC 9112 section 7.1 allows either case in a chunk-size line. */
+static int test_chunked_lowercase_hex_size(void)
+{
+    return chunk_body_case("a\r\n0123456789\r\n0\r\n\r\n", NULL,
+                           WOLFCERT_OK, "0123456789", 10);
+}
+
+/* A stray byte where a chunk's closing CRLF belongs is a framing error */
+static int test_chunked_bad_chunk_delimiter(void)
+{
+    return chunk_body_case("5\r\nhelloXX5\r\nAAA", NULL,
+                           WOLFCERT_ERR_PROTOCOL, NULL, 0);
+}
+
+/* A segment can end right after a chunk-size line, leaving no payload
+ * and no room for the CRLF that follows it. */
+static int test_chunked_size_line_at_end(void)
+{
+    return chunk_body_case("5\r\n", "hello\r\n0\r\n\r\n",
+                           WOLFCERT_OK, "hello", 5);
+}
+
+/* A well-framed chunked body over max_response_bytes must be refused
+ * rather than buffered. */
+static int oversize_chunk_case(const char* body)
+{
+    struct chunk_srv ctx = { 0 };
+    pthread_t tid;
+    int port = 0;
+    char url[128];
+    WolfCertHttpResponse resp = { 0 };
+
+    ctx.listen_fd = listen_loopback(&port);
+    REQUIRE(ctx.listen_fd >= 0);
+    ctx.body = body;
+    ctx.tail = NULL;
+    REQUIRE(pthread_create(&tid, NULL, srv_chunk_body_thread, &ctx) == 0);
+
+    snprintf(url, sizeof(url), "http://127.0.0.1:%d/test", port);
+    WolfCertHttpRequest req = {
+        .method = "GET", .url = url,
+        .max_response_bytes = 1024,
+    };
+
+    REQUIRE(wolfcert_http_request(&req, &resp) == WOLFCERT_ERR_PROTOCOL);
+    REQUIRE(resp.body == NULL);
+    REQUIRE(resp.body_len == 0);
+    wolfcert_http_response_free(&resp);
+    pthread_join(tid, NULL);
+    return 0;
+}
+
+/* One chunk whose declared size is over the limit. */
+static int test_chunked_over_max_single(void)
+{
+    char body[3072];
+    size_t n = (size_t)snprintf(body, sizeof(body), "800\r\n");
+
+    memset(body + n, 'A', 2048);
+    n += 2048;
+    memcpy(body + n, "\r\n0\r\n\r\n", 8);
+
+    return oversize_chunk_case(body);
+}
+
+/* Chunks each under the limit that add up to more than it. */
+static int test_chunked_over_max_accumulated(void)
+{
+    char body[3072];
+    size_t n = 0;
+    int i;
+
+    for (i = 0; i < 4; ++i) {
+        n += (size_t)snprintf(body + n, sizeof(body) - n, "200\r\n");
+        memset(body + n, 'B', 512);
+        n += 512;
+        memcpy(body + n, "\r\n", 2);
+        n += 2;
+    }
+    memcpy(body + n, "0\r\n\r\n", 6);
+
+    return oversize_chunk_case(body);
+}
+
 int main(void)
 {
+    /* A framing bug in this file's paths shows up as a hang, and
+     * `make check` applies no per-test timeout. */
+    alarm(25);
+
     REQUIRE(wolfcert_init(NULL) == WOLFCERT_OK);
     if (test_url_parser())
         return 1;
@@ -477,6 +876,52 @@ int main(void)
     if (test_chunked_size_overflow())
         return 1;
     if (test_request_transfer_encoding())
+        return 1;
+    if (test_chunked_terminator_in_payload())
+        return 1;
+    if (test_chunked_size_line_ends_in_zero())
+        return 1;
+    if (test_chunked_trailer_fields())
+        return 1;
+    if (test_chunked_trailer_keepalive())
+        return 1;
+    if (test_chunked_extension())
+        return 1;
+    if (test_chunked_bad_hex_size())
+        return 1;
+    if (test_chunked_empty_size())
+        return 1;
+    if (test_chunked_padded_size())
+        return 1;
+    if (test_chunked_trailer_split_field())
+        return 1;
+    if (test_chunked_trailer_split_terminator())
+        return 1;
+    if (test_chunked_size_line_split())
+        return 1;
+    if (test_chunked_lowercase_hex_size())
+        return 1;
+    if (test_chunked_bad_chunk_delimiter())
+        return 1;
+    if (test_chunked_size_line_at_end())
+        return 1;
+    if (test_chunked_over_max_single())
+        return 1;
+    if (test_chunked_over_max_accumulated())
+        return 1;
+    if (test_chunked_truncated_close())
+        return 1;
+    if (test_chunked_empty_body())
+        return 1;
+    if (test_chunked_trailer_no_colon())
+        return 1;
+    if (test_chunked_trailer_empty_name())
+        return 1;
+    if (test_chunked_trailer_multiple())
+        return 1;
+    if (test_chunked_trailer_leading_colon())
+        return 1;
+    if (test_chunked_uppercase_hex_size())
         return 1;
     wolfcert_cleanup();
     printf("OK\n");

@@ -91,11 +91,14 @@ static int gen_self_signed_cert(WolfCertCa* ca)
     snprintf(cert->subject.country, sizeof(cert->subject.country), "%s", "US");
 
     cert->isCA       = 1;
+    /* RFC 5280 section 4.2.1.9 MUST: a CA whose key validates certificate
+     * signatures marks basicConstraints critical. */
+    cert->basicConstCrit = 1;
     cert->selfSigned = 1;
     cert->daysValid  = 3650;
     cert->sigType    = alg->ctc_sig_default;
 
-    /* RFC 5280 section 4.2.1.3: this key signs certificates and SCEP CertReps,
+    /* RFC 8894 section 2.1.2: this key signs certificates and SCEP CertReps,
      * and on RSA it also decrypts the pkcsPKIEnvelope. */
     const char* usage = ca->type == WOLFCERT_KEY_RSA
                         ? "keyCertSign,cRLSign,digitalSignature,keyEncipherment"

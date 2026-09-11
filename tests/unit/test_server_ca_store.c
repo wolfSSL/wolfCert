@@ -611,9 +611,10 @@ static int test_mismatched_ca_rejected(void)
     return 0;
 }
 
-/* RFC 5280 section 4.2.1.3: the CA signs certificates and, for SCEP, both
+/* RFC 8894 section 2.1.2 MUST: the CA signs certificates and, for SCEP, both
  * signs CertReps and decrypts the pkcsPKIEnvelope, so its certificate must
- * assert those usages rather than omitting the extension. */
+ * assert those usages rather than omitting the extension. RFC 5280 section
+ * 4.2.1.9 MUST: basicConstraints is present and critical on such a CA. */
 static int ca_key_usage_set(WolfCertKeyType type)
 {
     WolfCertStoreOps* store = wolfcert_store_memory_open(NULL);
@@ -630,7 +631,10 @@ static int ca_key_usage_set(WolfCertKeyType type)
     wc_InitDecodedCert(&dc, cert.data, (word32)cert.len, NULL);
     REQUIRE(wc_ParseCert(&dc, CERT_TYPE, NO_VERIFY, NULL) == 0);
 
-    if (dc.extKeyUsageSet == 0 ||
+    if (dc.extBasicConstSet == 0 || dc.extBasicConstCrit == 0 || dc.isCA == 0) {
+        rc = 1;
+    }
+    else if (dc.extKeyUsageSet == 0 ||
             (dc.extKeyUsage & KEYUSE_KEY_CERT_SIGN) == 0 ||
             (dc.extKeyUsage & KEYUSE_CRL_SIGN) == 0 ||
             (dc.extKeyUsage & KEYUSE_DIGITAL_SIG) == 0) {

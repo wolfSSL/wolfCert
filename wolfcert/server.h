@@ -40,7 +40,10 @@ typedef struct {
     uint16_t         bind_port;
     WolfCertStoreOps* ca_store;          /* optional: persist the local CA
                                             across runs; NULL = regen on
-                                            each start */
+                                            each start. A store that fails
+                                            to read or write fails the
+                                            start rather than falling back
+                                            to an ephemeral CA. */
     const char*      challenge_password; /* SCEP challengePassword to accept; NULL disables */
     const char*      http_basic_user;    /* EST HTTP Basic credentials to accept; NULL disables */
     const char*      http_basic_pass;
@@ -49,10 +52,16 @@ typedef struct {
     WolfCertKeyType  ca_key_type;        /* WOLFCERT_KEY_RSA default */
     int              ca_key_param;       /* 2048 default for RSA, 256 for ECC */
 
-    /* Optional TLS. If tls_cert_pem + tls_key_pem are set, the server
+    /* TLS identity. If tls_cert_pem + tls_key_pem are set, the server
      * terminates TLS on every accepted connection before dispatching to
      * the protocol handler. tls_client_ca_pem, when set, enables mutual
      * TLS (WOLFSSL_VERIFY_PEER) against the supplied client-CA bundle.
+     *
+     * Mandatory for WOLFCERT_PROTO_EST, which RFC 7030 section 3.1 defines
+     * over TLS only: wolfcert_server_start() returns WOLFCERT_ERR_TLS
+     * without them.
+     * Optional for WOLFCERT_PROTO_SCEP, which authenticates at the
+     * pkiMessage layer and may be served over cleartext HTTP.
      *
      * All three point at caller-owned PEM bytes; wolfCert copies what it
      * needs during wolfcert_server_start() and does not retain the

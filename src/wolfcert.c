@@ -59,3 +59,24 @@ void wolfcert_buffer_free(WolfCertBuffer* buf)
     buf->len  = 0;
     buf->heap = NULL;
 }
+
+#define WOLFCERT_FORCEZERO_CHUNK 0x10000000U
+
+void wolfcert_buffer_free_secure(WolfCertBuffer* buf)
+{
+    if (buf != NULL && buf->data != NULL && buf->len > 0) {
+        uint8_t* p    = buf->data;
+        size_t   left = buf->len;
+
+        while (left > 0) {
+            word32 chunk = (left > WOLFCERT_FORCEZERO_CHUNK)
+                         ? WOLFCERT_FORCEZERO_CHUNK : (word32)left;
+
+            wc_ForceZero(p, chunk);
+            p    += chunk;
+            left -= chunk;
+        }
+    }
+
+    wolfcert_buffer_free(buf);
+}

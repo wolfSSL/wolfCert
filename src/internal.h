@@ -40,6 +40,7 @@
 #if defined(HAVE_GETPID) && !defined(WOLFSSL_NO_GETPID)
     #include <sys/types.h>
 #endif
+#include <wolfssl/wolfcrypt/asn.h>
 #include <wolfssl/wolfcrypt/asn_public.h>
 #include <wolfssl/wolfcrypt/ecc.h>
 #include <wolfssl/wolfcrypt/rsa.h>
@@ -73,6 +74,13 @@
 #endif
 #ifndef WOLFCERT_HTTP_AUTH_BUF_SZ
 #define WOLFCERT_HTTP_AUTH_BUF_SZ 512   /* client Basic-auth header line      */
+#endif
+
+/* Response allowance the client readers add on top of the caller's body cap,
+ * bounding the status line plus header block. Distinct from the read
+ * granularity: a read is clamped to whatever of this allowance is left. */
+#ifndef WOLFCERT_HTTP_HEADER_BUDGET
+#define WOLFCERT_HTTP_HEADER_BUDGET 8192 /* client response header allowance   */
 #endif
 
 /* Heap headroom added on top of (envelope + signer cert) when encoding a SCEP
@@ -148,11 +156,18 @@ typedef struct {
 } WolfCertCa;
 
 int  wolfcert_ca_generate(WolfCertCa* ca, WolfCertKeyType type, int param, void* heap);
-int  wolfcert_ca_load(WolfCertCa* ca, WolfCertStoreOps* store, void* heap);
+WOLFCERT_TEST_VIS int  wolfcert_ca_load(WolfCertCa* ca, WolfCertStoreOps* store,
+                                        void* heap);
 int  wolfcert_ca_save(const WolfCertCa* ca, WolfCertStoreOps* store);
-void wolfcert_ca_free(WolfCertCa* ca);
-int  wolfcert_ca_issue (WolfCertCa* ca, const uint8_t* csr_der, size_t csr_len,
-                        uint8_t** out_cert, size_t* out_len);
+WOLFCERT_TEST_VIS void wolfcert_ca_free(WolfCertCa* ca);
+/* wolfcert_buffer_free() after wiping: for a buffer that held key material. */
+void wolfcert_buffer_free_secure(WolfCertBuffer* buf);
+
+/* Rebuild an issued certificate's subject from a decoded CSR. */
+WOLFCERT_TEST_VIS int  wolfcert_copy_csr_subject(const DecodedCert* dc, Cert* nc);
+WOLFCERT_TEST_VIS int  wolfcert_ca_issue(WolfCertCa* ca, const uint8_t* csr_der,
+                                         size_t csr_len, uint8_t** out_cert,
+                                         size_t* out_len);
 
 /* ---- server vtable ------------------------------------------------------ */
 
@@ -197,6 +212,12 @@ struct WolfCertServer {
      * this after serve_fd and breaks out of the keep-alive loop when
      * it's zero. */
     int                     keep_alive;
+    /* Set while the accept loop is serving a connection it armed with
+     * SO_RCVTIMEO/SO_SNDTIMEO. The would-block retries in
+     * wolfcert_io_{recv,send} are bounded only on such a connection: an fd
+     * handed in through wolfcert_server_serve_fd() may be non-blocking and
+     * has no shutdown flag driving it, so retrying there would spin. */
+    int                     poll_timeouts_armed;
     void*                   heap;
 };
 

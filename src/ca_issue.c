@@ -91,9 +91,23 @@ static int gen_self_signed_cert(WolfCertCa* ca)
     snprintf(cert->subject.country, sizeof(cert->subject.country), "%s", "US");
 
     cert->isCA       = 1;
+    /* RFC 5280 section 4.2.1.9 MUST: a CA whose key validates certificate
+     * signatures marks basicConstraints critical. */
+    cert->basicConstCrit = 1;
     cert->selfSigned = 1;
     cert->daysValid  = 3650;
     cert->sigType    = alg->ctc_sig_default;
+
+    /* RFC 8894 section 2.1.2: this key signs certificates and SCEP CertReps,
+     * and on RSA it also decrypts the pkcsPKIEnvelope. */
+    const char* usage = ca->type == WOLFCERT_KEY_RSA
+                        ? "keyCertSign,cRLSign,digitalSignature,keyEncipherment"
+                        : "keyCertSign,cRLSign,digitalSignature";
+    int ku = wc_SetKeyUsage(cert, usage);
+    if (ku != 0) {
+        wc_CertFree(cert);
+        return WOLFCERT_ERR_WC(ku, "ca", "SetKeyUsage");
+    }
 
     WC_RNG rng;
     if (wc_InitRng_ex(&rng, ca->heap, WOLFCERT_DEVID_SOFTWARE) != 0) {
@@ -213,6 +227,48 @@ int wolfcert_ca_generate(WolfCertCa* ca, WolfCertKeyType type, int param, void* 
     return WOLFCERT_OK;
 }
 
+/* Confirm the stored certificate is a CA and carries the public half of the
+ * stored private key. A mismatched pair would otherwise start a server whose
+ * signatures and PKCS#7 decryption do not match the CA it advertises. */
+static int ca_check_stored_pair(const WolfCertKeyAlg* alg, WolfCertKey* key,
+                                const uint8_t* cert_der, size_t cert_len,
+                                void* heap)
+{
+    DecodedCert* dc = (DecodedCert*)WOLFCERT_XMALLOC(sizeof(*dc), heap);
+    if (dc == NULL)
+        return WOLFCERT_ERR_MEMORY;
+
+    wc_InitDecodedCert(dc, cert_der, (word32)cert_len, heap);
+
+    int rc = wc_ParseCert(dc, CERT_TYPE, NO_VERIFY, NULL);
+    if (rc != 0) {
+        rc = WOLFCERT_ERR(WOLFCERT_ERR_PARSE, "ca",
+                          "stored CA certificate does not parse");
+    }
+    else if (!dc->isCA ||
+             (dc->extKeyUsageSet && (dc->extKeyUsage & KEYUSE_KEY_CERT_SIGN) == 0)) {
+        /* Signing with a leaf produces a chain no relying party accepts, and
+         * /cacerts would advertise it as the trust anchor. */
+        rc = WOLFCERT_ERR(WOLFCERT_ERR_PARSE, "ca",
+                          "stored CA certificate is not a CA "
+                          "(basicConstraints/keyUsage)");
+    }
+    else if (dc->keyOID != (word32)alg->key_oid || dc->publicKey == NULL) {
+        rc = WOLFCERT_ERR(WOLFCERT_ERR_PARSE, "ca",
+                          "stored CA certificate and key use different algorithms");
+    }
+    else {
+        rc = alg->pub_check(key, dc->publicKey, dc->pubKeySize);
+        if (rc != WOLFCERT_OK)
+            rc = WOLFCERT_ERR(rc, "ca",
+                              "stored CA certificate does not match the stored key");
+    }
+
+    wc_FreeDecodedCert(dc);
+    WOLFCERT_XFREE(dc, heap);
+    return rc;
+}
+
 int wolfcert_ca_load(WolfCertCa* ca, WolfCertStoreOps* store, void* heap)
 {
     if (ca == NULL || store == NULL)
@@ -224,14 +280,28 @@ int wolfcert_ca_load(WolfCertCa* ca, WolfCertStoreOps* store, void* heap)
     WolfCertBuffer cert_buf = { .heap = heap };
     WolfCertBuffer key_buf  = { .heap = heap };
 
-    int rc = store->read(store->ctx, "ca.cert.der", &cert_buf);
-    if (rc != WOLFCERT_OK)
-        return rc;
+    int cert_rc = store->read(store->ctx, "ca.cert.der", &cert_buf);
+    int key_rc  = store->read(store->ctx, "ca.key.der", &key_buf);
+    int rc;
 
-    rc = store->read(store->ctx, "ca.key.der", &key_buf);
-    if (rc != WOLFCERT_OK) {
+    if (cert_rc != WOLFCERT_OK || key_rc != WOLFCERT_OK) {
         wolfcert_buffer_free(&cert_buf);
-        return rc;
+        wolfcert_buffer_free_secure(&key_buf);
+
+        if (cert_rc == WOLFCERT_ERR_NOT_FOUND && key_rc == WOLFCERT_ERR_NOT_FOUND)
+            return WOLFCERT_ERR_NOT_FOUND;
+
+        /* An absent half is only damage once the other half read back. */
+        if (cert_rc != WOLFCERT_OK && cert_rc != WOLFCERT_ERR_NOT_FOUND)
+            return WOLFCERT_ERR(cert_rc, "ca", "CA store read failed");
+        if (key_rc != WOLFCERT_OK && key_rc != WOLFCERT_ERR_NOT_FOUND)
+            return WOLFCERT_ERR(key_rc, "ca", "CA store read failed");
+
+        /* Half a pair is a damaged store, not an empty one. Reporting
+         * NOT_FOUND here would let the caller mint a CA over the survivor. */
+        return WOLFCERT_ERR(WOLFCERT_ERR_PARSE, "ca",
+            "CA store is incomplete: %s is missing",
+            cert_rc == WOLFCERT_ERR_NOT_FOUND ? "ca.cert.der" : "ca.key.der");
     }
 
     /* Iterate every registered algorithm and see which private-key decoder
@@ -251,6 +321,14 @@ int wolfcert_ca_load(WolfCertCa* ca, WolfCertStoreOps* store, void* heap)
             continue;
 
         if (a->priv_decode(&shim, key_buf.data, (word32)key_buf.len) == WOLFCERT_OK) {
+            rc = ca_check_stored_pair(a, &shim, cert_buf.data, cert_buf.len, heap);
+            if (rc != WOLFCERT_OK) {
+                a->free_(&shim);
+                wolfcert_buffer_free(&cert_buf);
+                wolfcert_buffer_free_secure(&key_buf);
+                return rc;
+            }
+
             ca->type = a->type;
             ca->impl = shim.impl;
             ca->cert_der     = cert_buf.data;
@@ -265,8 +343,9 @@ int wolfcert_ca_load(WolfCertCa* ca, WolfCertStoreOps* store, void* heap)
     }
 
     wolfcert_buffer_free(&cert_buf);
-    wolfcert_buffer_free(&key_buf);
-    return WOLFCERT_ERR_PARSE;
+    wolfcert_buffer_free_secure(&key_buf);
+    return WOLFCERT_ERR(WOLFCERT_ERR_PARSE, "ca",
+        "stored CA key does not decode as any supported algorithm");
 }
 
 int wolfcert_ca_save(const WolfCertCa* ca, WolfCertStoreOps* store)
@@ -278,7 +357,19 @@ int wolfcert_ca_save(const WolfCertCa* ca, WolfCertStoreOps* store)
     if (rc != WOLFCERT_OK)
         return rc;
 
-    return store->write(store->ctx, "ca.key.der", ca->key_der, ca->key_der_len, 1);
+    rc = store->write(store->ctx, "ca.key.der", ca->key_der, ca->key_der_len, 1);
+    if (rc == WOLFCERT_OK)
+        return rc;
+
+    /* A certificate without its key is a damaged store that every later load
+     * rejects, and the vtable has no primitive but remove to undo it. */
+    if (store->remove == NULL ||
+            store->remove(store->ctx, "ca.cert.der") != WOLFCERT_OK)
+        return WOLFCERT_ERR(rc, "ca",
+            "CA key write failed and ca.cert.der could not be rolled back: "
+            "the store is left incomplete and must be cleared before restart");
+
+    return rc;
 }
 
 void wolfcert_ca_free(WolfCertCa* ca)
@@ -597,14 +688,56 @@ static int flatten_csr_san(DecodedCert* dc, Cert* nc, void* heap)
     return WOLFCERT_OK;
 }
 
+/* Truncating would issue a certificate stating a subject the CSR did not ask
+ * for, so an over-long RDN is refused instead. */
 #define COPY_SUBJ(field, dst)                                                 \
-    do {                                                                     \
-        if (dc.field != NULL && dc.field##Len > 0) {                           \
-            size_t n = (size_t)dc.field##Len < CTC_NAME_SIZE - 1              \
-                       ? (size_t)dc.field##Len : CTC_NAME_SIZE - 1;           \
-            memcpy(dst, dc.field, n); dst[n] = '\0';                          \
-        }                                                                    \
+    do {                                                                      \
+        if (dc->field != NULL && dc->field##Len > 0) {                        \
+            if ((size_t)dc->field##Len >= sizeof(dst))                        \
+                return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "ca",               \
+                    "CSR subject %s is %d bytes, limit %d", #field,           \
+                    dc->field##Len, (int)sizeof(dst) - 1);                    \
+            memcpy(dst, dc->field, (size_t)dc->field##Len);                   \
+            dst[dc->field##Len] = '\0';                                       \
+        }                                                                     \
     } while (0)
+
+#define COPY_SUBJ_E(field, dst, encdst)                                       \
+    do {                                                                      \
+        COPY_SUBJ(field, dst);                                                \
+        if (dc->field != NULL && dc->field##Len > 0)                          \
+            encdst = dc->field##Enc;                                          \
+    } while (0)
+
+/* wolfSSL has no API to carry a decoded subject into a Cert, so it is rebuilt
+ * RDN by RDN and a component with no copy here is dropped without an error. */
+WOLFCERT_TEST_VIS int wolfcert_copy_csr_subject(const DecodedCert* dc, Cert* nc)
+{
+    COPY_SUBJ_E(subjectCN,     nc->subject.commonName, nc->subject.commonNameEnc);
+    COPY_SUBJ_E(subjectO,      nc->subject.org,        nc->subject.orgEnc);
+    COPY_SUBJ_E(subjectOU,     nc->subject.unit,       nc->subject.unitEnc);
+    COPY_SUBJ_E(subjectC,      nc->subject.country,    nc->subject.countryEnc);
+    COPY_SUBJ_E(subjectST,     nc->subject.state,      nc->subject.stateEnc);
+    COPY_SUBJ_E(subjectL,      nc->subject.locality,   nc->subject.localityEnc);
+    COPY_SUBJ_E(subjectStreet, nc->subject.street,     nc->subject.streetEnc);
+    COPY_SUBJ_E(subjectSN,     nc->subject.sur,        nc->subject.surEnc);
+    /* wolfSSL's GetRDN() reaches subjectGN only through a table that stops
+     * short of ASN_GIVEN_NAME, so this copy has nothing to read yet. */
+    COPY_SUBJ_E(subjectGN,     nc->subject.givenName,  nc->subject.givenNameEnc);
+    COPY_SUBJ(subjectEmail,    nc->subject.email);
+    COPY_SUBJ_E(subjectSND,    nc->subject.serialDev,  nc->subject.serialDevEnc);
+    COPY_SUBJ_E(subjectUID,    nc->subject.userId,     nc->subject.userIdEnc);
+    COPY_SUBJ_E(subjectPC,     nc->subject.postalCode, nc->subject.postalCodeEnc);
+#ifdef WOLFSSL_CERT_EXT
+    COPY_SUBJ_E(subjectBC,     nc->subject.busCat,     nc->subject.busCatEnc);
+    /* No subjectJC/subjectJS: wolfSSL decodes the jurisdiction RDNs but its
+     * generator has no encoder entry for them, so a copy would never emit. */
+#endif
+    return WOLFCERT_OK;
+}
+
+#undef COPY_SUBJ_E
+#undef COPY_SUBJ
 
 int wolfcert_ca_issue(WolfCertCa* ca,
                       const uint8_t* csr_der, size_t csr_len,
@@ -650,14 +783,9 @@ int wolfcert_ca_issue(WolfCertCa* ca,
     if (rc == 0) {
         wc_InitCert_ex(nc, heap, WOLFCERT_DEVID_SOFTWARE);
 
-        COPY_SUBJ(subjectCN, nc->subject.commonName);
-        COPY_SUBJ(subjectO,  nc->subject.org);
-        COPY_SUBJ(subjectOU, nc->subject.unit);
-        COPY_SUBJ(subjectC,  nc->subject.country);
-        COPY_SUBJ(subjectST, nc->subject.state);
-        COPY_SUBJ(subjectL,  nc->subject.locality);
-
-        if (wc_SetIssuerBuffer(nc, ca->cert_der, (int)ca->cert_der_len) != 0)
+        rc = wolfcert_copy_csr_subject(&dc, nc);
+        if (rc == WOLFCERT_OK &&
+                wc_SetIssuerBuffer(nc, ca->cert_der, (int)ca->cert_der_len) != 0)
             rc = WOLFCERT_ERR_CRYPTO;
     }
 

@@ -208,6 +208,179 @@ static int enroll_check_san(const WolfCertServerCfg* client_cfg)
     return 0;
 }
 
+/* wolfcert_csr_build() leaves wolfSSL's UTF8String default in place, so a
+ * PrintableString CSR has to be built straight on wolfSSL. */
+static int enroll_raw_csr(const WolfCertServerCfg* client_cfg,
+                          int want_rc, DecodedCert* dc, DerBuffer** der)
+{
+    WC_RNG rng;
+    test_signkey key;
+    Cert req;
+    byte csr[8192];
+    WolfCertBuffer issued = { 0 };
+    int sz;
+
+    REQUIRE(wc_InitRng(&rng) == 0);
+    REQUIRE(test_signkey_make(&key, &rng) == 0);
+
+    REQUIRE(wc_InitCert(&req) == 0);
+    strcpy(req.subject.commonName, "device-enc");
+    req.subject.commonNameEnc = CTC_PRINTABLE;
+    strcpy(req.subject.org, "Acme");
+    req.subject.orgEnc = CTC_PRINTABLE;
+    req.sigType = TEST_CERT_SIGTYPE;
+
+    sz = test_sign_certreq(&req, csr, sizeof(csr), &key, &rng);
+    REQUIRE(sz > 0);
+
+    REQUIRE(wolfcert_est_simple_enroll(client_cfg, csr, (size_t)sz, &issued)
+            == want_rc);
+
+    if (want_rc == WOLFCERT_OK) {
+        REQUIRE(wc_PemToDer(issued.data, (long)issued.len, CERT_TYPE, der,
+                            NULL, NULL, NULL) == 0);
+        wc_InitDecodedCert(dc, (*der)->buffer, (*der)->length, NULL);
+        REQUIRE(wc_ParseCert(dc, CERT_TYPE, NO_VERIFY, NULL) == 0);
+    }
+
+    wolfcert_buffer_free(&issued);
+    test_signkey_free(&key);
+    wc_FreeRng(&rng);
+    return 0;
+}
+
+/* The DirectoryString choice the requester used has to survive: a
+ * PrintableString RDN coming back as UTF8String changes the subject. */
+static int enroll_preserves_string_encoding(const WolfCertServerCfg* client_cfg)
+{
+    DecodedCert dc;
+    DerBuffer* der = NULL;
+
+    if (enroll_raw_csr(client_cfg, WOLFCERT_OK, &dc, &der))
+        return 1;
+
+    REQUIRE(dc.subjectCNEnc == CTC_PRINTABLE);
+    REQUIRE(dc.subjectOEnc  == CTC_PRINTABLE);
+
+    wc_FreeDecodedCert(&dc);
+    wc_FreeDer(&der);
+    return 0;
+}
+
+static int rdn_is(const char* p, int len, const char* want)
+{
+    return p != NULL && len == (int)strlen(want) &&
+           memcmp(p, want, (size_t)len) == 0;
+}
+
+/* givenName is the one RDN the CSR builder accepts that the CA cannot carry
+ * over: wolfSSL's GetRDN() reaches subjectGN only through a table that stops
+ * short of ASN_GIVEN_NAME, so the copy in wolfcert_ca_issue() reads nothing.
+ * Pinned at both ends, so the day wolfSSL decodes it this test fails and the
+ * workaround in src/ca_issue.c goes with it. */
+static int enroll_givenname_dropped(const WolfCertServerCfg* client_cfg)
+{
+    /* 2.5.4.42 (id-at-givenName), as it appears in an AttributeType OID. */
+    static const uint8_t gn_oid[] = { 0x06, 0x03, 0x55, 0x04, 0x2a };
+    WolfCertKeyCfg kcfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
+                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+    WolfCertKey* dk = NULL;
+    WolfCertCertMeta meta = { .subject_dn = "CN=device-gn,GN=Jane" };
+    WolfCertBuffer csr = { 0 };
+    WolfCertBuffer issued = { 0 };
+    DerBuffer* der = NULL;
+    DecodedCert dc;
+    size_t i;
+    int in_csr = 0;
+
+    REQUIRE(wolfcert_key_generate(&kcfg, &dk) == WOLFCERT_OK);
+    REQUIRE(wolfcert_csr_build(dk, &meta, &csr) == WOLFCERT_OK);
+
+    for (i = 0; csr.len >= sizeof(gn_oid) && i <= csr.len - sizeof(gn_oid); ++i) {
+        if (memcmp(csr.data + i, gn_oid, sizeof(gn_oid)) == 0)
+            in_csr = 1;
+    }
+    REQUIRE(in_csr);
+
+    REQUIRE(wolfcert_est_simple_enroll(client_cfg, csr.data, csr.len, &issued)
+            == WOLFCERT_OK);
+    REQUIRE(wc_PemToDer(issued.data, (long)issued.len, CERT_TYPE, &der,
+                        NULL, NULL, NULL) == 0);
+
+    wc_InitDecodedCert(&dc, der->buffer, der->length, NULL);
+    REQUIRE(wc_ParseCert(&dc, CERT_TYPE, NO_VERIFY, NULL) == 0);
+    REQUIRE(rdn_is(dc.subjectCN, dc.subjectCNLen, "device-gn"));
+    REQUIRE(dc.subjectGN == NULL && dc.subjectGNLen == 0);
+
+    wc_FreeDecodedCert(&dc);
+    wc_FreeDer(&der);
+    wolfcert_buffer_free(&csr);
+    wolfcert_buffer_free(&issued);
+    wolfcert_key_free(dk);
+    return 0;
+}
+
+/* Regression: every subject RDN the CSR builder accepts must survive into the
+ * issued certificate. The CA rebuilds the subject field by field, so a name
+ * component it has no copy for is dropped without any error. givenName is
+ * absent below because wolfSSL's decoder never reports it back; see
+ * enroll_givenname_dropped(). */
+static int enroll_check_subject_rdns(const WolfCertServerCfg* client_cfg)
+{
+    WolfCertKeyCfg kcfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
+                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+    WolfCertKey* dk = NULL;
+    REQUIRE(wolfcert_key_generate(&kcfg, &dk) == WOLFCERT_OK);
+
+    WolfCertCertMeta meta = {
+        .subject_dn = "CN=device-rdn,O=Acme,OU=Devices,C=US,ST=Washington,"
+                      "L=Seattle,street=1 Pike Place,SN=Doe,"
+                      "emailAddress=jane@example.com,serialNumber=SRL-42,"
+                      "UID=factory-1,postalCode=98109"
+#ifdef WOLFSSL_CERT_EXT
+                      ",businessCategory=Manufacturing"
+#endif
+    };
+    WolfCertBuffer csr = { 0 };
+    REQUIRE(wolfcert_csr_build(dk, &meta, &csr) == WOLFCERT_OK);
+
+    WolfCertBuffer issued = { 0 };
+    REQUIRE(wolfcert_est_simple_enroll(client_cfg, csr.data, csr.len, &issued)
+            == WOLFCERT_OK);
+
+    DerBuffer* der = NULL;
+    REQUIRE(wc_PemToDer(issued.data, (long)issued.len, CERT_TYPE, &der,
+                        NULL, NULL, NULL) == 0);
+
+    DecodedCert dc;
+    wc_InitDecodedCert(&dc, der->buffer, der->length, NULL);
+    REQUIRE(wc_ParseCert(&dc, CERT_TYPE, NO_VERIFY, NULL) == 0);
+
+    REQUIRE(rdn_is(dc.subjectCN, dc.subjectCNLen, "device-rdn"));
+    REQUIRE(rdn_is(dc.subjectO,  dc.subjectOLen,  "Acme"));
+    REQUIRE(rdn_is(dc.subjectOU, dc.subjectOULen, "Devices"));
+    REQUIRE(rdn_is(dc.subjectC,  dc.subjectCLen,  "US"));
+    REQUIRE(rdn_is(dc.subjectST, dc.subjectSTLen, "Washington"));
+    REQUIRE(rdn_is(dc.subjectL,  dc.subjectLLen,  "Seattle"));
+    /* The guard: everything below was dropped by the issuer. */
+    REQUIRE(rdn_is(dc.subjectSN,  dc.subjectSNLen,  "Doe"));
+    REQUIRE(rdn_is(dc.subjectEmail, dc.subjectEmailLen, "jane@example.com"));
+    REQUIRE(rdn_is(dc.subjectSND, dc.subjectSNDLen, "SRL-42"));
+    REQUIRE(rdn_is(dc.subjectUID, dc.subjectUIDLen, "factory-1"));
+    REQUIRE(rdn_is(dc.subjectPC,  dc.subjectPCLen,  "98109"));
+    REQUIRE(rdn_is(dc.subjectStreet, dc.subjectStreetLen, "1 Pike Place"));
+#ifdef WOLFSSL_CERT_EXT
+    REQUIRE(rdn_is(dc.subjectBC,  dc.subjectBCLen,  "Manufacturing"));
+#endif
+
+    wc_FreeDecodedCert(&dc);
+    wc_FreeDer(&der);
+    wolfcert_buffer_free(&csr);
+    wolfcert_buffer_free(&issued);
+    wolfcert_key_free(dk);
+    return 0;
+}
+
 /* HTTP Basic (RFC 7030 section 3.2.3) must authenticate a keep-alive session
  * too, not just the one-shot calls: the credentials have to ride every request
  * on the connection. Enrolls with the good credentials from `client_cfg`, then
@@ -339,6 +512,14 @@ int main(void)
 
     /* SAN round-trip incl. rfc822 (email) regression guard. */
     if (enroll_check_san(&client_cfg))
+        return 1;
+
+    /* Full subject-RDN round-trip guard. */
+    if (enroll_givenname_dropped(&client_cfg))
+        return 1;
+    if (enroll_preserves_string_encoding(&client_cfg))
+        return 1;
+    if (enroll_check_subject_rdns(&client_cfg))
         return 1;
 
     /* Keep-alive session against the same Basic-auth-protected server. */

@@ -9,6 +9,7 @@ target_link_libraries(test_keygen PRIVATE wolfcert)
 add_test(NAME keygen COMMAND test_keygen)
 
 add_executable(test_csr unit/test_csr.c)
+target_include_directories(test_csr PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(test_csr PRIVATE wolfcert)
 add_test(NAME csr COMMAND test_csr)
 
@@ -100,7 +101,23 @@ if(WOLFCERT_ENABLE_EST)
         add_executable(test_est_mldsa_roundtrip integration/test_est_mldsa_roundtrip.c)
         target_link_libraries(test_est_mldsa_roundtrip PRIVATE wolfcert Threads::Threads)
         add_test(NAME est_mldsa_roundtrip COMMAND test_est_mldsa_roundtrip)
+
     endif()
+endif()
+
+# Protocol-agnostic server coverage: gated on the server alone, so a build with
+# either protocol disabled keeps it.
+if(WOLFCERT_ENABLE_SERVER)
+    add_executable(test_server_stop_idle integration/test_server_stop_idle.c)
+    target_link_libraries(test_server_stop_idle PRIVATE wolfcert Threads::Threads)
+    add_test(NAME server_stop_idle COMMAND test_server_stop_idle)
+    # A stop that cannot interrupt an idle peer hangs the serving thread.
+    set_tests_properties(server_stop_idle PROPERTIES TIMEOUT 60)
+
+    add_executable(test_server_ca_store unit/test_server_ca_store.c)
+    target_include_directories(test_server_ca_store PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_server_ca_store PRIVATE wolfcert Threads::Threads)
+    add_test(NAME server_ca_store COMMAND test_server_ca_store)
 endif()
 
 if(WOLFCERT_ENABLE_SCEP)
@@ -123,6 +140,7 @@ if(WOLFCERT_ENABLE_SCEP AND WOLFCERT_ENABLE_SERVER)
     add_executable(test_scep_async_roundtrip integration/test_scep_async_roundtrip.c)
     target_link_libraries(test_scep_async_roundtrip PRIVATE wolfcert Threads::Threads)
     add_test(NAME scep_async_roundtrip COMMAND test_scep_async_roundtrip)
+
 endif()
 
 # The CLI's protocol scoping and keyword validation. Most cases need no

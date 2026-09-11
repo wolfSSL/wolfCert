@@ -101,6 +101,17 @@ WOLFCERT_TEST_VIS void wolfcert_http_url_free(WolfCertUrl* u)
     u->scheme = u->host = u->path = NULL;
 }
 
+/* An IPv6 literal is stored with its brackets stripped, and re-emitting it
+ * needs them back in a URL (RFC 3986 section 3.2.2) and in a Host header
+ * (RFC 7230 section 5.4). */
+static int host_is_ip_literal(const char* host)
+{
+    uint8_t ip[16];
+    size_t  ip_len = 0;
+
+    return wolfcert_parse_ip(host, ip, &ip_len) == WOLFCERT_OK && ip_len == 16;
+}
+
 /* Build the "scheme://host[:port]" origin for a parsed URL into a freshly
  * allocated buffer (owned by the caller, free with WOLFCERT_XFREE). The default
  * port (443 for TLS, 80 otherwise) is omitted. Shared by the EST and SCEP
@@ -108,23 +119,30 @@ WOLFCERT_TEST_VIS void wolfcert_http_url_free(WolfCertUrl* u)
 WOLFCERT_TEST_VIS int wolfcert_http_url_origin(const WolfCertUrl* u, void* heap,
                                                char** out_origin)
 {
-    size_t origin_len;
-    char*  origin;
+    size_t      origin_len;
+    char*       origin;
+    const char* open_br;
+    const char* close_br;
 
     if (u == NULL || u->scheme == NULL || u->host == NULL || out_origin == NULL)
         return WOLFCERT_ERR_BAD_ARG;
 
-    /* scheme + "://" (3) + host + the optional ":65535" and NUL; 16 leaves the
-     * port suffix room to spare rather than sizing it to the digit. */
+    open_br  = host_is_ip_literal(u->host) ? "[" : "";
+    close_br = host_is_ip_literal(u->host) ? "]" : "";
+
+    /* scheme + "://" (3) + host + the optional brackets, ":65535" and NUL; 16
+     * leaves that suffix room to spare rather than sizing it to the digit. */
     origin_len = strlen(u->scheme) + 3 + strlen(u->host) + 16;
     origin = (char*)WOLFCERT_XMALLOC(origin_len, heap);
     if (origin == NULL)
         return WOLFCERT_ERR_MEMORY;
 
     if ((u->tls && u->port == 443) || (!u->tls && u->port == 80))
-        snprintf(origin, origin_len, "%s://%s", u->scheme, u->host);
+        snprintf(origin, origin_len, "%s://%s%s%s", u->scheme,
+                 open_br, u->host, close_br);
     else
-        snprintf(origin, origin_len, "%s://%s:%d", u->scheme, u->host, u->port);
+        snprintf(origin, origin_len, "%s://%s%s%s:%d", u->scheme,
+                 open_br, u->host, close_br, u->port);
 
     *out_origin = origin;
     return WOLFCERT_OK;
@@ -209,7 +227,8 @@ WOLFCERT_TEST_VIS int wolfcert_http_url_parse(const char* url, WolfCertUrl* out,
     }
     else {
         host_end = host_start;
-        while (*host_end && *host_end != ':' && *host_end != '/') {
+        while (*host_end && *host_end != ':' && *host_end != '/'
+                && *host_end != '?' && *host_end != '#') {
             ++host_end;
         }
 
@@ -238,17 +257,31 @@ WOLFCERT_TEST_VIS int wolfcert_http_url_parse(const char* url, WolfCertUrl* out,
         host_end = end;
     }
 
-    size_t plen = *host_end ? strlen(host_end) : 1;
+    /* RFC 7230 section 5.3.1 synthesizes the leading slash for an empty path;
+     * section 5.1 excludes the fragment from the target, so it never goes on
+     * the wire. */
+    const char* frag = strchr(host_end, '#');
+    size_t tlen = frag ? (size_t)(frag - host_end) : strlen(host_end);
+    size_t plen = (*host_end == '/') ? tlen : tlen + 1;
     if (plen > WOLFCERT_HTTP_MAX_PATH_LEN) {
         wolfcert_http_url_free(out);
         return WOLFCERT_ERR_PARSE;
     }
 
-    out->path = (*host_end == '\0') ? wolfcert_strdup("/", heap)
-                                    : wolfcert_strdup(host_end, heap);
+    out->path = (char*)WOLFCERT_XMALLOC(plen + 1, heap);
     if (out->path == NULL) {
         wolfcert_http_url_free(out);
         return WOLFCERT_ERR_MEMORY;
+    }
+
+    if (*host_end == '/') {
+        memcpy(out->path, host_end, tlen);
+        out->path[tlen] = '\0';
+    }
+    else {
+        out->path[0] = '/';
+        memcpy(out->path + 1, host_end, tlen);
+        out->path[tlen + 1] = '\0';
     }
 
     return WOLFCERT_OK;
@@ -1015,6 +1048,9 @@ static int http_write_request(WolfCertConn* c, const WolfCertUrl* u,
         snprintf(port_frag, sizeof(port_frag), ":%d", u->port);
     }
 
+    const char* open_br  = host_is_ip_literal(u->host) ? "[" : "";
+    const char* close_br = host_is_ip_literal(u->host) ? "]" : "";
+
     size_t head_cap = 1024 + (req->content_type ? strlen(req->content_type) : 0)
                            + (req->content_transfer_encoding ?
                               strlen(req->content_transfer_encoding) : 0)
@@ -1028,7 +1064,7 @@ static int http_write_request(WolfCertConn* c, const WolfCertUrl* u,
 
     int hn = snprintf(head, head_cap,
         "%s %s HTTP/1.1\r\n"
-        "Host: %s%s\r\n"
+        "Host: %s%s%s%s\r\n"
         "User-Agent: wolfCert/%s\r\n"
         "Connection: %s\r\n"
         "%s%s%s"
@@ -1038,7 +1074,7 @@ static int http_write_request(WolfCertConn* c, const WolfCertUrl* u,
         "%s"
         "\r\n",
         req->method, u->path,
-        u->host, port_frag,
+        open_br, u->host, close_br, port_frag,
         WOLFCERT_VERSION_STRING,
         keep_alive ? "keep-alive" : "close",
         req->accept ? "Accept: " : "",
@@ -1081,12 +1117,19 @@ static int http_write_request(WolfCertConn* c, const WolfCertUrl* u,
  * requests - HTTP/1.1 pipelining is effectively dead on the wire, and
  * the async state machine has its own per-request residual tracking
  * that doesn't depend on this helper. */
+/* The response allowance: the body cap the caller asked for, plus the header
+ * budget. Both readers size their buffer from this one spelling. */
+static size_t rx_max(size_t max_body)
+{
+    return max_body + WOLFCERT_HTTP_HEADER_BUDGET;
+}
+
 static int http_read_response(WolfCertConn* c,
                               size_t max_body,
                               WolfCertHttpResponse* resp,
                               void* heap)
 {
-    DynBuf rx = { .heap = heap, .max = max_body + 8192 };
+    DynBuf rx = { .heap = heap, .max = rx_max(max_body) };
     int hdr_end = read_headers(c, &rx);
     if (hdr_end < 0) {
         WOLFCERT_XFREE(rx.buf, heap);
@@ -1451,6 +1494,7 @@ static int nb_write(WolfCertConn* c, const uint8_t* buf, size_t len, size_t* off
     return WOLFCERT_OK;
 }
 
+/* Total accumulator allowance: the body cap plus the header budget. */
 /* Ensure the rx buffer has room for `need` more bytes. */
 static int nb_rx_reserve(WolfCertHttpSession* s, size_t need)
 {
@@ -1458,7 +1502,7 @@ static int nb_rx_reserve(WolfCertHttpSession* s, size_t need)
     if (want <= s->sm_rx_cap)
         return WOLFCERT_OK;
 
-    size_t max = s->max_body + 8192;
+    size_t max = rx_max(s->max_body);
     if (want > max)
         return WOLFCERT_ERR_PROTOCOL;
 
@@ -1485,14 +1529,39 @@ static int nb_rx_reserve(WolfCertHttpSession* s, size_t need)
 static int nb_read_some(WolfCertHttpSession* s, int* ended)
 {
     *ended = 0;
-    int rc = nb_rx_reserve(s, WOLFCERT_HTTP_READ_CHUNK);
-    if (rc != WOLFCERT_OK)
-        return rc;
+
+    /* Read at most what the allowance still permits, so a response that
+     * ends inside the final quantum is not rejected before it is read. */
+    size_t room = rx_max(s->max_body) - s->sm_rx_len;
+    uint8_t probe;
+    uint8_t* dst;
+    int probing = 0;
+
+    if (room == 0) {
+        /* An EOF-delimited body ending exactly on the allowance is legal, so
+         * a full accumulator still has to look for the close. Any byte that
+         * arrives instead puts the response over the allowance. */
+        dst     = &probe;
+        room    = 1;
+        probing = 1;
+    }
+    else {
+        if (room > WOLFCERT_HTTP_READ_CHUNK)
+            room = WOLFCERT_HTTP_READ_CHUNK;
+
+        int rc = nb_rx_reserve(s, room);
+        if (rc != WOLFCERT_OK)
+            return rc;
+
+        dst = s->sm_rx + s->sm_rx_len;
+    }
 
     if (s->conn.ssl) {
-        int r = wolfSSL_read(s->conn.ssl, s->sm_rx + s->sm_rx_len,
-                             WOLFCERT_HTTP_READ_CHUNK);
+        int r = wolfSSL_read(s->conn.ssl, dst, (int)room);
         if (r > 0) {
+            if (probing)
+                return WOLFCERT_ERR_PROTOCOL;
+
             s->sm_rx_len += (size_t)r;
             return WOLFCERT_OK;
         }
@@ -1515,12 +1584,14 @@ static int nb_read_some(WolfCertHttpSession* s, int* ended)
         return WOLFCERT_ERR_IO;
     }
 
-    int r = s->conn.t.read(s->conn.t.ctx, s->conn.handle,
-                           s->sm_rx + s->sm_rx_len,
-                           WOLFCERT_HTTP_READ_CHUNK, s->conn.io_timeout_ms);
+    int r = s->conn.t.read(s->conn.t.ctx, s->conn.handle, dst,
+                           room, s->conn.io_timeout_ms);
     if (r > 0) {
-        if ((size_t)r > WOLFCERT_HTTP_READ_CHUNK)
+        if ((size_t)r > room)
             return WOLFCERT_ERR_IO;
+        if (probing)
+            return WOLFCERT_ERR_PROTOCOL;
+
         s->sm_rx_len += (size_t)r;
         return WOLFCERT_OK;
     }
@@ -1554,6 +1625,9 @@ static int build_head(WolfCertHttpSession* s, const WolfCertHttpRequest* req,
     if ((u->tls && u->port != 443) || (!u->tls && u->port != 80))
         snprintf(port_frag, sizeof(port_frag), ":%d", u->port);
 
+    const char* open_br  = host_is_ip_literal(u->host) ? "[" : "";
+    const char* close_br = host_is_ip_literal(u->host) ? "]" : "";
+
     size_t head_cap = 1024 + (req->content_type ? strlen(req->content_type) : 0)
                            + (req->content_transfer_encoding ?
                               strlen(req->content_transfer_encoding) : 0)
@@ -1567,7 +1641,7 @@ static int build_head(WolfCertHttpSession* s, const WolfCertHttpRequest* req,
 
     int hn = snprintf(head, head_cap,
         "%s %s HTTP/1.1\r\n"
-        "Host: %s%s\r\n"
+        "Host: %s%s%s%s\r\n"
         "User-Agent: wolfCert/%s\r\n"
         "Connection: keep-alive\r\n"
         "%s%s%s"
@@ -1577,7 +1651,7 @@ static int build_head(WolfCertHttpSession* s, const WolfCertHttpRequest* req,
         "%s"
         "\r\n",
         req->method, u->path,
-        u->host, port_frag,
+        open_br, u->host, close_br, port_frag,
         WOLFCERT_VERSION_STRING,
         req->accept ? "Accept: " : "",
         req->accept ? req->accept : "",

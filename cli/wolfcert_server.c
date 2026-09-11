@@ -19,7 +19,8 @@
 
 /*
  * wolfcert-server - minimal EST/SCEP test server. Issues certificates
- * against a local CA generated on startup. Plaintext HTTP only.
+ * against a local CA generated on startup. EST needs --tls-cert/--tls-key
+ * (RFC 7030); SCEP may be served over plaintext HTTP.
  */
 
 #define _POSIX_C_SOURCE 200809L
@@ -67,7 +68,8 @@ static void print_usage(FILE* out)
         "  --listen HOST:PORT       Bind address (default 0.0.0.0:8080)\n"
         "  --basic USER:PASS        Require HTTP Basic auth (EST enroll)\n"
         "  --challenge PASS         Require this SCEP challengePassword in the CSR\n"
-        "  --tls-cert PEMFILE       Terminate TLS with this server certificate (PEM)\n"
+        "  --tls-cert PEMFILE       Terminate TLS with this server certificate (PEM);\n"
+        "                           required for --proto est (RFC 7030)\n"
         "  --tls-key  PEMFILE       Private key for --tls-cert (PEM)\n"
         "  --tls-client-ca PEMFILE  Require mutual TLS; verify clients against this CA\n"
         "  --scep-require-approval  Defer SCEP PKCSReq/RenewalReq (pkiStatus=PENDING); issue\n"
@@ -290,6 +292,12 @@ int main(int argc, char** argv)
     else {
         fprintf(stderr, "wolfcert-server: --proto est|scep required\n");
         print_usage(stderr);
+        return 1;
+    }
+
+    if (sel == WOLFCERT_PROTO_EST && tls_cert == NULL) {
+        fprintf(stderr, "wolfcert-server: --proto est requires --tls-cert and "
+                "--tls-key (RFC 7030 has no plaintext mode)\n");
         return 1;
     }
 

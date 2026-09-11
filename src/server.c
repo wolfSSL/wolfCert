@@ -37,46 +37,109 @@
 #include <poll.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <sys/types.h>
 #include <unistd.h>
 
 #include <wolfssl/ssl.h>
 
-/* accept() poll cadence: how often wolfcert_server_run() wakes to re-check the
- * stopping flag while idle. Bounds shutdown latency; not performance-critical.
- */
+/* How often wolfcert_server_run() wakes to re-check the stopping flag while
+ * idle at the listener. Bounds shutdown latency; not performance-critical. */
 #ifndef WOLFCERT_SERVER_POLL_MS
 #define WOLFCERT_SERVER_POLL_MS 200
 #endif
 
+/* Send/receive timeout on an accepted connection, so a stalled peer cannot
+ * hold the handler. Separate from the listener cadence: every expiry is a
+ * retry, so lowering this spins the handler rather than speeding shutdown. */
+#ifndef WOLFCERT_SERVER_IO_TIMEOUT_MS
+#define WOLFCERT_SERVER_IO_TIMEOUT_MS WOLFCERT_SERVER_POLL_MS
+#endif
+
+/* A timeout armed on the accepted connection surfaces as WANT_READ or
+ * WANT_WRITE depending on which direction stalled, and either is resumable. */
+static int tls_want_io(WOLFSSL* ssl, int ret)
+{
+    int err = wolfSSL_get_error(ssl, ret);
+
+    return err == WOLFSSL_ERROR_WANT_READ || err == WOLFSSL_ERROR_WANT_WRITE;
+}
+
 ssize_t wolfcert_io_recv(WolfCertServer* srv, int fd, void* buf, size_t len)
 {
+    ssize_t r;
+
+    /* A trickling peer never times out, so the loops below never see this. */
+    if (srv != NULL && WOLFSSL_ATOMIC_LOAD(srv->stopping))
+        return -1;
+
+    /* A connection the accept loop armed carries a receive timeout, so its
+     * expiry is a retry rather than an error: wolfSSL reports it as a want,
+     * a raw socket as EAGAIN. Retrying stops once shutdown is requested. */
     if (srv != NULL && srv->tls_current != NULL) {
-        int r = wolfSSL_read(srv->tls_current, buf, (int)len);
-        return r <= 0 ? -1 : (ssize_t)r;
+        int tr;
+
+        /* wolfSSL_read() wants a write whenever the record layer must send
+         * first, as post-handshake auth and a key update both do. */
+        do {
+            tr = wolfSSL_read(srv->tls_current, buf, (int)len);
+        }
+        while (tr <= 0 && tls_want_io(srv->tls_current, tr) &&
+               !WOLFSSL_ATOMIC_LOAD(srv->stopping));
+
+        return tr <= 0 ? -1 : (ssize_t)tr;
     }
 
-    return recv(fd, buf, len, 0);
+    do {
+        r = recv(fd, buf, len, 0);
+    }
+    while (r < 0 && srv != NULL && !WOLFSSL_ATOMIC_LOAD(srv->stopping) &&
+           (errno == EINTR ||
+            (srv->poll_timeouts_armed &&
+             (errno == EAGAIN || errno == EWOULDBLOCK))));
+
+    return r;
 }
 
 ssize_t wolfcert_io_send(WolfCertServer* srv, int fd, const void* buf, size_t len)
 {
+    ssize_t r;
+
+    if (srv != NULL && WOLFSSL_ATOMIC_LOAD(srv->stopping))
+        return -1;
+
+    /* Mirrors wolfcert_io_recv: the send timeout bounds a peer that stops
+     * reading, and its expiry is a retry rather than an error. Callers write
+     * through send_all(), so a short write is already handled. */
     if (srv != NULL && srv->tls_current != NULL) {
-        int r = wolfSSL_write(srv->tls_current, buf, (int)len);
-        return r <= 0 ? -1 : (ssize_t)r;
+        int tr;
+
+        do {
+            tr = wolfSSL_write(srv->tls_current, buf, (int)len);
+        }
+        while (tr <= 0 && tls_want_io(srv->tls_current, tr) &&
+               !WOLFSSL_ATOMIC_LOAD(srv->stopping));
+
+        return tr <= 0 ? -1 : (ssize_t)tr;
     }
 
-    return send(fd, buf, len, 0);
+    do {
+        r = send(fd, buf, len, 0);
+    }
+    while (r < 0 && srv != NULL && !WOLFSSL_ATOMIC_LOAD(srv->stopping) &&
+           (errno == EINTR ||
+            (srv->poll_timeouts_armed &&
+             (errno == EAGAIN || errno == EWOULDBLOCK))));
+
+    return r;
 }
 
 static int tls_setup(WolfCertServer* s, const WolfCertServerCfgSrv* cfg)
 {
     int rc = WOLFCERT_OK;
 
-    if (cfg->tls_cert_pem == NULL || cfg->tls_key_pem == NULL) {
-        /* plaintext: nothing to do */
+    if (cfg->tls_cert_pem == NULL || cfg->tls_key_pem == NULL)
         return WOLFCERT_OK;
-    }
 
     if (cfg->tls_cert_pem_len == 0 || cfg->tls_key_pem_len == 0) {
         return WOLFCERT_ERR_BAD_ARG;
@@ -177,6 +240,11 @@ int wolfcert_server_start(const WolfCertServerCfgSrv* cfg, WolfCertServer** out)
     if (ops == NULL)
         return WOLFCERT_ERR_UNSUPPORTED;
 
+    if (cfg->protocol == WOLFCERT_PROTO_EST &&
+            (cfg->tls_cert_pem == NULL || cfg->tls_key_pem == NULL))
+        return WOLFCERT_ERR(WOLFCERT_ERR_TLS, "server",
+            "EST requires TLS: set tls_cert_pem and tls_key_pem (RFC 7030)");
+
     void* heap = cfg->heap ? cfg->heap : wolfcert_default_heap();
     WolfCertServer* s = (WolfCertServer*)WOLFCERT_XMALLOC(sizeof(*s), heap);
     if (s == NULL)
@@ -216,11 +284,20 @@ int wolfcert_server_start(const WolfCertServerCfgSrv* cfg, WolfCertServer** out)
     }
 
     int rc;
-    if (cfg->ca_store != NULL &&
-        wolfcert_ca_load(&s->ca, cfg->ca_store, heap) == WOLFCERT_OK) {
-        /* loaded existing CA */
+    int have_ca = 0;
+
+    if (cfg->ca_store != NULL) {
+        rc = wolfcert_ca_load(&s->ca, cfg->ca_store, heap);
+        if (rc == WOLFCERT_OK)
+            have_ca = 1;
+        /* Only an empty store means "no CA yet"; an I/O, memory or parse
+         * failure must not silently replace a CA the caller still has.
+         * wolfcert_ca_load() already recorded which one it was. */
+        else if (rc != WOLFCERT_ERR_NOT_FOUND)
+            goto fail;
     }
-    else {
+
+    if (!have_ca) {
         WolfCertKeyType kt = cfg->ca_key_type ? cfg->ca_key_type
                                               : WOLFCERT_DEFAULT_KEY_TYPE;
         int kp = cfg->ca_key_param;
@@ -229,8 +306,12 @@ int wolfcert_server_start(const WolfCertServerCfgSrv* cfg, WolfCertServer** out)
         if (rc != WOLFCERT_OK)
             goto fail;
 
-        if (cfg->ca_store != NULL)
-            wolfcert_ca_save(&s->ca, cfg->ca_store);
+        if (cfg->ca_store != NULL) {
+            /* Not re-wrapped: it would lose ca_save's rollback diagnostic. */
+            rc = wolfcert_ca_save(&s->ca, cfg->ca_store);
+            if (rc != WOLFCERT_OK)
+                goto fail;
+        }
     }
 
     rc = ops->start(cfg, s);
@@ -274,6 +355,7 @@ fail:
 int wolfcert_server_run(WolfCertServer* srv)
 {
     struct pollfd pfd;
+    struct timeval poll_to;
     int ret;
     int pr;
     int cs;
@@ -326,6 +408,21 @@ int wolfcert_server_run(WolfCertServer* srv)
             return WOLFCERT_ERR_IO;
         }
 
+        /* Bound how long a read or write on this connection can block, so a
+         * peer that goes silent or stops reading cannot hold the handler past
+         * wolfcert_server_stop(). */
+        poll_to.tv_sec  = WOLFCERT_SERVER_IO_TIMEOUT_MS / 1000;
+        poll_to.tv_usec = (WOLFCERT_SERVER_IO_TIMEOUT_MS % 1000) * 1000;
+        if (setsockopt(cs, SOL_SOCKET, SO_RCVTIMEO, &poll_to,
+                       sizeof(poll_to)) != 0 ||
+                setsockopt(cs, SOL_SOCKET, SO_SNDTIMEO, &poll_to,
+                           sizeof(poll_to)) != 0) {
+            close(cs);
+            continue;
+        }
+
+        srv->poll_timeouts_armed = 1;
+
         if (srv->tls_ctx != NULL) {
             /* Terminate TLS on this accepted fd. The protocol handler sees
              * plaintext HTTP through wolfcert_io_{recv,send}. */
@@ -333,7 +430,15 @@ int wolfcert_server_run(WolfCertServer* srv)
             if (ssl != NULL) {
                 wolfSSL_set_fd(ssl, cs);
 
-                if ((ret = wolfSSL_accept(ssl)) == WOLFSSL_SUCCESS) {
+                /* A stalled flight is resumable either way round: a large
+                 * chain blocks on the send timeout, not the receive one. */
+                do {
+                    ret = wolfSSL_accept(ssl);
+                }
+                while (ret != WOLFSSL_SUCCESS && tls_want_io(ssl, ret) &&
+                       !WOLFSSL_ATOMIC_LOAD(srv->stopping));
+
+                if (ret == WOLFSSL_SUCCESS) {
                     srv->tls_current = ssl;
 
                     /* Keep-alive loop: protocol handlers read one
@@ -370,6 +475,7 @@ int wolfcert_server_run(WolfCertServer* srv)
             while (srv->keep_alive && !WOLFSSL_ATOMIC_LOAD(srv->stopping));
         }
 
+        srv->poll_timeouts_armed = 0;
         close(cs);
     }
 
@@ -389,11 +495,12 @@ int wolfcert_server_stop(WolfCertServer* srv)
     if (srv == NULL)
         return WOLFCERT_ERR_BAD_ARG;
 
-    /* Signal the accept loop to exit. It polls the listener on a short timeout
-     * (WOLFCERT_SERVER_POLL_MS) and re-checks this flag, so no fd surgery is
-     * needed here -- wolfcert_server_free() closes listen_fd after the serving
-     * thread is joined. Setting the flag from another thread (test harness) or
-     * a signal handler (wolfcert-server CLI) is safe: the store is atomic. */
+    /* Signal the accept loop to exit. The listener poll and the reads on an
+     * accepted connection are both bounded and re-check this flag, so no fd
+     * surgery is needed here --
+     * wolfcert_server_free() closes listen_fd after the serving thread is
+     * joined. Setting the flag from another thread (test harness) or a signal
+     * handler (wolfcert-server CLI) is safe: the store is atomic. */
     WOLFSSL_ATOMIC_STORE(srv->stopping, 1);
 
     return WOLFCERT_OK;

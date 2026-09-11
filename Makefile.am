@@ -125,6 +125,7 @@ test_smoke_LDADD    = libwolfcert.la $(WOLFSSL_LIBS)
 test_keygen_SOURCES = tests/unit/test_keygen.c
 test_keygen_LDADD   = libwolfcert.la $(WOLFSSL_LIBS)
 test_csr_SOURCES    = tests/unit/test_csr.c
+test_csr_CPPFLAGS = $(AM_CPPFLAGS) -I$(top_srcdir)/src
 test_csr_LDADD      = libwolfcert.la $(WOLFSSL_LIBS)
 test_store_SOURCES  = tests/unit/test_store.c
 test_store_LDADD    = libwolfcert.la $(WOLFSSL_LIBS)
@@ -197,6 +198,17 @@ test_scep_poll_roundtrip_LDADD   = libwolfcert.la $(WOLFSSL_LIBS) -lpthread
 test_scep_async_roundtrip_SOURCES = tests/integration/test_scep_async_roundtrip.c
 test_scep_async_roundtrip_LDADD   = libwolfcert.la $(WOLFSSL_LIBS) -lpthread
 endif
+endif
+
+# Protocol-agnostic server coverage: gated on the server alone, so a build with
+# either protocol disabled keeps it.
+if WOLFCERT_HAVE_SERVER
+check_PROGRAMS += test_server_stop_idle test_server_ca_store
+test_server_stop_idle_SOURCES = tests/integration/test_server_stop_idle.c
+test_server_stop_idle_LDADD   = libwolfcert.la $(WOLFSSL_LIBS) -lpthread
+test_server_ca_store_SOURCES = tests/unit/test_server_ca_store.c
+test_server_ca_store_CPPFLAGS = $(AM_CPPFLAGS) -I$(top_srcdir)/src
+test_server_ca_store_LDADD   = libwolfcert.la $(WOLFSSL_LIBS) -lpthread
 endif
 
 TESTS = $(check_PROGRAMS)

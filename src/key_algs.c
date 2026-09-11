@@ -38,6 +38,11 @@
 #endif
 #ifdef WOLFCERT_HAVE_MLDSA
 #  include <wolfssl/wolfcrypt/wc_mldsa.h>
+/* Checked here, not in check_config.h: dilithium.h derives this macro only
+ * once settings.h has been parsed. */
+#  ifndef WOLFSSL_MLDSA_CHECK_KEY
+#    error "wolfSSL is missing wc_MlDsaKey_CheckKey(); wolfCert's ML-DSA support needs it. Rebuild wolfSSL without WOLFSSL_DILITHIUM_NO_CHECK_KEY / WOLFSSL_MLDSA_VERIFY_ONLY."
+#  endif
 #endif
 
 #include <string.h>
@@ -84,6 +89,69 @@ static int rsa_priv_decode(struct WolfCertKey* k, const uint8_t* der, word32 len
 static int rsa_priv_to_der(const struct WolfCertKey* k, uint8_t* buf, word32 cap)
 {
     return wc_RsaKeyToDer((RsaKey*)k->impl, buf, cap);
+}
+
+static int rsa_pub_check(struct WolfCertKey* k, const uint8_t* pub,
+                         word32 pub_len)
+{
+    RsaKey* cert_key;
+    uint8_t* buf = NULL;
+    word32 idx = 0;
+    int cap, mine, theirs;
+    int rc;
+
+    cert_key = (RsaKey*)WOLFCERT_XMALLOC(sizeof(*cert_key), k->heap);
+    if (cert_key == NULL)
+        return WOLFCERT_ERR_MEMORY;
+
+    rc = wc_InitRsaKey_ex(cert_key, k->heap, k->dev_id);
+    if (rc != 0) {
+        WOLFCERT_XFREE(cert_key, k->heap);
+        return WOLFCERT_ERR_WC(rc, "keygen", "InitRsaKey_ex");
+    }
+
+    rc = wc_RsaPublicKeyDecode(pub, &idx, cert_key, pub_len);
+    if (rc != 0) {
+        rc = WOLFCERT_ERR_PARSE;
+        goto out;
+    }
+
+    /* Size the scratch from the keys themselves: a fixed cap would report an
+     * oversized stored CA as a crypto failure. */
+    mine   = wc_RsaPublicKeyDerSize((RsaKey*)k->impl, 0);
+    theirs = wc_RsaPublicKeyDerSize(cert_key, 0);
+    if (mine <= 0 || theirs <= 0) {
+        rc = WOLFCERT_ERR_CRYPTO;
+        goto out;
+    }
+    if (mine != theirs) {
+        rc = WOLFCERT_ERR_PARSE;
+        goto out;
+    }
+
+    cap = mine;
+    buf = (uint8_t*)WOLFCERT_XMALLOC(2 * (size_t)cap, k->heap);
+    if (buf == NULL) {
+        rc = WOLFCERT_ERR_MEMORY;
+        goto out;
+    }
+
+    /* Both sides go through the same encoder so the comparison does not
+     * depend on how the certificate framed its public key. */
+    mine   = wc_RsaKeyToPublicDer_ex((RsaKey*)k->impl, buf, (word32)cap, 0);
+    theirs = wc_RsaKeyToPublicDer_ex(cert_key, buf + cap, (word32)cap, 0);
+    if (mine <= 0 || theirs <= 0)
+        rc = WOLFCERT_ERR_CRYPTO;
+    else if (mine != theirs || memcmp(buf, buf + cap, (size_t)mine) != 0)
+        rc = WOLFCERT_ERR_PARSE;
+    else
+        rc = WOLFCERT_OK;
+
+out:
+    wc_FreeRsaKey(cert_key);
+    WOLFCERT_XFREE(buf, k->heap);
+    WOLFCERT_XFREE(cert_key, k->heap);
+    return rc;
 }
 
 static void rsa_free(struct WolfCertKey* k)
@@ -146,6 +214,71 @@ static int ecc_priv_to_der(const struct WolfCertKey* k, uint8_t* buf, word32 cap
     return wc_EccKeyToDer((ecc_key*)k->impl, buf, cap);
 }
 
+/* Uncompressed X9.63 point: the 0x04 marker plus two coordinates. */
+#define ECC_X963_CAP (1 + 2 * MAX_ECC_BYTES)
+
+static int ecc_pub_check(struct WolfCertKey* k, const uint8_t* pub,
+                         word32 pub_len)
+{
+    ecc_key* cert_key;
+    byte* mine;
+    byte* theirs;
+    word32 mine_len = ECC_X963_CAP;
+    word32 theirs_len = ECC_X963_CAP;
+    word32 idx = 0;
+    int rc;
+
+    mine = (byte*)WOLFCERT_XMALLOC(2 * ECC_X963_CAP, k->heap);
+    if (mine == NULL)
+        return WOLFCERT_ERR_MEMORY;
+    theirs = mine + ECC_X963_CAP;
+
+    cert_key = (ecc_key*)WOLFCERT_XMALLOC(sizeof(*cert_key), k->heap);
+    if (cert_key == NULL) {
+        WOLFCERT_XFREE(mine, k->heap);
+        return WOLFCERT_ERR_MEMORY;
+    }
+
+    rc = wc_ecc_init_ex(cert_key, k->heap, k->dev_id);
+    if (rc != 0) {
+        WOLFCERT_XFREE(cert_key, k->heap);
+        WOLFCERT_XFREE(mine, k->heap);
+        return WOLFCERT_ERR_WC(rc, "keygen", "ecc_init_ex");
+    }
+
+    /* A SEC1 private key need not carry its public point, so derive it when
+     * the decoder did not supply one. */
+    if (((ecc_key*)k->impl)->type == ECC_PRIVATEKEY_ONLY) {
+        rc = wc_ecc_make_pub((ecc_key*)k->impl, NULL);
+        if (rc != 0) {
+            rc = WOLFCERT_ERR_WC(rc, "keygen", "ecc_make_pub");
+            goto out;
+        }
+    }
+
+    rc = wc_EccPublicKeyDecode(pub, &idx, cert_key, pub_len);
+    if (rc != 0)
+        rc = wc_ecc_import_x963(pub, pub_len, cert_key);
+    if (rc != 0) {
+        rc = WOLFCERT_ERR_PARSE;
+        goto out;
+    }
+
+    if (wc_ecc_export_x963((ecc_key*)k->impl, mine, &mine_len) != 0 ||
+        wc_ecc_export_x963(cert_key, theirs, &theirs_len) != 0)
+        rc = WOLFCERT_ERR_CRYPTO;
+    else if (mine_len != theirs_len || memcmp(mine, theirs, mine_len) != 0)
+        rc = WOLFCERT_ERR_PARSE;
+    else
+        rc = WOLFCERT_OK;
+
+out:
+    wc_ecc_free(cert_key);
+    WOLFCERT_XFREE(cert_key, k->heap);
+    WOLFCERT_XFREE(mine, k->heap);
+    return rc;
+}
+
 static void ecc_free(struct WolfCertKey* k)
 {
     if (k->impl == NULL)
@@ -199,6 +332,31 @@ static int ed25519_priv_to_der(const struct WolfCertKey* k, uint8_t* buf, word32
     return wc_Ed25519PrivateKeyToDer((ed25519_key*)k->impl, buf, cap);
 }
 
+static int ed25519_pub_check(struct WolfCertKey* k, const uint8_t* pub,
+                             word32 pub_len)
+{
+    byte mine[ED25519_PUB_KEY_SIZE];
+    int rc;
+
+    if (pub_len != sizeof(mine))
+        return WOLFCERT_ERR_PARSE;
+
+    rc = wc_ed25519_make_public((ed25519_key*)k->impl, mine, sizeof(mine));
+    if (rc != 0)
+        return WOLFCERT_ERR_WC(rc, "keygen", "ed25519_make_public");
+
+    if (memcmp(mine, pub, sizeof(mine)) != 0)
+        return WOLFCERT_ERR_PARSE;
+
+    /* On wolfSSL 5.9.2 make_public only sets pubKeySet, leaving key->p empty
+     * while wc_ed25519_sign_msg() hashes it -- so import the half we just
+     * verified. Newer wolfSSL stores it itself and this is a no-op. */
+    rc = wc_ed25519_import_public(mine, sizeof(mine), (ed25519_key*)k->impl);
+
+    return rc == 0 ? WOLFCERT_OK
+                   : WOLFCERT_ERR_WC(rc, "keygen", "ed25519_import_public");
+}
+
 static void ed25519_free(struct WolfCertKey* k)
 {
     if (k->impl == NULL)
@@ -247,6 +405,32 @@ static int ed448_priv_decode(struct WolfCertKey* k, const uint8_t* der, word32 l
 static int ed448_priv_to_der(const struct WolfCertKey* k, uint8_t* buf, word32 cap)
 {
     return wc_Ed448PrivateKeyToDer((ed448_key*)k->impl, buf, cap);
+}
+
+static int ed448_pub_check(struct WolfCertKey* k, const uint8_t* pub,
+                           word32 pub_len)
+{
+    byte mine[ED448_PUB_KEY_SIZE];
+    int rc;
+
+    if (pub_len != sizeof(mine))
+        return WOLFCERT_ERR_PARSE;
+
+    rc = wc_ed448_make_public((ed448_key*)k->impl, mine, sizeof(mine));
+    if (rc != 0)
+        return WOLFCERT_ERR_WC(rc, "keygen", "ed448_make_public");
+
+    if (memcmp(mine, pub, sizeof(mine)) != 0)
+        return WOLFCERT_ERR_PARSE;
+
+    /* wc_ed448_make_public() sets pubKeySet but, unlike its Ed25519
+     * counterpart, leaves key->p untouched -- and wc_ed448_sign_msg() gates
+     * on the flag while hashing key->p. Import the half we just verified, or
+     * every certificate this CA issues is signed over an all-zero key. */
+    rc = wc_ed448_import_public(mine, sizeof(mine), (ed448_key*)k->impl);
+
+    return rc == 0 ? WOLFCERT_OK
+                   : WOLFCERT_ERR_WC(rc, "keygen", "ed448_import_public");
 }
 
 static void ed448_free(struct WolfCertKey* k)
@@ -327,6 +511,20 @@ static int mldsa_priv_to_der(const struct WolfCertKey* k, uint8_t* buf, word32 c
     return wc_MlDsaKey_PrivateKeyToDer((MlDsaKey*)k->impl, buf, cap);
 }
 
+/* Unlike its siblings this hook mutates `key`: the certificate's public half
+ * is adopted into it, since none can be derived from a PKCS#8 v1 private key.
+ * A key that fails the check therefore carries an unverified public half and
+ * must be discarded -- wolfcert_ca_load() frees the shim on any failure. */
+static int mldsa_pub_check(struct WolfCertKey* k, const uint8_t* pub,
+                           word32 pub_len)
+{
+    if (wc_MlDsaKey_ImportPubRaw((MlDsaKey*)k->impl, pub, pub_len) != 0)
+        return WOLFCERT_ERR_PARSE;
+
+    return wc_MlDsaKey_CheckKey((MlDsaKey*)k->impl) == 0 ? WOLFCERT_OK
+                                                         : WOLFCERT_ERR_PARSE;
+}
+
 static void mldsa_free(struct WolfCertKey* k)
 {
     if (k->impl == NULL)
@@ -352,6 +550,7 @@ static const WolfCertKeyAlg ALG_RSA = {
     .make            = rsa_make,
     .priv_decode     = rsa_priv_decode,
     .priv_to_der     = rsa_priv_to_der,
+    .pub_check       = rsa_pub_check,
     .free_           = rsa_free,
 };
 #endif
@@ -368,6 +567,7 @@ static const WolfCertKeyAlg ALG_ECC = {
     .make            = ecc_make,
     .priv_decode     = ecc_priv_decode,
     .priv_to_der     = ecc_priv_to_der,
+    .pub_check       = ecc_pub_check,
     .free_           = ecc_free,
 };
 #endif
@@ -384,6 +584,7 @@ static const WolfCertKeyAlg ALG_ED25519 = {
     .make            = ed25519_make,
     .priv_decode     = ed25519_priv_decode,
     .priv_to_der     = ed25519_priv_to_der,
+    .pub_check       = ed25519_pub_check,
     .free_           = ed25519_free,
 };
 #endif
@@ -400,6 +601,7 @@ static const WolfCertKeyAlg ALG_ED448 = {
     .make            = ed448_make,
     .priv_decode     = ed448_priv_decode,
     .priv_to_der     = ed448_priv_to_der,
+    .pub_check       = ed448_pub_check,
     .free_           = ed448_free,
 };
 #endif
@@ -421,6 +623,7 @@ static const WolfCertKeyAlg ALG_MLDSA44 = {
     .make            = mldsa_make,
     .priv_decode     = mldsa_priv_decode,
     .priv_to_der     = mldsa_priv_to_der,
+    .pub_check       = mldsa_pub_check,
     .free_           = mldsa_free,
 };
 #endif
@@ -437,6 +640,7 @@ static const WolfCertKeyAlg ALG_MLDSA65 = {
     .make            = mldsa_make,
     .priv_decode     = mldsa_priv_decode,
     .priv_to_der     = mldsa_priv_to_der,
+    .pub_check       = mldsa_pub_check,
     .free_           = mldsa_free,
 };
 #endif
@@ -453,6 +657,7 @@ static const WolfCertKeyAlg ALG_MLDSA87 = {
     .make            = mldsa_make,
     .priv_decode     = mldsa_priv_decode,
     .priv_to_der     = mldsa_priv_to_der,
+    .pub_check       = mldsa_pub_check,
     .free_           = mldsa_free,
 };
 #endif

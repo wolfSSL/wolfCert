@@ -797,6 +797,7 @@ static int check_getnextca_ca_id(const uint8_t* ca_der_buf, size_t ca_der_len)
     return 0;
 }
 
+#if defined(HAVE_AES_CBC) && defined(WOLFSSL_AES_128)
 /* RFC 8894 section 3.2.1 requires transactionID and a fresh senderNonce in every
  * pkiMessage; the client always sends both, so POST hand-built ones instead. */
 static int check_required_attrs(WolfCertServer* s, const WolfCertKeyCfg* kcfg,
@@ -830,8 +831,9 @@ static int check_required_attrs(WolfCertServer* s, const WolfCertKeyCfg* kcfg,
 
     /* Each round omits one required attribute; the last is the control that
      * proves this raw-POST harness reaches the issuance path at all. */
-    for (i = 0; rc == WOLFCERT_OK && i < 5; ++i) {
-        WolfCertScepAttrs a = { .message_type = "19" };
+    for (i = 0; rc == WOLFCERT_OK && i < 7; ++i) {
+        WolfCertScepAttrs a = { .message_type = i == 4 ? NULL :
+                                                i == 5 ? ""   : "19" };
         WolfCertBuffer msg = { 0 };
         WolfCertBuffer renv = { 0 };
         uint8_t *r_tid = NULL, *r_sn = NULL, *r_rn = NULL, *r_sc = NULL;
@@ -856,7 +858,11 @@ static int check_required_attrs(WolfCertServer* s, const WolfCertKeyCfg* kcfg,
             a.transaction_id = tid;   a.transaction_id_len = sizeof(tid);
             a.sender_nonce = snonce;  a.sender_nonce_len = 0;
         }
-        else {                              /* control: both present */
+        else if (i == 4 || i == 5) {        /* no / zero-length messageType */
+            a.transaction_id = tid;   a.transaction_id_len = sizeof(tid);
+            a.sender_nonce = snonce;  a.sender_nonce_len = sizeof(snonce);
+        }
+        else {                              /* control: all three present */
             a.transaction_id = tid;   a.transaction_id_len = sizeof(tid);
             a.sender_nonce = snonce;  a.sender_nonce_len = sizeof(snonce);
         }
@@ -873,8 +879,8 @@ static int check_required_attrs(WolfCertServer* s, const WolfCertKeyCfg* kcfg,
                           msg.data, msg.len, 0, &rsp, &rsp_len);
         wolfcert_buffer_free(&msg);
 
-        if (i < 4) {
-            /* Nothing to echo, so no conforming CertRep exists. */
+        if (i < 6) {
+            /* An attribute that is absent or empty is not a pkiMessage. */
             ok = (st == 400);
         }
         else {
@@ -886,6 +892,7 @@ static int check_required_attrs(WolfCertServer* s, const WolfCertKeyCfg* kcfg,
             ok = ok && r_tid != NULL && r_tidl == sizeof(tid) &&
                  memcmp(r_tid, tid, sizeof(tid)) == 0 &&
                  r_st != NULL && strcmp(r_st, "0") == 0 && renv.len > 0 &&
+                 r_sn != NULL && r_snl == sizeof(snonce) &&
                  r_rn != NULL && r_rnl == sizeof(snonce) &&
                  memcmp(r_rn, snonce, sizeof(snonce)) == 0;
 
@@ -936,6 +943,174 @@ static int check_required_attrs(WolfCertServer* s, const WolfCertKeyCfg* kcfg,
 
     return rc;
 }
+
+/* handle_pki_op's dispatch failures answer with a signed CertRep FAILURE, not
+ * a bare HTTP error. The client cannot produce these messages, so POST
+ * hand-built ones. Owns and frees everything it makes. */
+static int check_malformed_dispatch(uint16_t port, const WolfCertKeyCfg* kcfg,
+                                    const uint8_t* ca_der_buf, size_t ca_der_len)
+{
+    static const uint8_t junk[4] = { 0x04, 0x02, 0xAB, 0xCD };
+    static const char* const msg_type[3] = { "19", "99", "19" };
+    static const char* const want_fi[3]  = { "2",  "2",  "0"  };
+
+    WolfCertCertMeta meta = { .subject_dn = "CN=scep-dispatch" };
+    WolfCertKey*   key  = NULL;
+    WolfCertBuffer csr  = { 0 };
+    WolfCertBuffer kder = { 0 };
+    WolfCertBuffer env  = { 0 };
+    uint8_t* signer = NULL;
+    size_t   signer_len = 0;
+    uint8_t  tid[16], snonce[16];
+    uint8_t  prev_sn[16];
+    uint8_t* bad_env = NULL;
+    int      have_prev = 0;
+    char url[160];
+    size_t i;
+    int rc;
+
+    memset(tid,    0x33, sizeof(tid));
+    memset(snonce, 0x44, sizeof(snonce));
+    snprintf(url, sizeof(url),
+             "http://127.0.0.1:%u/scep?operation=PKIOperation", port);
+
+    rc = wolfcert_key_generate(kcfg, &key);
+    if (rc == WOLFCERT_OK)
+        rc = wolfcert_csr_build(key, &meta, &csr);
+    if (rc == WOLFCERT_OK)
+        rc = wolfcert_key_to_der(key, &kder);
+    if (rc == WOLFCERT_OK)
+        rc = wolfcert_scep_self_signed_rsa((RsaKey*)key->impl, csr.data,
+                                           csr.len, &signer, &signer_len, NULL);
+    if (rc == WOLFCERT_OK)
+        rc = wolfcert_scep_envelop(ca_der_buf, ca_der_len, csr.data, csr.len,
+                                   AES128CBCb, &env, NULL);
+
+    /* The last round needs a cipher the CA cannot run: copy the envelope and
+     * point its algorithm at an unassigned OID under the same arc. */
+    if (rc == WOLFCERT_OK) {
+        static const uint8_t aes128_cbc[] =
+            { 0x06,0x09,0x60,0x86,0x48,0x01,0x65,0x03,0x04,0x01,0x02 };
+        uint8_t* at = NULL;
+
+        bad_env = (uint8_t*)WOLFCERT_XMALLOC(env.len, NULL);
+        if (bad_env == NULL)
+            rc = WOLFCERT_ERR_MEMORY;
+        if (rc == WOLFCERT_OK) {
+            memcpy(bad_env, env.data, env.len);
+            at = (uint8_t*)memmem(bad_env, env.len, aes128_cbc,
+                                  sizeof(aes128_cbc));
+            if (at == NULL)
+                rc = -1;
+            else
+                at[sizeof(aes128_cbc) - 1] = 0x63;
+        }
+    }
+
+    for (i = 0; rc == WOLFCERT_OK && i < 3; ++i) {
+        WolfCertScepAttrs a = {
+            .transaction_id = tid,    .transaction_id_len = sizeof(tid),
+            .sender_nonce   = snonce, .sender_nonce_len   = sizeof(snonce),
+            .message_type   = msg_type[i],
+        };
+        /* Round 1 needs an envelope the CA can open, or it trips the
+         * decrypt branch first; round 2 needs the unrunnable one. */
+        const uint8_t* content     = i == 1 ? env.data :
+                                     i == 2 ? bad_env  : junk;
+        size_t         content_len = i >= 1 ? env.len  : sizeof(junk);
+        WolfCertBuffer msg  = { 0 };
+        WolfCertBuffer renv = { 0 };
+        uint8_t *r_tid = NULL, *r_sn = NULL, *r_rn = NULL, *r_sc = NULL;
+        size_t   r_tidl = 0,   r_snl = 0,   r_rnl = 0,   r_scl = 0;
+        char    *r_mt = NULL,  *r_st = NULL, *r_fi = NULL;
+        WolfCertHttpResponse resp = { 0 };
+
+        rc = wolfcert_scep_build_pki_message(content, content_len,
+                 signer, signer_len, kder.data, kder.len,
+                 SHA256h, &a, &msg, NULL);
+        if (rc == WOLFCERT_OK) {
+            WolfCertHttpRequest req = {
+                .method       = "POST",
+                .url          = url,
+                .content_type = "application/x-pki-message",
+                .body         = msg.data,
+                .body_len     = msg.len,
+            };
+            int ok = wolfcert_http_request(&req, &resp) == WOLFCERT_OK &&
+                     resp.status_code == 200 && resp.body != NULL;
+
+            ok = ok && wolfcert_scep_parse_pki_message(resp.body,
+                           resp.body_len, &renv, &r_tid, &r_tidl, &r_sn,
+                           &r_snl, &r_rn, &r_rnl, &r_mt, &r_st, &r_sc,
+                           &r_scl, &r_fi, NULL) == WOLFCERT_OK;
+
+            ok = ok && r_mt != NULL && strcmp(r_mt, "3") == 0 &&
+                 r_st != NULL && strcmp(r_st, "2") == 0 &&
+                 r_fi != NULL && strcmp(r_fi, want_fi[i]) == 0 &&
+                 r_tid != NULL && r_tidl == sizeof(tid) &&
+                 memcmp(r_tid, tid, sizeof(tid)) == 0 &&
+                 r_rn != NULL && r_rnl == sizeof(snonce) &&
+                 memcmp(r_rn, snonce, sizeof(snonce)) == 0 &&
+                 renv.len == 0;
+
+            /* Each reply carries a fresh senderNonce of its own. */
+            ok = ok && r_sn != NULL && r_snl == sizeof(prev_sn) &&
+                 (!have_prev ||
+                  memcmp(r_sn, prev_sn, sizeof(prev_sn)) != 0);
+            if (ok) {
+                memcpy(prev_sn, r_sn, sizeof(prev_sn));
+                have_prev = 1;
+            }
+
+            WOLFCERT_XFREE(r_tid, NULL); WOLFCERT_XFREE(r_sn, NULL);
+            WOLFCERT_XFREE(r_rn,  NULL); WOLFCERT_XFREE(r_sc, NULL);
+            WOLFCERT_XFREE(r_mt,  NULL); WOLFCERT_XFREE(r_st, NULL);
+            WOLFCERT_XFREE(r_fi,  NULL);
+            wolfcert_buffer_free(&renv);
+            wolfcert_http_response_free(&resp);
+            if (!ok)
+                rc = -1;
+        }
+
+        wolfcert_buffer_free(&msg);
+    }
+
+    /* Ask to keep the connection alive: the CertRep must come back and the
+     * server must then hang up. Holding the socket open instead times the
+     * read out, which raw_http_req reports as -1 rather than 200. */
+    if (rc == WOLFCERT_OK) {
+        WolfCertScepAttrs a = {
+            .transaction_id = tid,    .transaction_id_len = sizeof(tid),
+            .sender_nonce   = snonce, .sender_nonce_len   = sizeof(snonce),
+            .message_type   = "99",
+        };
+        WolfCertBuffer msg = { 0 };
+
+        rc = wolfcert_scep_build_pki_message(env.data, env.len, signer,
+                 signer_len, kder.data, kder.len, SHA256h, &a, &msg, NULL);
+        if (rc == WOLFCERT_OK) {
+            if (raw_http_req(port, "POST", "/scep?operation=PKIOperation",
+                             "application/x-pki-message",
+                             msg.data, msg.len, 1, NULL, NULL) != 200) {
+                fprintf(stderr, "FAIL %s:%d dispatch failure did not answer "
+                                "and close\n", __FILE__, __LINE__);
+                rc = -1;
+            }
+            wolfcert_buffer_free(&msg);
+        }
+    }
+
+    WOLFCERT_XFREE(bad_env, NULL);
+    WOLFCERT_XFREE(signer, NULL);
+    wolfcert_buffer_free(&env);
+    wolfcert_buffer_free(&kder);
+    wolfcert_buffer_free(&csr);
+    wolfcert_key_free(key);
+
+    return rc;
+}
+
+#endif /* HAVE_AES_CBC && WOLFSSL_AES_128 */
 
 int main(void)
 {
@@ -1098,8 +1273,17 @@ int main(void)
     REQUIRE(raw_http_status(wolfcert_server_port(s),
                 "/scep?operation=PKIOperation&message=QUJD", "XYZ") == 400); /* body freed */
 
+#if defined(HAVE_AES_CBC) && defined(WOLFSSL_AES_128)
     REQUIRE(check_required_attrs(s, &kcfg, ca_der->buffer,
                                  ca_der->length) == WOLFCERT_OK);
+
+    REQUIRE(check_malformed_dispatch(wolfcert_server_port(s), &kcfg,
+                                     ca_der->buffer, ca_der->length)
+            == WOLFCERT_OK);
+#else
+    printf("SKIP required-attrs and malformed-dispatch "
+           "(wolfSSL built without AES-128-CBC)\n");
+#endif
 
 #ifdef WOLFCERT_HAVE_ED25519
     /* Ed25519 signer must be rejected cleanly (RFC 8894 requires RSA). */

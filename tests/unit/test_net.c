@@ -31,9 +31,12 @@
 
 #include <wolfcert/wolfcert.h>
 #include <wolfcert/http.h>
+#include "internal.h"
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <signal.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -54,6 +57,73 @@ static long mono_ms(void)
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
+
+/* Set by note_sigpipe(); a library write must leave it clear. */
+static volatile sig_atomic_t g_sigpipe_raised;
+
+static void note_sigpipe(int sig)
+{
+    (void)sig;
+    g_sigpipe_raised = 1;
+}
+
+/* Write to a socketpair whose peer is closed, handler armed. `nosigpipe`
+ * applies the socket option wolfcert_posix_connect() sets. */
+static int write_to_dead_peer(int nosigpipe, int* out_rc)
+{
+    static const uint8_t body[256] = { 0 };
+    struct sigaction     sa, old;
+    int                  sv[2];
+
+    /* Before closing the peer: setsockopt(SO_NOSIGPIPE) fails with EINVAL
+     * once the peer is gone. */
+    REQUIRE(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0);
+    if (nosigpipe)
+        wolfcert_sock_nosigpipe(sv[0]);
+    close(sv[1]);
+
+    /* Catch, not ignore, so "not raised" differs from "raised and
+     * swallowed"; CI runs every test with SIGPIPE ignored. */
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = note_sigpipe;
+    sigemptyset(&sa.sa_mask);
+    REQUIRE(sigaction(SIGPIPE, &sa, &old) == 0);
+    g_sigpipe_raised = 0;
+
+    *out_rc = wolfcert_posix_transport.write(NULL, (void*)(intptr_t)sv[0],
+                                             body, sizeof(body), 0);
+
+    REQUIRE(sigaction(SIGPIPE, &old, NULL) == 0);
+    close(sv[0]);
+
+    return 0;
+}
+
+/* Both arms in force. WOLFCERT_ERR_IO pins that the write reached send(). */
+static int test_no_sigpipe_on_dead_peer(void)
+{
+    int rc = 0;
+
+    REQUIRE(write_to_dead_peer(1, &rc) == 0);
+    REQUIRE(g_sigpipe_raised == 0);
+    REQUIRE(rc == WOLFCERT_ERR_IO);
+
+    return 0;
+}
+
+#ifdef MSG_NOSIGNAL
+/* No socket option: the send flag alone must suppress the signal. */
+static int test_send_flag_alone_suppresses(void)
+{
+    int rc = 0;
+
+    REQUIRE(write_to_dead_peer(0, &rc) == 0);
+    REQUIRE(g_sigpipe_raised == 0);
+    REQUIRE(rc == WOLFCERT_ERR_IO);
+
+    return 0;
+}
+#endif
 
 int main(void)
 {
@@ -87,6 +157,14 @@ int main(void)
     long elapsed = mono_ms() - t0;
     REQUIRE(fd2 < 0);
     REQUIRE(elapsed < 3000);
+
+    if (test_no_sigpipe_on_dead_peer())
+        return 1;
+
+#ifdef MSG_NOSIGNAL
+    if (test_send_flag_alone_suppresses())
+        return 1;
+#endif
 
     printf("OK (unreachable connect returned in %ldms)\n", elapsed);
     return 0;

@@ -26,6 +26,7 @@
 
 #define _POSIX_C_SOURCE 200809L
 #define _DEFAULT_SOURCE
+#define _DARWIN_C_SOURCE
 
 #include <wolfcert/server.h>
 #include <wolfcert/errors.h>
@@ -41,6 +42,14 @@
 #include <unistd.h>
 
 #include <wolfssl/ssl.h>
+
+/* WOLFCERT_SEND_FLAGS suppresses SIGPIPE per send(), leaving the process
+ * signal disposition to the embedding application. */
+#ifdef MSG_NOSIGNAL
+#define WOLFCERT_SEND_FLAGS MSG_NOSIGNAL
+#else
+#define WOLFCERT_SEND_FLAGS 0
+#endif
 
 /* accept() poll cadence: how often wolfcert_server_run() wakes to re-check the
  * stopping flag while idle. Bounds shutdown latency; not performance-critical.
@@ -66,7 +75,7 @@ ssize_t wolfcert_io_send(WolfCertServer* srv, int fd, const void* buf, size_t le
         return r <= 0 ? -1 : (ssize_t)r;
     }
 
-    return send(fd, buf, len, 0);
+    return send(fd, buf, len, WOLFCERT_SEND_FLAGS);
 }
 
 static int tls_setup(WolfCertServer* s, const WolfCertServerCfgSrv* cfg)
@@ -326,12 +335,15 @@ int wolfcert_server_run(WolfCertServer* srv)
             return WOLFCERT_ERR_IO;
         }
 
+        wolfcert_sock_nosigpipe(cs);
+
         if (srv->tls_ctx != NULL) {
             /* Terminate TLS on this accepted fd. The protocol handler sees
              * plaintext HTTP through wolfcert_io_{recv,send}. */
             WOLFSSL* ssl = wolfSSL_new(srv->tls_ctx);
             if (ssl != NULL) {
                 wolfSSL_set_fd(ssl, cs);
+                wolfSSL_SetIOWriteFlags(ssl, WOLFCERT_SEND_FLAGS);
 
                 if ((ret = wolfSSL_accept(ssl)) == WOLFSSL_SUCCESS) {
                     srv->tls_current = ssl;
@@ -380,6 +392,8 @@ int wolfcert_server_serve_fd(WolfCertServer* srv, int fd)
 {
     if (srv == NULL || fd < 0)
         return WOLFCERT_ERR_BAD_ARG;
+
+    wolfcert_sock_nosigpipe(fd);
 
     return srv->ops->serve_fd(srv, fd);
 }

@@ -455,6 +455,12 @@ The contract:
   path included. A failed `connect` is never paired with one.
 - **`ctx` is transport-wide** (the stack instance, say), distinct from the
   per-connection handle. Whatever it points at must outlive the connection.
+- **Signal safety is the transport's.** wolfCert cannot reach your descriptor,
+  so a write to a peer that has gone away must not raise `SIGPIPE` in the
+  embedding application. The built-in POSIX instance sets `SO_NOSIGPIPE` at
+  `socket()` and passes `MSG_NOSIGNAL` on every `send()`. Do the same if your
+  transport uses BSD sockets. If it uses a stack that never raises `SIGPIPE`,
+  there is nothing to do.
 - **The struct itself need not.** Opening a connection copies it, so the config
   may be a temporary — and a later change to your copy has no effect on a
   connection already open.

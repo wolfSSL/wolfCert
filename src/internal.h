@@ -207,6 +207,11 @@ struct WolfCertServer {
 ssize_t wolfcert_io_recv(WolfCertServer* srv, int fd, void* buf, size_t len);
 ssize_t wolfcert_io_send(WolfCertServer* srv, int fd, const void* buf, size_t len);
 
+/* Best-effort SO_NOSIGPIPE on a connected socket, so a write to a departed peer
+ * cannot raise SIGPIPE in the embedding application. A no-op where the platform
+ * has no such option, and on an fd that is not a socket. */
+WOLFCERT_TEST_VIS void wolfcert_sock_nosigpipe(int fd);
+
 /* Factories supplied by est/est_server.c and scep/scep_server.c. */
 WOLFCERT_API const WolfCertServerOps* wolfcert_est_server_ops(void);
 WOLFCERT_API const WolfCertServerOps* wolfcert_scep_server_ops(void);
@@ -312,7 +317,7 @@ WOLFCERT_TEST_VIS int wolfcert_parse_ip(const char* s, uint8_t out[16],
                                         size_t* out_len);
 
 /* Built-in POSIX transport. */
-extern const WolfCertTransport wolfcert_posix_transport;
+WOLFCERT_TEST_VIS extern const WolfCertTransport wolfcert_posix_transport;
 /* The descriptor behind a wolfcert_posix_transport connection; -1 for a
  * handle any other transport minted. */
 int  wolfcert_transport_fd(const WolfCertTransport* t, void* conn);

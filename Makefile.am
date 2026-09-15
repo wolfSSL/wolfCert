@@ -248,4 +248,8 @@ EXTRA_DIST = \
     cmake/wolfCertTargets.cmake.in \
     cmake/wolfcert.pc.in \
     tests/integration/tls_test_util.h \
+    tests/integration/est_client_cases.h \
     tests/integration/cli_proto_scoping.sh
+
+# Zephyr module port
+include zephyr/include.am

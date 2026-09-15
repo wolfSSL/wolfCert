@@ -34,6 +34,14 @@
 
 #include <wolfssl/options.h>
 #include <wolfssl/wolfcrypt/settings.h>
+
+/* wolfssl/wolfcrypt/settings.h defines `connect` and `accept` as macros for
+ * zsock_connect and zsock_accept, which breaks the build */
+#ifdef WOLFSSL_ZEPHYR
+    #undef connect
+    #undef accept
+#endif
+
 /* wolfssl/wolfcrypt/random.h declares a `pid_t` member under HAVE_GETPID
  * (e.g. static-memory builds). Pull in its POSIX declaration first so that
  * header compiles; harmless on configs that don't reference it. */

@@ -268,6 +268,26 @@ take that opt-out for a hosted EST service: the server would return its
 default certificate and `verify_server` would reject the handshake with
 `WOLFCERT_ERR_TLS`.
 
+## 8. Zephyr
+
+wolfCert ships a Zephyr module under `zephyr/`; see `zephyr/README.md` for
+Kconfig, the west manifest and running the on-target tests. Two sizing points
+belong here.
+
+**The stack, not the heap, is what bites first.** `z_main_stack` grows down
+into `z_idle_stacks`, so a main stack too small for RSA key generation
+overwrites the idle thread and the image dies later in the interrupt handler
+rather than reporting a stack overflow. Build with
+`CONFIG_HW_STACK_PROTECTION=y` while tuning `CONFIG_MAIN_STACK_SIZE` so an
+overflow names itself. The x86 defaults for `CONFIG_ISR_STACK_SIZE` (2048) and
+`CONFIG_IDLE_STACK_SIZE` (320) are also thin once the networking stack is in
+the image.
+
+**A clock is not optional.** Without a set wall clock every certificate looks
+not-yet-valid and the failure surfaces as a trust-anchor error, not a clock
+error. Targets with no RTC must set `CLOCK_REALTIME` (or supply an RTC, or
+SNTP) before the first certificate is parsed.
+
 ## A worked "small footprint" wolfSSL config
 
 ```c

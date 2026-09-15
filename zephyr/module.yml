@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# The name is pinned so ZEPHYR_WOLFCERT_MODULE_DIR and the generated
+# ZEPHYR_WOLFCERT_MODULE Kconfig symbol do not follow the checkout directory.
+name: wolfcert
+build:
+  cmake: zephyr
+  kconfig: zephyr/Kconfig

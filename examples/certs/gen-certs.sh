@@ -8,7 +8,8 @@
 #
 #     <alg>/ca-cert.pem      self-signed CA (trust anchor)
 #     <alg>/ca-key.pem
-#     <alg>/server-cert.pem  TLS server leaf, SAN = localhost / 127.0.0.1 / ::1
+#     <alg>/server-cert.pem  TLS server leaf, SAN = localhost / 127.0.0.1 /
+#                            ::1 / 10.0.2.2
 #     <alg>/server-key.pem
 #     <alg>/client-cert.pem  mTLS client leaf
 #     <alg>/client-key.pem
@@ -65,8 +66,10 @@ gen_pki() {
         -out "$dir/ca-cert.pem"
 
     # --- TLS server leaf (CN + SAN so hostname verification passes) -----
+    # 10.0.2.2 is the QEMU SLIRP gateway, i.e. the host as seen from a Zephyr
+    # guest, so the same leaf serves the emulator tests.
     gen_leaf "$dir" server "/CN=localhost" \
-"subjectAltName=DNS:localhost,IP:127.0.0.1,IP:::1
+"subjectAltName=DNS:localhost,IP:127.0.0.1,IP:::1,IP:10.0.2.2
 extendedKeyUsage=serverAuth" "$@"
 
     # --- mTLS client leaf ----------------------------------------------

@@ -1,0 +1,99 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+config ZEPHYR_WOLFCERT_MODULE
+	bool
+
+config WOLFCERT_PROMPTLESS
+	bool
+	help
+	  Hides the wolfCert menu entry. Set this from your own Kconfig when you
+	  "select WOLFCERT" there, so menuconfig shows it as always-on instead of
+	  a switch the user cannot actually turn off.
+
+menuconfig WOLFCERT
+	bool "wolfCert Support" if !WOLFCERT_PROMPTLESS
+	depends on WOLFSSL
+	select NETWORKING
+	help
+	  Build wolfCert as a Zephyr module. See the top-level README.md for what
+	  the library does and zephyr/README.md for the integration.
+
+	  NETWORKING is selected because wolfSSL's OPENSSL_EXTRA x509 code needs
+	  the AF_INET definitions, even in an image that opens no socket.
+
+if WOLFCERT
+
+config WOLFCERT_EST
+	bool "EST (RFC 7030) support"
+	default y
+	help
+	  Enable the EST client.
+
+config WOLFCERT_SCEP
+	bool "SCEP (RFC 8894) support"
+	depends on WOLFCERT_RSA
+	help
+	  Enable the SCEP client.
+
+config WOLFCERT_BUILTIN_TRANSPORT
+	bool "Built-in BSD-socket transport"
+	default y
+	select POSIX_API
+	help
+	  Compile src/net_posix.c. On Zephyr it runs on the POSIX API layer,
+	  which is why POSIX_API is selected. Hostname lookup additionally needs
+	  DNS_RESOLVER; numeric addresses work without it.
+
+config WOLFCERT_POSIX_STORE
+	bool "POSIX file storage backend"
+	help
+	  Compile the POSIX file store. Off by default on Zephyr, which has no
+	  filesystem in a typical image; a board backend over NVS or the settings
+	  subsystem goes in your own tree.
+
+comment "Key algorithms"
+
+config WOLFCERT_RSA
+	bool "RSA keys"
+	default y
+	help
+	  Required by SCEP.
+
+config WOLFCERT_ECC
+	bool "ECC keys"
+	default y
+
+config WOLFCERT_ED25519
+	bool "Ed25519 keys"
+
+config WOLFCERT_ED448
+	bool "Ed448 keys"
+
+config WOLFCERT_MLDSA
+	bool "ML-DSA keys"
+
+config WOLFCERT_SMALL_MATH
+	bool "Smaller, slower SP math"
+	help
+	  Define WOLFSSL_SP_SMALL: smaller wolfCrypt math at a large speed cost,
+	  worst on RSA key generation. For a flash-constrained board.
+
+config WOLFCERT_BUILD_TESTING
+	bool "Export internal symbols for in-tree tests"
+	help
+	  Define WOLFCERT_BUILD_TESTING. Needed only by the in-tree tests that
+	  reach internal helpers.
+
+config WOLFCERT_DEBUG
+	bool "wolfCert debug build"
+	help
+	  Compile wolfCert with -g3 -O0.
+
+config APP_LINK_WITH_WOLFCERT
+	bool "Link 'app' with wolfCert"
+	default y
+	help
+	  Give 'app' the wolfCert interface library, which carries the compile
+	  definitions the public headers expect.
+
+endif # WOLFCERT

@@ -804,11 +804,14 @@ done_chunks:
         }
 
         size_t n = (size_t)length;
-        uint8_t* b = (uint8_t*)WOLFCERT_XMALLOC(n, heap);
+        /* Ask for one byte on a Content-Length: 0 body: XMALLOC(0) returns
+         * NULL on some allocators */
+        uint8_t* b = (uint8_t*)WOLFCERT_XMALLOC(n ? n : 1, heap);
         if (b == NULL)
             return WOLFCERT_ERR_MEMORY;
 
-        memcpy(b, rx->buf + body_start, n);
+        if (n > 0)
+            memcpy(b, rx->buf + body_start, n);
         *out = b;
         *out_len = n;
 

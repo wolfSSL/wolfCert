@@ -138,6 +138,11 @@ if(WOLFCERT_ENABLE_SCEP AND WOLFCERT_ENABLE_SERVER)
     target_link_libraries(test_scep_poll_roundtrip PRIVATE wolfcert Threads::Threads)
     add_test(NAME scep_poll_roundtrip COMMAND test_scep_poll_roundtrip)
 
+    add_executable(test_scep_get_cert integration/test_scep_get_cert.c)
+    target_include_directories(test_scep_get_cert PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_scep_get_cert PRIVATE wolfcert Threads::Threads)
+    add_test(NAME scep_get_cert COMMAND test_scep_get_cert)
+
     add_executable(test_scep_async_roundtrip integration/test_scep_async_roundtrip.c)
     target_link_libraries(test_scep_async_roundtrip PRIVATE wolfcert Threads::Threads)
     add_test(NAME scep_async_roundtrip COMMAND test_scep_async_roundtrip)

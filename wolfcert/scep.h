@@ -124,6 +124,9 @@ typedef struct {
     void*              heap;
 } WolfCertScepResult;
 
+/* Every entry point below defines *out before any other argument check, so a
+ * caller that frees the result on every outcome is safe even on an early
+ * WOLFCERT_ERR_BAD_ARG. The one exception is a NULL out itself. */
 WOLFCERT_API void wolfcert_scep_result_free(WolfCertScepResult* r);
 
 /* PKCSReq: enroll a new certificate. The RFC 8894 section 2.9 challengePassword
@@ -206,6 +209,34 @@ WOLFCERT_API int wolfcert_scep_get_cert_initial(const WolfCertServerCfg* srv,
                                                 const uint8_t* transaction_id,
                                                 size_t transaction_id_len,
                                                 WolfCertScepResult* out);
+
+/* GetCert (RFC 8894 section 3.3.3, messageType 21): retrieve a certificate the
+ * CA has already issued, named by the serial it carries. Use it to recover a
+ * certificate whose local copy was lost when the private key survived.
+ *
+ * RFC 8894 calls GetCert optional and discourages it -- it "applies unnecessary
+ * cryptography and messaging overhead" -- so a CA may answer FAILURE/badCertId
+ * or nothing at all; prefer an HTTP certificate store where one exists.
+ *
+ * `signer_cert` / `signer_key` are an existing certificate and its key, which
+ * sign the pkiMessage; unlike wolfcert_scep_get_cert_initial there is no
+ * transient self-signed fallback. `serial` is the serial of the certificate
+ * being fetched, as the INTEGER content it carries -- DecodedCert.serial and
+ * .serialSz after wc_ParseCert, or the equivalent from your own records.
+ * `ra_cert` is the envelope target; `ca_bundle` is the trusted GetCACert bundle
+ * the response signer is checked against (see wolfcert_scep_pkcs_req_ex).
+ *
+ * On a hit the certificate lands in out->cert_pem with status SUCCESS. There
+ * is no session variant: GetCert is a one-off recovery operation, not part of
+ * the enrollment loop the session API exists for. */
+WOLFCERT_API int wolfcert_scep_get_cert(const WolfCertServerCfg* srv,
+                                        const WolfCertScepCaps* caps,
+                                        const uint8_t* ra_cert, size_t ra_cert_len,
+                                        const uint8_t* ca_bundle, size_t ca_bundle_len,
+                                        const uint8_t* signer_cert, size_t signer_cert_len,
+                                        const WolfCertKey* signer_key,
+                                        const uint8_t* serial, size_t serial_len,
+                                        WolfCertScepResult* out);
 
 /* GetNextCACert (RFC 8894 section 4.6.1): retrieve the roll-over CA cert ahead
  * of the current CA's expiry, so the device can install the new trust

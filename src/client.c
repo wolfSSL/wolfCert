@@ -229,6 +229,9 @@ int wolfcert_client_reenroll(WolfCertClient* client, const WolfCertServerCfg* sr
                              WolfCertKey** out_key, WolfCertBuffer* out_cert_pem)
 {
     (void)client;
+#ifndef WOLFCERT_HAVE_EST
+    (void)current_cert_len;   /* only the EST reenroll path reads it */
+#endif
     if (srv == NULL || current_cert == NULL || current_key == NULL ||
         meta == NULL || out_key == NULL || out_cert_pem == NULL)
         return WOLFCERT_ERR_BAD_ARG;

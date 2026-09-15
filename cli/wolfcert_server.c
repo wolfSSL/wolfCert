@@ -62,6 +62,7 @@ static void print_usage(FILE* out)
         "                       [--basic USER:PASS] [--challenge PASS]\n"
         "                       [--tls-cert PEM --tls-key PEM [--tls-client-ca PEM]]\n"
         "                       [--scep-require-approval] [--scep-enable-next-ca]\n"
+        "                       [--scep-enable-get-cert]\n"
         "\n"
         "Options:\n"
         "  --proto est|scep         Protocol to serve (required)\n"
@@ -76,6 +77,9 @@ static void print_usage(FILE* out)
         "                           on first GetCertInitial with the same transactionID\n"
         "  --scep-enable-next-ca    Advertise + answer GetNextCACert (RFC 8894 section 4.6.1),\n"
         "                           generating a roll-over CA on first request\n"
+        "  --scep-enable-get-cert   Answer GetCert (RFC 8894 section 3.3.3), returning a\n"
+        "                           previously issued certificate by serial. Off by default;\n"
+        "                           while off the request is refused as unimplemented.\n"
         "  --est-require-approval   Defer EST /simpleenroll + /simplereenroll: first POST for\n"
         "                           a CSR returns 202 Accepted + Retry-After; next POST of\n"
         "                           the same CSR body issues the cert (RFC 7030 section 4.2.3)\n"
@@ -167,6 +171,7 @@ int main(int argc, char** argv)
         { "tls-client-ca",           required_argument, NULL, 'A' },
         { "scep-require-approval",   no_argument,       NULL, 'R' },
         { "scep-enable-next-ca",     no_argument,       NULL, 'N' },
+        { "scep-enable-get-cert",    no_argument,       NULL, 'G' },
         { "est-require-approval",    no_argument,       NULL, 'E' },
         { "est-retry-after",         required_argument, NULL, 'T' },
         { "tls-post-handshake-auth", no_argument,       NULL, 'H' },
@@ -191,6 +196,7 @@ int main(int argc, char** argv)
     size_t tls_ca_len   = 0;
     int scep_require_approval = 0;
     int scep_enable_next_ca   = 0;
+    int scep_enable_get_cert  = 0;
     int est_require_approval  = 0;
     int est_retry_after_sec   = 0;
     int tls_post_handshake_auth = 0;
@@ -242,6 +248,9 @@ int main(int argc, char** argv)
                 break;
             case 'R':
                 scep_require_approval = 1;
+                break;
+            case 'G':
+                scep_enable_get_cert  = 1;
                 break;
             case 'N':
                 scep_enable_next_ca   = 1;
@@ -356,6 +365,7 @@ int main(int argc, char** argv)
         .tls_client_ca_pem_len      = tls_ca_len,
         .scep_require_approval      = scep_require_approval,
         .scep_enable_next_ca        = scep_enable_next_ca,
+        .scep_enable_get_cert       = scep_enable_get_cert,
         .est_require_approval       = est_require_approval,
         .est_retry_after_sec        = est_retry_after_sec,
         .tls_post_handshake_auth    = tls_post_handshake_auth,

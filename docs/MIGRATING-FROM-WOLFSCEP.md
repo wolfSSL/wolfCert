@@ -45,9 +45,9 @@ If you must keep your own transport, for example on an RTOS with a proprietary s
 | `wolfSCEP_reply_error`, `wolfSCEP_get_error` | `wolfcert_strerror` and `wolfcert_last_error_message` |
 | `wolfSCEP_Debugging_ON` / `_OFF` | `wolfcert_set_log_cb` and `wolfcert_set_log_level` |
 | your own CA fingerprint check | `wolfcert_scep_verify_ca_fingerprint`, or `wolfcert-client --ca-fingerprint` from the CLI |
-| no equivalent | `wolfcert_scep_renewal_req` (either messageType, see below), `wolfcert_scep_get_cert_initial`, `wolfcert_scep_get_next_ca_cert`, the keep-alive and async session API, and all of EST |
+| no equivalent | `wolfcert_scep_renewal_req` (either messageType, see below), `wolfcert_scep_get_cert_initial`, `wolfcert_scep_get_cert`, `wolfcert_scep_get_next_ca_cert`, the keep-alive and async session API, and all of EST |
 
-`WS_REQUEST_CERT` and `WS_REQUEST_CRL` need no entry. Both fall through to the default case of `wolfSCEP_request()` and return `WS_BAD_ARGUMENT`, so no working integration can be using them.
+`WS_REQUEST_CERT` and `WS_REQUEST_CRL` need no entry. Both fall through to the default case of `wolfSCEP_request()` and return `WS_BAD_ARGUMENT`, so no working integration can be using them. wolfCert covers the first anyway with `wolfcert_scep_get_cert`; it has no GetCRL, and RFC 8894 section 7.8 would rather you used the CRL distribution point.
 
 ## A worked enrollment
 

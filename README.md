@@ -194,7 +194,7 @@ All `WolfCertBuffer` outputs remember which heap they came from, so the same
 - **EST endpoints:** `/cacerts`, `/simpleenroll`, `/simplereenroll`,
   `/csrattrs`.
 - **SCEP operations:** `GetCACaps`, `GetCACert`, `GetNextCACert`, `PKCSReq`,
-  `RenewalReq`, plus `pkiStatus=PENDING` + `GetCertInitial` polling.
+  `RenewalReq`, `GetCert`, plus `pkiStatus=PENDING` + `GetCertInitial` polling.
 - **Transport:** HTTP/1.1 over wolfSSL TLS 1.3/1.2 (trust anchors, SNI,
   mutual TLS), keep-alive sessions, TLS 1.3 post-handshake auth, and an
   optional non-blocking mode for `poll`/`epoll`/`kqueue` event loops. Every

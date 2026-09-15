@@ -83,6 +83,39 @@ expect_reject "--txid-mode under est"      "SCEP-only" \
     getcacerts --proto est --url "$EST_URL" --txid-mode pubkey
 expect_reject "--content-cipher under est" "SCEP-only" \
     getcacerts --proto est --url "$EST_URL" --content-cipher aes256
+expect_reject "--serial under est"          "SCEP-only" \
+    getcacerts --proto est --url "$EST_URL" --serial 4B3A
+
+# getcert is SCEP-only, and its --serial argument is validated before any
+# network access rather than at the point of use.
+expect_reject "getcert under est"      "only --proto scep" \
+    getcert --proto est --url "$EST_URL" --cert /dev/null --key /dev/null
+expect_reject "getcert without --serial" "--serial required" \
+    getcert --proto scep --url "$SCEP_URL" --cert /dev/null --key /dev/null
+expect_reject "odd-length --serial"    "even number" \
+    getcert --proto scep --url "$SCEP_URL" --cert /dev/null --key /dev/null \
+    --serial abc
+expect_reject "non-hex --serial"       "non-hex" \
+    getcert --proto scep --url "$SCEP_URL" --cert /dev/null --key /dev/null \
+    --serial zz
+expect_reject "over-long --serial"     "20 octets" \
+    getcert --proto scep --url "$SCEP_URL" --cert /dev/null --key /dev/null \
+    --serial "$(rep 42 21)"
+
+# The accept side of the same boundary: 20 octets is the longest RFC 5280
+# permits and must get past parse_serial, failing later on the unreachable
+# port instead. Without this a regression to `n > CLI_SERIAL_MAX` (a one-byte
+# overflow of serial[]) or to CLI_SERIAL_MAX - 1 leaves every case green.
+out="$("$CLI" getcert --proto scep --url "$SCEP_URL" \
+        --cert /dev/null --key /dev/null --serial "$(rep 42 20)" 2>&1)"
+case "$out" in
+    *"20 octets"*|*non-hex*|*"even number"*)
+        echo "FAIL: a 20-octet --serial was rejected by parse_serial"
+        echo "      got: $out"
+        fails=$((fails + 1))
+        ;;
+    *)  echo "ok   20-octet --serial accepted" ;;
+esac
 
 # Keyword arguments are validated rather than silently defaulted.
 expect_reject "bogus --txid-mode"      "must be random or pubkey" \

@@ -190,7 +190,8 @@ test_scep_msg_SOURCES  = tests/unit/test_scep_msg.c
 test_scep_msg_CPPFLAGS = $(AM_CPPFLAGS) -I$(top_srcdir)/src
 test_scep_msg_LDADD    = libwolfcert.la $(WOLFSSL_LIBS)
 if WOLFCERT_HAVE_SERVER
-check_PROGRAMS += test_scep_roundtrip test_scep_poll_roundtrip test_scep_async_roundtrip
+check_PROGRAMS += test_scep_roundtrip test_scep_poll_roundtrip test_scep_async_roundtrip \
+                 test_scep_get_cert
 test_scep_roundtrip_SOURCES = tests/integration/test_scep_roundtrip.c
 test_scep_roundtrip_CPPFLAGS = $(AM_CPPFLAGS) -I$(top_srcdir)/src
 test_scep_roundtrip_LDADD   = libwolfcert.la $(WOLFSSL_LIBS) -lpthread
@@ -198,6 +199,9 @@ test_scep_poll_roundtrip_SOURCES = tests/integration/test_scep_poll_roundtrip.c
 test_scep_poll_roundtrip_LDADD   = libwolfcert.la $(WOLFSSL_LIBS) -lpthread
 test_scep_async_roundtrip_SOURCES = tests/integration/test_scep_async_roundtrip.c
 test_scep_async_roundtrip_LDADD   = libwolfcert.la $(WOLFSSL_LIBS) -lpthread
+test_scep_get_cert_SOURCES = tests/integration/test_scep_get_cert.c
+test_scep_get_cert_CPPFLAGS = $(AM_CPPFLAGS) -I$(top_srcdir)/src
+test_scep_get_cert_LDADD   = libwolfcert.la $(WOLFSSL_LIBS) -lpthread
 endif
 endif
 

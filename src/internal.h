@@ -243,6 +243,11 @@ WOLFCERT_API const WolfCertServerOps* wolfcert_scep_server_ops(void);
  * the CA key, and/or force the CertRep senderNonce RNG draw to fail. Used to
  * drive the client-side rejection and server error paths. Call after
  * wolfcert_server_start and before the client request. */
+/* Answer GetCert with the CA cert instead of the match, so the client's
+ * requested-serial check has something to reject. */
+WOLFCERT_TEST_VIS void wolfcert_scep_server_set_getcert_fault(WolfCertServer* s,
+                                                              int wrong_cert);
+
 WOLFCERT_TEST_VIS void wolfcert_scep_server_set_faults(WolfCertServer* s,
     int omit_recipient_nonce, int sign_with_wrong_key, int rng_fail);
 #endif
@@ -396,6 +401,34 @@ WOLFCERT_TEST_VIS int wolfcert_scep_issuer_and_subject(
                                      const uint8_t* ra_cert_der, size_t ra_cert_len,
                                      const uint8_t* csr_der,     size_t csr_len,
                                      WolfCertBuffer* out_der, void* heap);
+
+/* Build the GetCert IssuerAndSerialNumber (RFC 8894 section 3.3.3) from an
+ * envelope-target cert and the serial of the certificate being fetched. The
+ * issuer Name is chosen as for wolfcert_scep_issuer_and_subject. */
+WOLFCERT_TEST_VIS int wolfcert_scep_issuer_and_serial(
+                                     const uint8_t* ra_cert_der, size_t ra_cert_len,
+                                     const uint8_t* serial, size_t serial_len,
+                                     WolfCertBuffer* out_der, void* heap);
+
+/* Narrow a serial to its unsigned magnitude: leading zero bytes dropped, never
+ * below one byte. Both directions of a serial exchange normalize through this,
+ * so an encoder's DER sign pad and wolfSSL's stripped DecodedCert.serial agree. */
+WOLFCERT_TEST_VIS void wolfcert_scep_int_magnitude(const uint8_t** v, size_t* vl);
+
+/* Split an IssuerAndSerialNumber into the issuer Name's contents and the serial
+ * magnitude; both point into `der`. */
+WOLFCERT_TEST_VIS int wolfcert_scep_parse_issuer_and_serial(
+                                     const uint8_t* der, size_t der_len,
+                                     const uint8_t** out_issuer,
+                                     size_t* out_issuer_len,
+                                     const uint8_t** out_serial,
+                                     size_t* out_serial_len);
+
+/* Does `name` match the Name the CA in `cert_der` issues under? */
+WOLFCERT_TEST_VIS int wolfcert_scep_issuer_name_matches(
+                                     const uint8_t* cert_der, size_t cert_len,
+                                     const uint8_t* name, size_t name_len,
+                                     void* heap);
 
 WOLFCERT_TEST_VIS int wolfcert_scep_envelop(const uint8_t* ra_cert_der,
     size_t ra_cert_len, const uint8_t* payload, size_t payload_len, int enc_oid,

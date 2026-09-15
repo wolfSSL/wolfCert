@@ -190,6 +190,7 @@ whose payload is an EnvelopedData, built on wolfSSL's `wc_PKCS7` API.
 | `PKCSReq`        | 19         | `wolfcert_scep_pkcs_req_ex` (+ simple `_pkcs_req`) |
 | `RenewalReq`     | 17         | `wolfcert_scep_renewal_req_ex` (+ simple `_renewal_req`) |
 | `GetCertInitial` | 20         | `wolfcert_scep_get_cert_initial` |
+| `GetCert`        | 21         | `wolfcert_scep_get_cert` |
 
 Each round trip envelopes the payload to the RA/CA cert's public key, signs it
 (for `PKCSReq` with a transient self-signed cert whose key matches the one

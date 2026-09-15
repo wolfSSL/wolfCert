@@ -68,6 +68,14 @@ static uint8_t* read_whole(const char* path, size_t* out_len)
     return b;
 }
 
+static void free_secret(void* p, size_t len)
+{
+    if (p != NULL) {
+        wc_ForceZero(p, (word32)len);
+        free(p);
+    }
+}
+
 static void print_usage(FILE* out)
 {
     fprintf(out,
@@ -77,6 +85,7 @@ static void print_usage(FILE* out)
         "Commands:\n"
         "  getcacerts     Retrieve the CA chain and write it as PEM.\n"
         "  getnextca      SCEP GetNextCACert: fetch the roll-over CA (RFC 8894 section 4.6.1).\n"
+        "  getcert        SCEP GetCert: fetch an issued certificate by serial (RFC 8894 section 3.3.3).\n"
         "  enroll         Generate a key + CSR and enroll a new certificate.\n"
         "  reenroll       Re-enroll an existing certificate (EST).\n"
         "\n"
@@ -144,7 +153,20 @@ static void print_usage(FILE* out)
         "reenroll options:\n"
         "  --cert FILE                     Current certificate (PEM)\n"
         "  --key  FILE                     Current private key (PEM)\n"
-        "  plus the enroll options above to describe the renewed cert.\n",
+        "  plus the enroll options above to describe the renewed cert.\n"
+        "\n"
+        "getcert options (SCEP only):\n"
+        "  --cert FILE                     Certificate signing the request (PEM)\n"
+        "  --key  FILE                     Private key for --cert (PEM)\n"
+        "  --serial HEX                    Serial of the certificate to fetch; ':' and\n"
+        "                                  ' ' separators are ignored, so openssl output\n"
+        "                                  pastes in as-is. Max 20 octets (RFC 5280\n"
+        "                                  section 4.1.2.2).\n"
+        "  --out-cert FILE                 Where to write the fetched certificate\n"
+        "                                  (default stdout).\n"
+        "  Many CAs do not offer GetCert: RFC 8894 section 7.8 prefers an HTTP\n"
+        "  certificate store or LDAP. wolfcert-server answers it only with\n"
+        "  --scep-enable-get-cert.\n",
         wolfcert_version_string());
 }
 
@@ -179,6 +201,7 @@ typedef struct {
     const char*  txid_mode;
     const char*  content_cipher;
     const char*  ca_fingerprint;
+    const char*  serial;         /* SCEP-only, see check_proto_only_opts */
 } Opts;
 
 /* Append a value to a growable string-pointer array (used for repeatable
@@ -237,6 +260,7 @@ static int parse_common(int argc, char** argv, Opts* opts)
         { "txid-mode",        required_argument, NULL, 'T' },
         { "content-cipher",   required_argument, NULL, 'E' },
         { "ca-fingerprint",   required_argument, NULL, 'F' },
+        { "serial",           required_argument, NULL, 'S' },
         { 0 }
     };
     memset(opts, 0, sizeof(*opts));
@@ -336,6 +360,9 @@ static int parse_common(int argc, char** argv, Opts* opts)
                 break;
             case 'F':
                 opts->ca_fingerprint = optarg;
+                break;
+            case 'S':
+                opts->serial = optarg;
                 break;
             default:
                 return -1;
@@ -513,6 +540,12 @@ static int check_proto_only_opts(const Opts* opts, WolfCertProtocol p)
         if (opts->ca_fingerprint != NULL) {
             fprintf(stderr, "--ca-fingerprint is SCEP-only; EST authenticates "
                             "the server through TLS instead (--trust)\n");
+            return -1;
+        }
+
+        if (opts->serial != NULL) {
+            fprintf(stderr, "--serial is SCEP-only; it names the certificate a "
+                            "GetCert fetches (RFC 8894 section 3.3.3)\n");
             return -1;
         }
     }
@@ -939,9 +972,57 @@ static int fill_client_ident(const Opts* opts, WolfCertServerCfg* cfg,
 }
 
 #ifdef WOLFCERT_HAVE_SCEP
-/* Fetch the CA, resolve any pin against it, then run PKCSReq and any polling.
- * A pin narrows the envelope recipient and the CertRep trust anchor to the one
- * matching certificate, so nothing else served can stand in for the CA. */
+/* Resolve GetCACert into the envelope target (the RA/CA cert the request is
+ * encrypted to) and the trust set the CertRep signer is checked against. A pin
+ * narrows both to the one matching certificate, so nothing else served can
+ * stand in for the CA. `who` prefixes any diagnostic. The caller frees ca_pem,
+ * ca_bundle and ra_der; bundle is a non-owning alias into one of the latter. */
+static int scep_resolve_ca(const WolfCertServerCfg* srv, const CaPin* pin,
+                           const char* who,
+                           WolfCertBuffer* ca_pem, WolfCertBuffer* ca_bundle,
+                           DerBuffer** ra_der,
+                           const uint8_t** bundle, size_t* bundle_len)
+{
+    size_t n_certs = 0;
+    int rc = wolfcert_scep_get_ca_cert(srv, ca_pem);
+
+    if (rc == WOLFCERT_OK && pin->len > 0) {
+        if (find_pinned_cert(ca_pem->data, ca_pem->len, pin, ra_der,
+                             &n_certs) != 0) {
+            fprintf(stderr, "%s: the GetCACert response does not match "
+                            "--ca-fingerprint\n", who);
+            rc = WOLFCERT_ERR_AUTH;
+        }
+        else if (n_certs > 1) {
+            fprintf(stderr, "%s: pinned 1 of %lu served certificates; a "
+                    "CertRep signed by any of the others is refused\n",
+                    who, (unsigned long)n_certs);
+        }
+    }
+    else if (rc == WOLFCERT_OK) {
+        if (pem_cert_at(ca_pem->data, ca_pem->len, 0, ra_der) != 0)
+            rc = WOLFCERT_ERR_PARSE;
+    }
+
+    if (rc == WOLFCERT_OK) {
+        *bundle     = (*ra_der)->buffer;
+        *bundle_len = (*ra_der)->length;
+
+        /* Unpinned, trust the whole GetCACert bundle for the CertRep signer so
+         * a split CA/RA response is accepted. A pin deliberately does not widen
+         * this: only what the operator vouched for is trusted. */
+        if (pin->len == 0 &&
+                wolfcert_scep_get_ca_cert_enc(srv, WOLFCERT_ENCODING_DER,
+                                              ca_bundle) == WOLFCERT_OK) {
+            *bundle     = ca_bundle->data;
+            *bundle_len = ca_bundle->len;
+        }
+    }
+
+    return rc;
+}
+
+/* Fetch the CA, resolve any pin against it, then run PKCSReq and any polling. */
 static int scep_enroll(const Opts* opts, const WolfCertServerCfg* srv,
                        const CaPin* pin, const WolfCertKey* key,
                        const WolfCertBuffer* csr, WolfCertBuffer* issued)
@@ -953,44 +1034,13 @@ static int scep_enroll(const Opts* opts, const WolfCertServerCfg* srv,
     DerBuffer* ca_der = NULL;
     const uint8_t* bundle = NULL;
     size_t bundle_len = 0;
-    size_t n_certs = 0;
     int attempts = 0;
     int rc;
 
-    rc = wolfcert_scep_get_ca_cert(srv, &ca_pem);
-
-    if (rc == WOLFCERT_OK && pin->len > 0) {
-        if (find_pinned_cert(ca_pem.data, ca_pem.len, pin, &ca_der,
-                             &n_certs) != 0) {
-            fprintf(stderr, "enroll: the GetCACert response does not match "
-                            "--ca-fingerprint\n");
-            rc = WOLFCERT_ERR_AUTH;
-        }
-        else if (n_certs > 1) {
-            fprintf(stderr, "enroll: pinned 1 of %lu served certificates; a "
-                    "CertRep signed by any of the others is refused\n",
-                    (unsigned long)n_certs);
-        }
-    }
-    else if (rc == WOLFCERT_OK) {
-        if (pem_cert_at(ca_pem.data, ca_pem.len, 0, &ca_der) != 0)
-            rc = WOLFCERT_ERR_PARSE;
-    }
+    rc = scep_resolve_ca(srv, pin, "enroll", &ca_pem, &ca_bundle, &ca_der,
+                         &bundle, &bundle_len);
 
     if (rc == WOLFCERT_OK) {
-        bundle = ca_der->buffer;
-        bundle_len = ca_der->length;
-
-        /* Unpinned, trust the whole GetCACert bundle for the CertRep signer so
-         * a split CA/RA response is accepted. A pin deliberately does not widen
-         * this: only what the operator vouched for is trusted. */
-        if (pin->len == 0 &&
-                wolfcert_scep_get_ca_cert_enc(srv, WOLFCERT_ENCODING_DER,
-                                              &ca_bundle) == WOLFCERT_OK) {
-            bundle = ca_bundle.data;
-            bundle_len = ca_bundle.len;
-        }
-
         wolfcert_scep_get_ca_caps(srv, &caps);
         rc = wolfcert_scep_pkcs_req_ex(srv, &caps, ca_der->buffer,
                                        ca_der->length, bundle, bundle_len,
@@ -1377,6 +1427,8 @@ static int cmd_enroll(int argc, char** argv)
                     wrc = -1;
                 }
             }
+            if (key_pem.data != NULL)
+                wc_ForceZero(key_pem.data, (word32)key_pem.len);
             wolfcert_buffer_free(&key_pem);
         }
 
@@ -1502,12 +1554,220 @@ static int cmd_reenroll(int argc, char** argv)
     if (current_key != NULL)
         wolfcert_key_free(current_key);
     free(cert_pem);
-    free(key_pem);
+    free_secret(key_pem, key_len);
     free(trust_hold);
     free(mt_cert);
     free(mt_key);
     opts_free(&opts);
     return ret;
+}
+
+#ifdef WOLFCERT_HAVE_SCEP
+/* RFC 5280 section 4.1.2.2 caps a conforming serial at 20 octets. */
+#define CLI_SERIAL_MAX 20
+
+/* Parse hex into bytes, ignoring ':' and ' ' so a serial pastes in however
+ * openssl printed it. */
+static int parse_serial(const char* arg, uint8_t* out, size_t* out_len)
+{
+    size_t n = 0;
+    int    hi = -1;
+    int    v;
+
+    for (; *arg != '\0'; arg++) {
+        if (*arg == ':' || *arg == ' ')
+            continue;
+
+        v = hex_val(*arg);
+        if (v < 0) {
+            fprintf(stderr, "--serial holds a non-hex character\n");
+            return -1;
+        }
+
+        if (hi < 0) {
+            hi = v;
+            continue;
+        }
+
+        if (n == CLI_SERIAL_MAX) {
+            fprintf(stderr, "--serial is longer than the 20 octets RFC 5280 "
+                            "allows\n");
+            return -1;
+        }
+
+        out[n++] = (uint8_t)((hi << 4) | v);
+        hi = -1;
+    }
+
+    if (hi >= 0) {
+        fprintf(stderr, "--serial needs an even number of hex digits\n");
+        return -1;
+    }
+
+    if (n == 0) {
+        fprintf(stderr, "--serial is empty\n");
+        return -1;
+    }
+
+    *out_len = n;
+    return 0;
+}
+#endif /* WOLFCERT_HAVE_SCEP */
+
+static int cmd_getcert(int argc, char** argv)
+{
+#ifndef WOLFCERT_HAVE_SCEP
+    (void)argc;
+    (void)argv;
+    fprintf(stderr, "wolfcert-client: this build has no SCEP support\n");
+    return 1;
+#else
+    Opts opts;
+    uint8_t* trust_hold = NULL;
+    uint8_t* mt_cert = NULL;
+    uint8_t* mt_key = NULL;
+    uint8_t* cert_pem = NULL;
+    uint8_t* key_pem = NULL;
+    size_t cert_len = 0;
+    size_t key_len = 0;
+    WolfCertProtocol p = 0;
+    WolfCertKey* signer_key = NULL;
+    DerBuffer* signer_der = NULL;
+    WolfCertBuffer ca_pem = { 0 };
+    WolfCertBuffer ca_bundle = { 0 };
+    WolfCertScepCaps caps = { 0 };
+    WolfCertScepResult result = { 0 };
+    CaPin pin = { 0 };
+    DerBuffer* ra_der = NULL;
+    const uint8_t* bundle = NULL;
+    size_t bundle_len = 0;
+    uint8_t serial[CLI_SERIAL_MAX];
+    size_t serial_len = 0;
+    int rc = WOLFCERT_ERR_UNSUPPORTED;
+    int ret = 0;
+
+    if (parse_common(argc, argv, &opts) != 0)
+        ret = 1;
+
+    if (ret == 0 && proto_of(opts.proto, &p) != 0)
+        ret = 1;
+
+    if (ret == 0 && check_proto_only_opts(&opts, p) != 0)
+        ret = 1;
+
+    if (ret == 0 && p != WOLFCERT_PROTO_SCEP) {
+        fprintf(stderr, "getcert: only --proto scep is supported; EST has no "
+                        "certificate-retrieval operation\n");
+        ret = 1;
+    }
+
+    if (ret == 0 && (opts.cert_file == NULL || opts.key_file == NULL ||
+                     opts.serial == NULL)) {
+        fprintf(stderr, "getcert: --cert, --key and --serial required\n");
+        ret = 1;
+    }
+
+    if (ret == 0 && parse_serial(opts.serial, serial, &serial_len) != 0)
+        ret = 1;
+
+    if (ret == 0 && scep_pin_setup(&opts, p, &pin, 1) != 0)
+        ret = 1;
+
+    if (ret == 0) {
+        cert_pem = read_whole(opts.cert_file, &cert_len);
+        key_pem  = read_whole(opts.key_file,  &key_len);
+        if (cert_pem == NULL || key_pem == NULL) {
+            fprintf(stderr, "getcert: cannot read --cert/--key files\n");
+            ret = 2;
+        }
+    }
+
+    if (ret == 0 &&
+            wc_PemToDer(cert_pem, (long)cert_len, CERT_TYPE, &signer_der,
+                        NULL, NULL, NULL) != 0) {
+        fprintf(stderr, "getcert: bad --cert PEM\n");
+        ret = 2;
+    }
+
+    if (ret == 0 &&
+            wolfcert_key_from_pem(key_pem, key_len, NULL,
+                                  &signer_key) != WOLFCERT_OK) {
+        fprintf(stderr, "getcert: bad --key PEM\n");
+        ret = 2;
+    }
+
+    WolfCertServerCfg srv = { .protocol = p, .server_url = opts.url };
+
+    if (ret == 0) {
+        fill_trust(&opts, &srv, &trust_hold);
+        fill_basic_auth(&opts, &srv);
+        if (fill_scep_opts(&opts, &srv) != 0)
+            ret = 1;
+        if (ret == 0 && fill_client_ident(&opts, &srv, &mt_cert, &mt_key) != 0)
+            ret = 1;
+    }
+
+    if (ret == 0) {
+        rc = scep_resolve_ca(&srv, &pin, "getcert", &ca_pem, &ca_bundle,
+                             &ra_der, &bundle, &bundle_len);
+        if (rc != WOLFCERT_OK) {
+            if (rc != WOLFCERT_ERR_AUTH)
+                fprintf(stderr, "getcert: %s\n", wolfcert_strerror(rc));
+            ret = 2;
+        }
+    }
+
+    if (ret == 0) {
+        wolfcert_scep_get_ca_caps(&srv, &caps);
+        rc = wolfcert_scep_get_cert(&srv, &caps, ra_der->buffer, ra_der->length,
+                                    bundle, bundle_len,
+                                    signer_der->buffer, signer_der->length,
+                                    signer_key, serial, serial_len, &result);
+        if (rc != WOLFCERT_OK) {
+            fprintf(stderr, "getcert: %s\n", wolfcert_strerror(rc));
+            ret = 2;
+        }
+    }
+
+    if (ret == 0 && result.status != WOLFCERT_SCEP_STATUS_SUCCESS) {
+        fprintf(stderr, "getcert: the CA refused (pkiStatus=%s, failInfo=%d)\n",
+                result.status == WOLFCERT_SCEP_STATUS_PENDING ? "PENDING"
+                                                              : "FAILURE",
+                result.fail_info);
+        /* badRequest is what the server also returns for a messageType it does
+         * not implement, so GetCert being switched off looks the same here. */
+        if (result.fail_info == 2)
+            fprintf(stderr, "getcert: the CA may not offer GetCert at all; RFC "
+                            "8894 section 7.8 prefers an HTTP certificate "
+                            "store or LDAP\n");
+        else if (result.fail_info == 4)
+            fprintf(stderr, "getcert: no certificate with that serial\n");
+        ret = 2;
+    }
+
+    if (ret == 0 && write_file(opts.out_cert, result.cert_pem.data,
+                               result.cert_pem.len, 0) != 0) {
+        fprintf(stderr, "getcert: cannot write %s\n",
+                opts.out_cert ? opts.out_cert : "<stdout>");
+        ret = 2;
+    }
+
+    wolfcert_scep_result_free(&result);
+    if (signer_der != NULL)
+        wc_FreeDer(&signer_der);
+    if (ra_der != NULL)
+        wc_FreeDer(&ra_der);
+    wolfcert_key_free(signer_key);
+    wolfcert_buffer_free(&ca_pem);
+    wolfcert_buffer_free(&ca_bundle);
+    free(cert_pem);
+    free_secret(key_pem, key_len);
+    free(trust_hold);
+    free(mt_cert);
+    free(mt_key);
+    opts_free(&opts);
+    return ret;
+#endif
 }
 
 static int cmd_getnextca(int argc, char** argv)
@@ -1661,6 +1921,9 @@ int main(int argc, char** argv)
     }
     else if (strcmp(argv[1], "getnextca") == 0) {
         rc = cmd_getnextca(argc - 1, argv + 1);
+    }
+    else if (strcmp(argv[1], "getcert") == 0) {
+        rc = cmd_getcert(argc - 1, argv + 1);
     }
     else if (strcmp(argv[1], "enroll") == 0) {
         rc = cmd_enroll(argc - 1, argv + 1);

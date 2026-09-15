@@ -1,0 +1,43 @@
+# vim:ft=automake
+# included from the top-level Makefile.am
+# All paths are relative to the project root
+
+EXTRA_DIST += zephyr/README.md
+EXTRA_DIST += zephyr/samples/wolfcert_est_client/README.md
+EXTRA_DIST += zephyr/CMakeLists.txt
+EXTRA_DIST += zephyr/Kconfig
+EXTRA_DIST += zephyr/include.am
+EXTRA_DIST += zephyr/module.yml
+EXTRA_DIST += zephyr/samples/wolfcert_est_client/CMakeLists.txt
+EXTRA_DIST += zephyr/samples/wolfcert_est_client/prj.conf
+EXTRA_DIST += zephyr/samples/wolfcert_est_client/sample.yaml
+EXTRA_DIST += zephyr/samples/wolfcert_est_client/src/main.c
+EXTRA_DIST += zephyr/tests/common/test_shim.c
+EXTRA_DIST += zephyr/tests/common/unit_test.cmake
+EXTRA_DIST += zephyr/tests/common/wolfcert.conf
+EXTRA_DIST += zephyr/tests/wolfcert_est/CMakeLists.txt
+EXTRA_DIST += zephyr/tests/wolfcert_est/prj.conf
+EXTRA_DIST += zephyr/tests/wolfcert_est/src/main.c
+EXTRA_DIST += zephyr/tests/wolfcert_est/testcase.yaml
+EXTRA_DIST += zephyr/tests/wolfcert_unit_csr/CMakeLists.txt
+EXTRA_DIST += zephyr/tests/wolfcert_unit_csr/prj.conf
+EXTRA_DIST += zephyr/tests/wolfcert_unit_csr/testcase.yaml
+EXTRA_DIST += zephyr/tests/wolfcert_unit_csr_attrs/CMakeLists.txt
+EXTRA_DIST += zephyr/tests/wolfcert_unit_csr_attrs/prj.conf
+EXTRA_DIST += zephyr/tests/wolfcert_unit_csr_attrs/testcase.yaml
+EXTRA_DIST += zephyr/tests/wolfcert_unit_keygen/CMakeLists.txt
+EXTRA_DIST += zephyr/tests/wolfcert_unit_keygen/prj.conf
+EXTRA_DIST += zephyr/tests/wolfcert_unit_keygen/testcase.yaml
+EXTRA_DIST += zephyr/tests/wolfcert_unit_parse_negative/CMakeLists.txt
+EXTRA_DIST += zephyr/tests/wolfcert_unit_parse_negative/prj.conf
+EXTRA_DIST += zephyr/tests/wolfcert_unit_parse_negative/testcase.yaml
+EXTRA_DIST += zephyr/tests/wolfcert_unit_scep_msg/CMakeLists.txt
+EXTRA_DIST += zephyr/tests/wolfcert_unit_scep_msg/prj.conf
+EXTRA_DIST += zephyr/tests/wolfcert_unit_scep_msg/testcase.yaml
+EXTRA_DIST += zephyr/tests/wolfcert_unit_smoke/CMakeLists.txt
+EXTRA_DIST += zephyr/tests/wolfcert_unit_smoke/prj.conf
+EXTRA_DIST += zephyr/tests/wolfcert_unit_smoke/testcase.yaml
+EXTRA_DIST += zephyr/tests/wolfcert_unit_store/CMakeLists.txt
+EXTRA_DIST += zephyr/tests/wolfcert_unit_store/prj.conf
+EXTRA_DIST += zephyr/tests/wolfcert_unit_store/testcase.yaml
+EXTRA_DIST += zephyr/wolfssl_user_settings.h

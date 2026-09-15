@@ -12,7 +12,7 @@ Two algorithm families, each a self-signed CA plus a server and a client leaf:
 | File | Role |
 |------|------|
 | `<alg>/ca-cert.pem` / `ca-key.pem` | self-signed CA — the trust anchor |
-| `<alg>/server-cert.pem` / `server-key.pem` | TLS server leaf, SAN = `localhost`, `127.0.0.1`, `::1` |
+| `<alg>/server-cert.pem` / `server-key.pem` | TLS server leaf, SAN = `localhost`, `127.0.0.1`, `::1`, `10.0.2.2` |
 | `<alg>/client-cert.pem` / `client-key.pem` | mTLS client leaf |
 
 - `ecc/` — ECC P-256 (ECDSA-with-SHA256)

@@ -1,0 +1,15 @@
+common:
+  tags:
+    - wolfcert
+    - est
+  harness: ztest
+  # Needs a wolfcert-server on the host; twister runs this only when the
+  # fixture is named, so a plain run skips it instead of failing.
+  harness_config:
+    fixture: wolfcert_est_server
+tests:
+  wolfcert.est.enroll:
+    timeout: 300
+    platform_allow: qemu_x86
+    integration_platforms:
+      - qemu_x86

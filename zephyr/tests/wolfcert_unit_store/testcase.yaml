@@ -1,0 +1,14 @@
+common:
+  tags:
+    - wolfcert
+  harness: console
+  harness_config:
+    type: one_line
+    regex:
+      - "WOLFCERT TEST RESULT: 0"
+tests:
+  wolfcert.unit.store:
+    timeout: 180
+    platform_allow: qemu_x86
+    integration_platforms:
+      - qemu_x86

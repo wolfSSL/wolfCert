@@ -720,6 +720,10 @@ static int test_request_transfer_encoding(void)
     WolfCertHttpResponse resp = { 0 };
     REQUIRE(wolfcert_http_request(&req, &resp) == WOLFCERT_OK);
     REQUIRE(resp.status_code == 200);
+    /* The server answers Content-Length: 0. An empty body is still a buffer:
+     * length 0 and non-NULL. */
+    REQUIRE(resp.body_len == 0);
+    REQUIRE(resp.body != NULL);
     wolfcert_http_response_free(&resp);
     pthread_join(tid, NULL);
 

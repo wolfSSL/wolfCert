@@ -98,7 +98,7 @@ if(NOT wolfssl_FOUND)
             "requires wolfSSL 5.9.2 or newer, built with: HAVE_PKCS7, "
             "WOLFSSL_CERT_GEN, WOLFSSL_CERT_REQ, WOLFSSL_CERT_EXT, "
             "WOLFSSL_KEY_GEN, HAVE_ECC, WOLF_CRYPTO_CB, WOLFSSL_BASE64_ENCODE, "
-            "OPENSSL_EXTRA, WOLFSSL_ALT_NAMES, WOLFSSL_CERT_NAME_ALL.")
+            "WOLFSSL_ALT_NAMES, WOLFSSL_CERT_NAME_ALL, WOLFSSL_PUBLIC_ASN.")
     endif()
 endif()
 
@@ -121,7 +121,7 @@ set(_wc_wolfssl_prologue "
 set(CMAKE_REQUIRED_INCLUDES ${_wolfssl_cflags})
 foreach(sym IN ITEMS HAVE_PKCS7 WOLFSSL_CERT_GEN WOLFSSL_CERT_REQ WOLFSSL_CERT_EXT
                      WOLFSSL_KEY_GEN WOLF_CRYPTO_CB WOLFSSL_BASE64_ENCODE
-                     OPENSSL_EXTRA WOLFSSL_ALT_NAMES WOLFSSL_CERT_NAME_ALL)
+                     WOLFSSL_ALT_NAMES WOLFSSL_CERT_NAME_ALL)
     unset(_have_${sym} CACHE)
     check_c_source_compiles("${_wc_wolfssl_prologue}
         #ifndef ${sym}
@@ -135,10 +135,38 @@ foreach(sym IN ITEMS HAVE_PKCS7 WOLFSSL_CERT_GEN WOLFSSL_CERT_REQ WOLFSSL_CERT_E
             "wolfSSL configure flag. For all the symbols wolfCert requires: "
             "./configure --enable-pkcs7 --enable-certgen --enable-certreq "
             "--enable-certext --enable-keygen --enable-ecc --enable-cryptocb "
-            "--enable-base64encode --enable-opensslextra "
-            "CPPFLAGS=\"-DWOLFSSL_ALT_NAMES -DWOLFSSL_CERT_NAME_ALL\"")
+            "--enable-base64encode "
+            "CPPFLAGS=\"-DWOLFSSL_ALT_NAMES -DWOLFSSL_CERT_NAME_ALL "
+            "-DWOLFSSL_PUBLIC_ASN\"")
     endif()
 endforeach()
+
+# Link the WOLFSSL_ASN_API helpers wolfCert calls, declared locally because
+# some wolfSSL configs' headers need POSIX types a strict -std=c11 probe lacks.
+if(TARGET PkgConfig::WOLFSSL)
+    set(CMAKE_REQUIRED_LIBRARIES PkgConfig::WOLFSSL)
+else()
+    set(CMAKE_REQUIRED_LIBRARIES wolfssl::wolfssl)
+endif()
+unset(_have_asn_helpers CACHE)
+check_c_source_compiles("
+    extern char FreeAltNames(void);
+    extern char wc_SetDNSEntry(void);
+    extern char wc_SetAltNamesFromList(void);
+    extern char SetLength(void);
+    int main(void)
+    {
+        return FreeAltNames() + wc_SetDNSEntry() + wc_SetAltNamesFromList() +
+            SetLength();
+    }
+" _have_asn_helpers)
+unset(CMAKE_REQUIRED_LIBRARIES)
+if(NOT _have_asn_helpers)
+    message(FATAL_ERROR
+        "wolfSSL does not export its ASN helpers (wc_SetDNSEntry, "
+        "wc_SetAltNamesFromList, FreeAltNames, SetLength). Rebuild wolfSSL "
+        "with CPPFLAGS=\"-DWOLFSSL_PUBLIC_ASN\".")
+endif()
 
 # Features that default-on in wolfSSL and that wolfCert depends on
 # unconditionally. Detect explicit disable markers and reject.

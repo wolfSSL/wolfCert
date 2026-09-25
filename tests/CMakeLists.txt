@@ -75,10 +75,12 @@ if(WOLFCERT_ENABLE_EST)
         add_executable(test_est_pha_roundtrip integration/test_est_pha_roundtrip.c)
         target_link_libraries(test_est_pha_roundtrip PRIVATE wolfcert Threads::Threads)
         add_test(NAME est_pha_roundtrip COMMAND test_est_pha_roundtrip)
+        set_tests_properties(est_pha_roundtrip PROPERTIES SKIP_RETURN_CODE 77)
 
         add_executable(test_est_async_roundtrip integration/test_est_async_roundtrip.c)
         target_link_libraries(test_est_async_roundtrip PRIVATE wolfcert Threads::Threads)
         add_test(NAME est_async_roundtrip COMMAND test_est_async_roundtrip)
+        set_tests_properties(est_async_roundtrip PROPERTIES SKIP_RETURN_CODE 77)
 
         add_executable(test_est_csr_attrs_roundtrip integration/test_est_csr_attrs_roundtrip.c)
         target_link_libraries(test_est_csr_attrs_roundtrip PRIVATE wolfcert Threads::Threads)

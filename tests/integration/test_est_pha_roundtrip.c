@@ -29,9 +29,10 @@
  *      via wolfSSL_request_certificate(); the client answers from the
  *      pre-loaded identity and the CSR is issued.
  *
- * A negative control issues a session without a client identity and
- * verifies that /simpleenroll fails with a 401-mapped error while
- * /cacerts still succeeds.
+ * Negative controls: a session without a client identity, and one with an
+ * identity but no PHA opt-in, must both fail /simpleenroll while /cacerts
+ * still succeeds, as it must for an anonymous TLS 1.2 client. A client that
+ * never answers the CertificateRequest gets a 401 once the wait runs out.
  */
 
 #define _POSIX_C_SOURCE 200809L
@@ -64,6 +65,45 @@
 
 
 static void* server_thread(void* arg) { wolfcert_server_run((WolfCertServer*)arg); return NULL; }
+
+#ifdef WOLFSSL_POST_HANDSHAKE_AUTH
+static int discard_send(WOLFSSL* ssl, char* buf, int sz, void* ctx)
+{
+    (void)ssl;
+    (void)buf;
+    (void)ctx;
+    return sz;
+}
+#endif
+
+/* /cacerts must succeed and /simpleenroll must be refused. */
+static int expect_enroll_refused(const WolfCertServerCfg* cli, const char* cn)
+{
+    WolfCertEstSession* s = NULL;
+    REQUIRE(wolfcert_est_session_open(cli, &s) == WOLFCERT_OK);
+
+    WolfCertBuffer ca_pem = { 0 };
+    REQUIRE(wolfcert_est_session_get_cacerts(s, &ca_pem) == WOLFCERT_OK);
+    REQUIRE(ca_pem.len > 0);
+    wolfcert_buffer_free(&ca_pem);
+
+    WolfCertKeyCfg kcfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
+                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+    WolfCertKey* dk = NULL;
+    REQUIRE(wolfcert_key_generate(&kcfg, &dk) == WOLFCERT_OK);
+    WolfCertCertMeta meta = { .subject_dn = cn };
+    WolfCertBuffer csr = { 0 };
+    REQUIRE(wolfcert_csr_build(dk, &meta, &csr) == WOLFCERT_OK);
+
+    WolfCertBuffer issued = { 0 };
+    int rc = wolfcert_est_session_simple_enroll(s, csr.data, csr.len, &issued);
+    REQUIRE(rc == WOLFCERT_ERR_AUTH);
+    wolfcert_buffer_free(&csr);
+    wolfcert_buffer_free(&issued);
+    wolfcert_key_free(dk);
+    wolfcert_est_session_close(s);
+    return 0;
+}
 
 int main(void)
 {
@@ -99,7 +139,17 @@ int main(void)
         .tls_post_handshake_auth = 1,
     };
     WolfCertServer* srv = NULL;
-    REQUIRE(wolfcert_server_start(&cfg, &srv) == WOLFCERT_OK);
+    int start_rc = wolfcert_server_start(&cfg, &srv);
+    if (start_rc == WOLFCERT_ERR_UNSUPPORTED) {
+        printf("SKIP: %s\n", wolfcert_last_error_message());
+        free(tls_cert);
+        free(tls_key);
+        free(cli_cert);
+        free(cli_key);
+        wolfcert_cleanup();
+        return 77;
+    }
+    REQUIRE(start_rc == WOLFCERT_OK);
     pthread_t tid;
     REQUIRE(pthread_create(&tid, NULL, server_thread, srv) == 0);
 
@@ -146,6 +196,12 @@ int main(void)
                     rc, wolfcert_strerror(rc), wolfcert_last_error_message());
         REQUIRE(rc == WOLFCERT_OK);
         REQUIRE(memmem(issued.data, issued.len, "BEGIN CERTIFICATE", 17) != NULL);
+        wolfcert_buffer_free(&issued);
+
+        /* A second enroll reuses the cert the connection already holds. */
+        REQUIRE(wolfcert_est_session_simple_enroll(s, csr.data, csr.len,
+                                                   &issued) == WOLFCERT_OK);
+        REQUIRE(memmem(issued.data, issued.len, "BEGIN CERTIFICATE", 17) != NULL);
 
         wolfcert_buffer_free(&ca_pem);
         wolfcert_buffer_free(&csr);
@@ -154,9 +210,7 @@ int main(void)
         wolfcert_est_session_close(s);
     }
 
-    /* --- Negative: session without client identity. /cacerts must
-     * still succeed (server doesn't ask). /simpleenroll must fail
-     * because the PHA prompt finds nothing to send. */
+    /* --- Negative: no client identity, so the PHA prompt finds nothing. */
     {
         WolfCertServerCfg cli = {
             .protocol          = WOLFCERT_PROTO_EST,
@@ -166,30 +220,89 @@ int main(void)
             .verify_server     = 1,
             .proto_opts.est    = { .allow_post_handshake_auth = 1 },
         };
-        WolfCertEstSession* s = NULL;
-        REQUIRE(wolfcert_est_session_open(&cli, &s) == WOLFCERT_OK);
-
-        WolfCertBuffer ca_pem = { 0 };
-        REQUIRE(wolfcert_est_session_get_cacerts(s, &ca_pem) == WOLFCERT_OK);
-        REQUIRE(ca_pem.len > 0);
-        wolfcert_buffer_free(&ca_pem);
-
-        WolfCertKeyCfg kcfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
-                                .dev_id = WOLFCERT_DEVID_SOFTWARE };
-        WolfCertKey* dk = NULL;
-        REQUIRE(wolfcert_key_generate(&kcfg, &dk) == WOLFCERT_OK);
-        WolfCertCertMeta meta = { .subject_dn = "CN=pha-negative" };
-        WolfCertBuffer csr = { 0 };
-        REQUIRE(wolfcert_csr_build(dk, &meta, &csr) == WOLFCERT_OK);
-
-        WolfCertBuffer issued = { 0 };
-        int rc = wolfcert_est_session_simple_enroll(s, csr.data, csr.len, &issued);
-        REQUIRE(rc != WOLFCERT_OK);
-        wolfcert_buffer_free(&csr);
-        wolfcert_buffer_free(&issued);
-        wolfcert_key_free(dk);
-        wolfcert_est_session_close(s);
+        REQUIRE(expect_enroll_refused(&cli, "CN=pha-negative") == 0);
     }
+
+    /* --- Negative: identity but no PHA opt-in; the server never asks for
+     * the cert during the handshake, so it cannot authenticate. */
+    {
+        WolfCertServerCfg cli = {
+            .protocol          = WOLFCERT_PROTO_EST,
+            .server_url        = url,
+            .trust_anchors     = tls_cert,
+            .trust_anchors_len = tls_cert_len,
+            .verify_server     = 1,
+            .client_cert       = cli_cert,
+            .client_cert_len   = cli_cert_len,
+            .client_key        = cli_key,
+            .client_key_len    = cli_key_len,
+        };
+        REQUIRE(expect_enroll_refused(&cli, "CN=pha-no-opt-in") == 0);
+    }
+
+#ifdef WOLFSSL_POST_HANDSHAKE_AUTH
+    /* --- A PHA client that never answers the CertificateRequest gets a 401
+     * once the server stops waiting, well before the request deadline. */
+    {
+        static const char req[] =
+            "POST /.well-known/est/simpleenroll HTTP/1.1\r\n"
+            "Host: 127.0.0.1\r\n"
+            "Content-Type: application/pkcs10\r\n"
+            "Content-Length: 1\r\n"
+            "\r\n"
+            "x";
+        TestTlsConn c;
+        uint8_t raw[4096];
+        char resp[64] = { 0 };
+        ssize_t cr_len;
+        ssize_t n;
+        int waited = 0;
+
+        REQUIRE(test_tls_setup(&c, wolfcert_server_port(srv),
+                               tls_cert, tls_cert_len) == 0);
+        REQUIRE(wolfSSL_allow_post_handshake_auth(c.ssl) == 0);
+        REQUIRE(wolfSSL_connect(c.ssl) == WOLFSSL_SUCCESS);
+        REQUIRE(test_tls_write(&c, req, sizeof(req) - 1) == 0);
+        test_sleep_ms(500);
+        cr_len = recv(c.fd, raw, sizeof(raw), MSG_PEEK | MSG_DONTWAIT);
+        REQUIRE(cr_len > 0);
+        /* Reading through wolfSSL would answer the request, so watch the socket. */
+        do {
+            test_sleep_ms(100);
+            waited += 100;
+            n = recv(c.fd, raw, sizeof(raw), MSG_PEEK | MSG_DONTWAIT);
+        } while (n == cr_len && waited < 8000);
+        REQUIRE(n > cr_len);
+        /* The server has closed; decrypt the 401 without writing to it. */
+        wolfSSL_SSLSetIOSend(c.ssl, discard_send);
+        REQUIRE(test_tls_read(&c, resp, sizeof(resp) - 1) > 0);
+        REQUIRE(strncmp(resp, "HTTP/1.1 401", 12) == 0);
+        test_tls_close(&c);
+    }
+#endif
+
+/* TLS 1.2 needs ECDHE here: the test server loads no DH parameters. */
+#if !defined(WOLFSSL_NO_TLS12) && defined(HAVE_ECC)
+    /* --- A TLS 1.2 client cannot do PHA but must still reach /cacerts. */
+    {
+        static const char req[] =
+            "GET /.well-known/est/cacerts HTTP/1.1\r\n"
+            "Host: 127.0.0.1\r\n"
+            "Connection: close\r\n"
+            "\r\n";
+        TestTlsConn c;
+        char resp[64] = { 0 };
+
+        REQUIRE(test_tls_setup(&c, wolfcert_server_port(srv),
+                               tls_cert, tls_cert_len) == 0);
+        REQUIRE(wolfSSL_SetVersion(c.ssl, WOLFSSL_TLSV1_2) == WOLFSSL_SUCCESS);
+        REQUIRE(wolfSSL_connect(c.ssl) == WOLFSSL_SUCCESS);
+        REQUIRE(test_tls_write(&c, req, sizeof(req) - 1) == 0);
+        REQUIRE(test_tls_read(&c, resp, sizeof(resp) - 1) > 0);
+        REQUIRE(strncmp(resp, "HTTP/1.1 200", 12) == 0);
+        test_tls_close(&c);
+    }
+#endif
 
     wolfcert_server_stop(srv);
     pthread_join(tid, NULL);

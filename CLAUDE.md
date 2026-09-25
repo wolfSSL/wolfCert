@@ -30,9 +30,15 @@ wolfCert targets **wolfSSL >= 5.9.2**. The build **hard-fails** at
 configure time if the installed wolfSSL lacks any of `HAVE_PKCS7`,
 `WOLFSSL_CERT_GEN`, `WOLFSSL_CERT_REQ`, `WOLFSSL_CERT_EXT`,
 `WOLFSSL_KEY_GEN`, `WOLF_CRYPTO_CB`, `WOLFSSL_BASE64_ENCODE`,
-`OPENSSL_EXTRA`, `WOLFSSL_ALT_NAMES`, or `WOLFSSL_CERT_NAME_ALL`, or if
-it was built with `NO_AES` / `NO_SHA256`, or if it provides neither
-TLS 1.2 nor TLS 1.3. With ML-DSA enabled it additionally needs
+`WOLFSSL_ALT_NAMES`, or `WOLFSSL_CERT_NAME_ALL`, or if it was built with
+`NO_AES` / `NO_SHA256`, or if it provides neither TLS 1.2 nor TLS 1.3.
+It also link-probes the `WOLFSSL_ASN_API` helpers it calls, which a shared
+libwolfssl exports only under one of `WOLFSSL_PUBLIC_ASN` (the lean choice),
+`OPENSSL_EXTRA`, `OPENSSL_EXTRA_X509_SMALL` or `WOLFSSL_TEST_CERT`; a static
+one links them regardless. The test server's post-handshake-auth mode
+additionally needs `KEEP_PEER_CERT` and `WOLFSSL_HAVE_TLS_UNIQUE`; without
+them it returns `WOLFCERT_ERR_UNSUPPORTED`. The OpenSSL compatibility layer
+itself is not required. With ML-DSA enabled it additionally needs
 `WOLFSSL_MLDSA_CHECK_KEY` (`wc_MlDsaKey_CheckKey()`), which reloading an
 ML-DSA CA from a store calls -- checked when `src/key_algs.c` compiles,
 since only `dilithium.h` resolves that macro. `--enable-mldsa` gives it by
@@ -71,9 +77,11 @@ wolfSSL configure:
 ./configure --enable-pkcs7 --enable-certgen --enable-certreq \
     --enable-certext --enable-keygen --enable-ecc --enable-cryptocb \
     --enable-base64encode --enable-ed25519 --enable-ed448 \
-    --enable-mldsa --enable-postauth --enable-opensslextra \
-    --enable-ip-alt-name --enable-des3 --enable-sni \
-    CPPFLAGS="-DWOLFSSL_ALT_NAMES -DWOLFSSL_CERT_NAME_ALL"
+    --enable-mldsa --enable-postauth --enable-ip-alt-name \
+    --enable-des3 --enable-sni \
+    CPPFLAGS="-DWOLFSSL_ALT_NAMES -DWOLFSSL_CERT_NAME_ALL \
+              -DKEEP_PEER_CERT -DWOLFSSL_PUBLIC_ASN \
+              -DWOLFSSL_HAVE_TLS_UNIQUE"
 ```
 
 CMake options live at the top of `CMakeLists.txt`; the matching autoconf

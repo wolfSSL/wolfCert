@@ -112,20 +112,9 @@ typedef struct {
     int              est_require_approval;
     int              est_retry_after_sec;
 
-    /* TLS 1.3 post-handshake authentication (RFC 8446 section 4.6.2). When set
-     * AND the server has TLS enabled, the CTX opts into PHA and the
-     * initial handshake stays anonymous - protected endpoints
-     * (currently EST /simpleenroll and /simplereenroll) ask for a
-     * client certificate mid-connection by calling
-     * wolfSSL_request_certificate() on first hit. `tls_client_ca_pem`
-     * becomes the trust anchor the server uses to verify the
-     * certificate the client sends back.
-     *
-     * Implied side effects: WOLFSSL_VERIFY_FAIL_IF_NO_PEER_CERT is NOT
-     * set on the CTX (the initial handshake has no client cert), and
-     * the accept loop keeps the TLS connection open across requests
-     * so the anon /cacerts -> authenticated /simpleenroll pattern
-     * lands on one connection. */
+    /* TLS 1.3 post-handshake auth (RFC 8446 section 4.6.2) for EST enrollment,
+     * checked against `tls_client_ca_pem`. Start returns UNSUPPORTED without
+     * KEEP_PEER_CERT and WOLFSSL_HAVE_TLS_UNIQUE; see docs/ARCHITECTURE.md. */
     int              tls_post_handshake_auth;
 
     /* EST /csrattrs body. When set, the EST server returns this

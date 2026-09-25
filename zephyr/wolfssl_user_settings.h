@@ -57,7 +57,7 @@ extern "C" {
 #define WOLFSSL_POST_HANDSHAKE_AUTH
 
 /* ---- certificate handling ----------------------------------------------- */
-#define OPENSSL_EXTRA
+#define WOLFSSL_PUBLIC_ASN
 #define WOLFSSL_ASN_TEMPLATE
 #define WOLFSSL_CERT_GEN
 #define WOLFSSL_CERT_REQ
@@ -68,7 +68,6 @@ extern "C" {
 #define WOLFSSL_KEY_GEN
 #define WOLFSSL_DER_TO_PEM
 #define WOLFSSL_BASE64_ENCODE
-#define KEEP_PEER_CERT
 
 /* ---- PKCS#7 (SCEP pkiMessage, EST /cacerts) ----------------------------- */
 #define HAVE_PKCS7

@@ -20,10 +20,11 @@
 # of this gate.
 #
 # Scope: only misconfigurations that a *buildable* wolfSSL can express are
-# covered here (RSA-off-with-SCEP, PKCS7 missing). wolfSSL's own configure
-# refuses to drop AES / SHA-256 / all TLS / all key algorithms, so wolfCert's
-# compile-time #error guards for those (check_config.h) can't be fed by a real
-# wolfSSL build and are not exercised by this script.
+# covered here (RSA-off-with-SCEP, PKCS7 missing, ASN helpers not exported).
+# wolfSSL's own configure refuses to drop AES / SHA-256 / all TLS / all key
+# algorithms, so wolfCert's compile-time #error guards for those
+# (check_config.h) can't be fed by a real wolfSSL build and are not exercised
+# by this script.
 
 set -euo pipefail
 
@@ -54,6 +55,7 @@ done
 CASE_TABLE=(
   "no-rsa-scep:neg-no-rsa:::SCEP is RSA-only"
   "no-pkcs7:neg-no-pkcs7:::HAVE_PKCS7|missing a required feature"
+  "no-public-asn:neg-no-public-asn:::does not export its ASN helpers"
 )
 
 lookup_case() {

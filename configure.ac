@@ -169,8 +169,8 @@ PKG_CHECK_MODULES([WOLFSSL], [wolfssl >= 5.9.2],
     [AC_MSG_ERROR([wolfssl >= 5.9.2 not found via pkg-config. wolfCert
       requires a wolfSSL build with HAVE_PKCS7, WOLFSSL_CERT_GEN,
       WOLFSSL_CERT_REQ, WOLFSSL_CERT_EXT, WOLFSSL_KEY_GEN, HAVE_ECC,
-      WOLF_CRYPTO_CB, WOLFSSL_BASE64_ENCODE, OPENSSL_EXTRA,
-      WOLFSSL_ALT_NAMES, WOLFSSL_CERT_NAME_ALL.])])
+      WOLF_CRYPTO_CB, WOLFSSL_BASE64_ENCODE, WOLFSSL_ALT_NAMES,
+      WOLFSSL_CERT_NAME_ALL, WOLFSSL_PUBLIC_ASN.])])
 AM_CONDITIONAL([HAVE_WOLFSSL], [test "x$have_wolfssl" = "xyes"])
 
 # Probe wolfSSL's feature set the way wolfcert/check_config.h resolves it, so
@@ -215,13 +215,33 @@ save_CPPFLAGS="$CPPFLAGS"
 CPPFLAGS="$CPPFLAGS $WOLFSSL_CFLAGS"
 AC_CHECK_DECLS([HAVE_PKCS7, WOLFSSL_CERT_GEN, WOLFSSL_CERT_REQ, WOLFSSL_CERT_EXT,
                 WOLFSSL_KEY_GEN, WOLF_CRYPTO_CB, WOLFSSL_BASE64_ENCODE,
-                OPENSSL_EXTRA, WOLFSSL_ALT_NAMES, WOLFSSL_CERT_NAME_ALL],
+                WOLFSSL_ALT_NAMES, WOLFSSL_CERT_NAME_ALL],
     [], [AC_MSG_ERROR([wolfSSL is missing a required feature (see above).
       Rebuild wolfSSL with --enable-pkcs7 --enable-ecc --enable-cryptocb
       --enable-certgen --enable-certreq --enable-certext --enable-keygen
-      --enable-base64encode --enable-opensslextra
-      CPPFLAGS="-DWOLFSSL_ALT_NAMES -DWOLFSSL_CERT_NAME_ALL".])],
+      --enable-base64encode CPPFLAGS="-DWOLFSSL_ALT_NAMES
+      -DWOLFSSL_CERT_NAME_ALL -DWOLFSSL_PUBLIC_ASN".])],
     WOLFCERT_WOLFSSL_PROLOGUE)
+
+# Link the WOLFSSL_ASN_API helpers wolfCert calls, declared locally because
+# some wolfSSL configs' headers need POSIX types a strict -std=c11 probe lacks.
+AC_MSG_CHECKING([whether wolfSSL exports its ASN helpers])
+save_LIBS="$LIBS"
+LIBS="$WOLFSSL_LIBS $LIBS"
+AC_LINK_IFELSE(
+  [AC_LANG_PROGRAM(
+[[extern char FreeAltNames(void);
+extern char wc_SetDNSEntry(void);
+extern char wc_SetAltNamesFromList(void);
+extern char SetLength(void);]],
+   [[return FreeAltNames() + wc_SetDNSEntry() + wc_SetAltNamesFromList() +
+       SetLength();]])],
+  [AC_MSG_RESULT([yes])],
+  [AC_MSG_RESULT([no])
+   AC_MSG_ERROR([wolfSSL does not export its ASN helpers (wc_SetDNSEntry,
+     wc_SetAltNamesFromList, FreeAltNames, SetLength). Rebuild wolfSSL with
+     CPPFLAGS="-DWOLFSSL_PUBLIC_ASN".])])
+LIBS="$save_LIBS"
 
 # wolfSSL default-on features that wolfCert requires unconditionally: AES,
 # SHA-256. Each must NOT be marked disabled by a NO_* macro.

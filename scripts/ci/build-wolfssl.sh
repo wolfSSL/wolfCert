@@ -44,25 +44,25 @@ _base_flags() {
         --enable-pkcs7 --enable-certgen --enable-certreq --enable-certext \
         --enable-keygen --enable-ecc --enable-cryptocb --enable-base64encode \
         --enable-ed25519 --enable-ed448 --enable-mldsa \
-        --enable-postauth --enable-opensslextra --enable-ip-alt-name \
+        --enable-postauth --enable-ip-alt-name \
         --enable-des3 --enable-sni \
-        'CPPFLAGS=-DWOLFSSL_ALT_NAMES -DWOLFSSL_CERT_NAME_ALL'
+        'CPPFLAGS=-DWOLFSSL_ALT_NAMES -DWOLFSSL_CERT_NAME_ALL -DKEEP_PEER_CERT -DWOLFSSL_HAVE_TLS_UNIQUE -DWOLFSSL_PUBLIC_ASN'
 }
 
 # List of every config name this script understands (kept in sync with the
 # case in resolve_flags; used by --list and to validate input).
 KNOWN_CONFIGS=(
-    full full-tsan
+    full full-tsan full-opensslextra full-all
     est-only-nonrsa rsa-min ecc-only-est
     no-des3 tls13-only
     mldsa-44off mldsa-65off mldsa-87off
     static-mem no-malloc
     # Negative configs consumed by assert-configure-fails.sh: a valid wolfSSL
-    # that wolfCert configure MUST reject. Only the two below are buildable --
+    # that wolfCert configure MUST reject. Only the ones below are buildable --
     # wolfSSL's own configure refuses to drop AES/SHA-256/all-TLS/all-key-algs
     # (those are cascade-required), so wolfCert's compile-time #error guards for
     # them in check_config.h cannot be fed by a real wolfSSL build.
-    neg-no-rsa neg-no-pkcs7
+    neg-no-rsa neg-no-pkcs7 neg-no-public-asn
 )
 
 # Emit the configure argument list (one per line) for a config name.
@@ -82,6 +82,20 @@ resolve_flags() {
             _base_flags
             printf '%s\n' 'CFLAGS=-fsanitize=thread -g -O1 -Wno-error=tsan' \
                           'LDFLAGS=-fsanitize=thread' ;;
+        full-opensslextra)
+            # The canonical line before OPENSSL_EXTRA was dropped, unchanged.
+            _ci_flags
+            printf '%s\n' \
+                --enable-pkcs7 --enable-certgen --enable-certreq --enable-certext \
+                --enable-keygen --enable-ecc --enable-cryptocb --enable-base64encode \
+                --enable-ed25519 --enable-ed448 --enable-mldsa \
+                --enable-postauth --enable-opensslextra --enable-ip-alt-name \
+                --enable-des3 --enable-sni \
+                'CPPFLAGS=-DWOLFSSL_ALT_NAMES -DWOLFSSL_CERT_NAME_ALL' ;;
+        full-all)
+            # OPENSSL_ALL and its compatible defaults, e.g. grouped messages.
+            _base_flags
+            printf '%s\n' --enable-all ;;
         est-only-nonrsa)
             # EST-capable, RSA absent (NO_RSA). ECC + Ed + ML-DSA still present.
             # RSA is default-on in wolfSSL, so --disable-rsa is the only delta.
@@ -93,18 +107,18 @@ resolve_flags() {
             printf '%s\n' \
                 --enable-pkcs7 --enable-certgen --enable-certreq --enable-certext \
                 --enable-keygen --enable-cryptocb --enable-base64encode \
-                --enable-postauth --enable-opensslextra --enable-ip-alt-name \
+                --enable-postauth --enable-ip-alt-name \
                 --disable-ecc --disable-ed25519 --disable-ed448 --disable-dilithium \
-                'CPPFLAGS=-DWOLFSSL_ALT_NAMES -DWOLFSSL_CERT_NAME_ALL' ;;
+                'CPPFLAGS=-DWOLFSSL_ALT_NAMES -DWOLFSSL_CERT_NAME_ALL -DKEEP_PEER_CERT -DWOLFSSL_HAVE_TLS_UNIQUE -DWOLFSSL_PUBLIC_ASN' ;;
         ecc-only-est)
             # EST with ECC keys, RSA absent (so SCEP must be disabled by caller).
             _ci_flags
             printf '%s\n' \
                 --enable-pkcs7 --enable-certgen --enable-certreq --enable-certext \
                 --enable-keygen --enable-ecc --enable-cryptocb --enable-base64encode \
-                --enable-postauth --enable-opensslextra --enable-ip-alt-name \
+                --enable-postauth --enable-ip-alt-name \
                 --disable-rsa --disable-ed25519 --disable-ed448 --disable-dilithium \
-                'CPPFLAGS=-DWOLFSSL_ALT_NAMES -DWOLFSSL_CERT_NAME_ALL' ;;
+                'CPPFLAGS=-DWOLFSSL_ALT_NAMES -DWOLFSSL_CERT_NAME_ALL -DKEEP_PEER_CERT -DWOLFSSL_HAVE_TLS_UNIQUE -DWOLFSSL_PUBLIC_ASN' ;;
         no-des3)
             # SCEP content encryption falls to AES-only (no 3DES fallback path).
             _base_flags
@@ -115,13 +129,13 @@ resolve_flags() {
             printf '%s\n' --disable-tlsv12 ;;
         mldsa-44off)
             _base_flags
-            printf '%s\n' 'CPPFLAGS=-DWOLFSSL_ALT_NAMES -DWOLFSSL_CERT_NAME_ALL -DWOLFSSL_NO_ML_DSA_44' ;;
+            printf '%s\n' 'CPPFLAGS=-DWOLFSSL_ALT_NAMES -DWOLFSSL_CERT_NAME_ALL -DKEEP_PEER_CERT -DWOLFSSL_HAVE_TLS_UNIQUE -DWOLFSSL_PUBLIC_ASN -DWOLFSSL_NO_ML_DSA_44' ;;
         mldsa-65off)
             _base_flags
-            printf '%s\n' 'CPPFLAGS=-DWOLFSSL_ALT_NAMES -DWOLFSSL_CERT_NAME_ALL -DWOLFSSL_NO_ML_DSA_65' ;;
+            printf '%s\n' 'CPPFLAGS=-DWOLFSSL_ALT_NAMES -DWOLFSSL_CERT_NAME_ALL -DKEEP_PEER_CERT -DWOLFSSL_HAVE_TLS_UNIQUE -DWOLFSSL_PUBLIC_ASN -DWOLFSSL_NO_ML_DSA_65' ;;
         mldsa-87off)
             _base_flags
-            printf '%s\n' 'CPPFLAGS=-DWOLFSSL_ALT_NAMES -DWOLFSSL_CERT_NAME_ALL -DWOLFSSL_NO_ML_DSA_87' ;;
+            printf '%s\n' 'CPPFLAGS=-DWOLFSSL_ALT_NAMES -DWOLFSSL_CERT_NAME_ALL -DKEEP_PEER_CERT -DWOLFSSL_HAVE_TLS_UNIQUE -DWOLFSSL_PUBLIC_ASN -DWOLFSSL_NO_ML_DSA_87' ;;
         static-mem)
             # Static memory pools + single-threaded (constrained-target shape).
             _base_flags
@@ -134,7 +148,7 @@ resolve_flags() {
             # attribute set without heap growth.
             _base_flags
             printf '%s\n' --enable-staticmemory \
-                'CPPFLAGS=-DWOLFSSL_ALT_NAMES -DWOLFSSL_CERT_NAME_ALL -DWOLFSSL_NO_MALLOC -DMAX_SIGNED_ATTRIBS_SZ=9' ;;
+                'CPPFLAGS=-DWOLFSSL_ALT_NAMES -DWOLFSSL_CERT_NAME_ALL -DKEEP_PEER_CERT -DWOLFSSL_HAVE_TLS_UNIQUE -DWOLFSSL_PUBLIC_ASN -DWOLFSSL_NO_MALLOC -DMAX_SIGNED_ATTRIBS_SZ=9' ;;
 
         # -------- negative configs (a buildable wolfSSL wolfCert MUST reject) --
         neg-no-rsa)
@@ -147,8 +161,12 @@ resolve_flags() {
             printf '%s\n' \
                 --enable-certgen --enable-certreq --enable-certext \
                 --enable-keygen --enable-ecc --enable-cryptocb --enable-base64encode \
-                --enable-opensslextra --enable-ip-alt-name \
-                'CPPFLAGS=-DWOLFSSL_ALT_NAMES -DWOLFSSL_CERT_NAME_ALL' ;;
+                --enable-ip-alt-name \
+                'CPPFLAGS=-DWOLFSSL_ALT_NAMES -DWOLFSSL_CERT_NAME_ALL -DKEEP_PEER_CERT -DWOLFSSL_HAVE_TLS_UNIQUE -DWOLFSSL_PUBLIC_ASN' ;;
+        neg-no-public-asn)
+            # No ASN-export macro -> "does not export its ASN helpers".
+            _base_flags
+            printf '%s\n' 'CPPFLAGS=-DWOLFSSL_ALT_NAMES -DWOLFSSL_CERT_NAME_ALL -DKEEP_PEER_CERT -DWOLFSSL_HAVE_TLS_UNIQUE' ;;
         *)
             echo "ERROR: unknown wolfSSL config '$cfg'." >&2
             echo "       Known: ${KNOWN_CONFIGS[*]}" >&2

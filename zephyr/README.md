@@ -60,9 +60,9 @@ Without one the build stops with errors such as `wolfSSL is missing HAVE_PKCS7;
 rebuild wolfSSL with --enable-pkcs7`. On Zephyr the fix is the settings file,
 not a configure flag.
 
-The Kconfig selects `NETWORKING` and `POSIX_API`, even for an image that opens
-no socket: wolfSSL's `OPENSSL_EXTRA` x509 code needs the `AF_INET` definitions
-from `NETWORKING`, and `clock_gettime` from `POSIX_API`.
+The Kconfig selects `NETWORKING` and `POSIX_API`. The built-in transport needs
+the network stack, and wolfSSL needs `clock_gettime` from `POSIX_API` in every
+image.
 
 ## Sizing
 

@@ -30,10 +30,13 @@ scripts/ci/build-wolfssl.sh --print-flags full     # the flags for a config
 scripts/ci/build-wolfssl.sh full --prefix /tmp/ws  # build + install to /tmp/ws
 ```
 
-Config names include `full` (all algorithms), `full-tsan`, `est-only-nonrsa`
-(NO_RSA), `rsa-min`, `ecc-only-est`, `no-des3`, `tls13-only`,
-`mldsa-{44,65,87}off`, `static-mem`, `no-malloc`, and the `neg-*` configs used
-by the negative-config gate.
+Config names include `full` (all algorithms), `full-tsan`, `full-opensslextra`
+(the old canonical line with `--enable-opensslextra`, kept verbatim so existing
+setups stay covered), `full-all` (`full` plus `--enable-all`, which brings
+`OPENSSL_ALL` and its compatible defaults), `est-only-nonrsa` (NO_RSA),
+`rsa-min`, `ecc-only-est`, `no-des3`, `tls13-only`, `mldsa-{44,65,87}off`,
+`static-mem`, `no-malloc`, and the `neg-*` configs used by the negative-config
+gate.
 
 ## Reproducing a CI job locally
 
@@ -55,9 +58,10 @@ make -j && make check
 
 The negative-config gate asserts wolfCert's configure hard-fails on an
 unsupportable wolfSSL. It covers the cases a *buildable* wolfSSL can express
-(`no-rsa-scep`, `no-pkcs7`); wolfSSL itself refuses to drop AES / SHA-256 / all
-TLS / all key algorithms, so wolfCert's compile-time `#error` guards for those
-(`wolfcert/check_config.h`) are validated at compile time, not by this gate.
+(`no-rsa-scep`, `no-pkcs7`, `no-public-asn`); wolfSSL itself refuses to drop
+AES / SHA-256 / all TLS / all key algorithms, so wolfCert's compile-time
+`#error` guards for those (`wolfcert/check_config.h`) are validated at compile
+time, not by this gate.
 
 ```sh
 scripts/ci/assert-configure-fails.sh              # all cases, both build systems

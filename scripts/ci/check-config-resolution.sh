@@ -64,7 +64,7 @@ write_decoy() {
         if [ "$1" = "rich" ]; then
             for m in HAVE_PKCS7 WOLFSSL_CERT_GEN WOLFSSL_CERT_REQ \
                      WOLFSSL_CERT_EXT WOLFSSL_KEY_GEN WOLF_CRYPTO_CB \
-                     WOLFSSL_BASE64_ENCODE OPENSSL_EXTRA WOLFSSL_ALT_NAMES \
+                     WOLFSSL_BASE64_ENCODE WOLFSSL_ALT_NAMES \
                      WOLFSSL_CERT_NAME_ALL HAVE_SNI WOLFSSL_TLS13; do
                 echo "#define $m"
             done

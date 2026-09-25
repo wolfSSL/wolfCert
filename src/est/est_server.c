@@ -33,6 +33,7 @@
 #include "../internal.h"
 
 #include <wolfssl/ssl.h>
+#include <wolfssl/wolfcrypt/hash.h>
 #include <wolfssl/wolfcrypt/sha256.h>
 #include <wolfssl/wolfcrypt/memory.h>
 
@@ -56,6 +57,9 @@
  * across reconnects. The queue is capped and intentionally shallow;
  * real deployments use a proper approval workflow. */
 #define EST_PENDING_CAP 8
+
+/* How long a client gets to answer a post-handshake CertificateRequest. */
+#define EST_PHA_TIMEOUT_MS 5000
 
 typedef struct {
     uint8_t  csr_hash[32];
@@ -653,30 +657,57 @@ static int handler_cacerts(WolfCertServer* s, int fd)
     return WOLFCERT_OK;
 }
 
-/* When the server is configured for TLS 1.3 post-handshake auth and the
- * connection has no peer cert yet, issue a CertificateRequest and wait
- * for the client's Certificate + CertificateVerify before treating this
- * as an authenticated call. Returns WOLFCERT_OK on successful PHA (or
- * when PHA is not configured / not needed); WOLFCERT_ERR_AUTH on any
- * TLS-layer failure (including the client declining to send a cert). */
+/* Ask for a client cert mid-connection when PHA mode is on and none is held.
+ * Returns WOLFCERT_ERR_AUTH unless a verified reply arrives in time. */
 static int ensure_post_handshake_auth(WolfCertServer* s)
 {
-#ifdef WOLFSSL_POST_HANDSHAKE_AUTH
+#if defined(WOLFSSL_POST_HANDSHAKE_AUTH) && \
+    defined(WOLFSSL_HAVE_TLS_UNIQUE) && defined(KEEP_PEER_CERT)
+    WOLFSSL_X509* peer;
+    unsigned char fin[WC_MAX_DIGEST_SIZE];
+    unsigned char cur[WC_MAX_DIGEST_SIZE];
+    size_t fin_len;
+    size_t cur_len;
+    char probe;
+    long deadline;
+    int r;
+    int err;
+
     if (!s->cfg.tls_post_handshake_auth || s->tls_current == NULL)
         return WOLFCERT_OK;
 
-    WOLFSSL_X509* peer = wolfSSL_get_peer_certificate(s->tls_current);
+    peer = wolfSSL_get_peer_certificate(s->tls_current);
     if (peer != NULL) {
         wolfSSL_FreeX509(peer);
         return WOLFCERT_OK;
     }
 
-    /* Queue CertificateRequest; wolfSSL pushes it to the wire on the
-     * next write and processes the client's Certificate + CertVerify
-     * inline on subsequent reads/writes. */
+    fin_len = wolfSSL_get_peer_finished(s->tls_current, fin, sizeof(fin));
     if (wolfSSL_request_certificate(s->tls_current) != WOLFSSL_SUCCESS) {
         return WOLFCERT_ERR(WOLFCERT_ERR_AUTH, "est",
             "post-handshake: wolfSSL_request_certificate failed");
+    }
+
+    /* Wait for the client's post-handshake Finished; any TLS error fails. */
+    deadline = wolfcert_mono_ms() + EST_PHA_TIMEOUT_MS;
+    if (s->deadline_ms != 0 && s->deadline_ms < deadline)
+        deadline = s->deadline_ms;
+    for (;;) {
+        r = wolfSSL_peek(s->tls_current, &probe, 1);
+        err = (r > 0) ? 0 : wolfSSL_get_error(s->tls_current, r);
+        if (r <= 0 && err != WOLFSSL_ERROR_WANT_READ &&
+            err != WOLFSSL_ERROR_WANT_WRITE) {
+            return WOLFCERT_ERR(WOLFCERT_ERR_AUTH, "est",
+                "post-handshake: TLS error %d", err);
+        }
+        cur_len = wolfSSL_get_peer_finished(s->tls_current, cur, sizeof(cur));
+        if (cur_len != fin_len || memcmp(cur, fin, cur_len) != 0)
+            break;
+        if (r > 0 || wolfcert_mono_ms() >= deadline ||
+            WOLFSSL_ATOMIC_LOAD(s->stopping)) {
+            return WOLFCERT_ERR(WOLFCERT_ERR_AUTH, "est",
+                "post-handshake: client did not complete authentication");
+        }
     }
 
     peer = wolfSSL_get_peer_certificate(s->tls_current);
@@ -688,7 +719,10 @@ static int ensure_post_handshake_auth(WolfCertServer* s)
     wolfSSL_FreeX509(peer);
     return WOLFCERT_OK;
 #else
-    (void)s;
+    if (s->cfg.tls_post_handshake_auth) {
+        return WOLFCERT_ERR(WOLFCERT_ERR_UNSUPPORTED, "est",
+            "post-handshake: not supported by this wolfSSL build");
+    }
     return WOLFCERT_OK;
 #endif
 }

@@ -132,6 +132,15 @@ int main(void)
     REQUIRE(mint_self_id("async-bootstrap", 1,
                         &cli_cert, &cli_cert_len, &cli_key, &cli_key_len) == 0);
 
+    /* Build a CSR off the event loop; both sections below enroll it. */
+    WolfCertKeyCfg kcfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
+                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+    WolfCertKey* dk = NULL;
+    REQUIRE(wolfcert_key_generate(&kcfg, &dk) == WOLFCERT_OK);
+    WolfCertCertMeta meta = { .subject_dn = "CN=async-enrollee" };
+    WolfCertBuffer csr = { 0 };
+    REQUIRE(wolfcert_csr_build(dk, &meta, &csr) == WOLFCERT_OK);
+
     WolfCertServerCfgSrv cfg = {
         .protocol                = WOLFCERT_PROTO_EST,
         .bind_host               = "127.0.0.1",
@@ -142,63 +151,61 @@ int main(void)
         .tls_post_handshake_auth = 1,
     };
     WolfCertServer* srv = NULL;
-    REQUIRE(wolfcert_server_start(&cfg, &srv) == WOLFCERT_OK);
-    pthread_t tid;
-    REQUIRE(pthread_create(&tid, NULL, server_thread, srv) == 0);
+    int start_rc = wolfcert_server_start(&cfg, &srv);
+    int pha_skipped = (start_rc == WOLFCERT_ERR_UNSUPPORTED);
+    if (pha_skipped) {
+        printf("SKIP PHA: %s\n", wolfcert_last_error_message());
+    }
+    else {
+        REQUIRE(start_rc == WOLFCERT_OK);
+        pthread_t tid;
+        REQUIRE(pthread_create(&tid, NULL, server_thread, srv) == 0);
 
-    char url[128];
-    snprintf(url, sizeof(url), "https://127.0.0.1:%u/.well-known/est",
-             wolfcert_server_port(srv));
+        char url[128];
+        snprintf(url, sizeof(url), "https://127.0.0.1:%u/.well-known/est",
+                 wolfcert_server_port(srv));
 
-    WolfCertServerCfg cli = {
-        .protocol          = WOLFCERT_PROTO_EST,
-        .server_url        = url,
-        .trust_anchors     = tls_cert,
-        .trust_anchors_len = tls_cert_len,
-        .verify_server     = 1,
-        .client_cert       = cli_cert,
-        .client_cert_len   = cli_cert_len,
-        .client_key        = cli_key,
-        .client_key_len    = cli_key_len,
-        .proto_opts.est    = { .allow_post_handshake_auth = 1 },
-    };
-    WolfCertEstSession* es = NULL;
-    REQUIRE(wolfcert_est_session_open_async(&cli, &es) == WOLFCERT_OK);
-    REQUIRE(wolfcert_est_session_fd(es) >= 0);
+        WolfCertServerCfg cli = {
+            .protocol          = WOLFCERT_PROTO_EST,
+            .server_url        = url,
+            .trust_anchors     = tls_cert,
+            .trust_anchors_len = tls_cert_len,
+            .verify_server     = 1,
+            .client_cert       = cli_cert,
+            .client_cert_len   = cli_cert_len,
+            .client_key        = cli_key,
+            .client_key_len    = cli_key_len,
+            .proto_opts.est    = { .allow_post_handshake_auth = 1 },
+        };
+        WolfCertEstSession* es = NULL;
+        REQUIRE(wolfcert_est_session_open_async(&cli, &es) == WOLFCERT_OK);
+        REQUIRE(wolfcert_est_session_fd(es) >= 0);
 
-    /* Anonymous /cacerts, pumped via poll(2). */
-    WolfCertBuffer ca_pem = { 0 };
-    REQUIRE(pump_get_cacerts(es, &ca_pem) == 0);
-    REQUIRE(ca_pem.len > 0);
+        /* Anonymous /cacerts, pumped via poll(2). */
+        WolfCertBuffer ca_pem = { 0 };
+        REQUIRE(pump_get_cacerts(es, &ca_pem) == 0);
+        REQUIRE(ca_pem.len > 0);
 
-    /* Build a CSR off the event loop. */
-    WolfCertKeyCfg kcfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
-                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
-    WolfCertKey* dk = NULL;
-    REQUIRE(wolfcert_key_generate(&kcfg, &dk) == WOLFCERT_OK);
-    WolfCertCertMeta meta = { .subject_dn = "CN=async-enrollee" };
-    WolfCertBuffer csr = { 0 };
-    REQUIRE(wolfcert_csr_build(dk, &meta, &csr) == WOLFCERT_OK);
+        /* /simpleenroll - server issues CertificateRequest via PHA mid-call,
+         * wolfSSL answers from the pre-loaded identity. All of this is
+         * pumped through poll() via WANT_READ/WANT_WRITE returns. */
+        WolfCertBuffer issued = { 0 };
+        REQUIRE(pump_simple_enroll(es, csr.data, csr.len, &issued) == 0);
+        REQUIRE(memmem(issued.data, issued.len, "BEGIN CERTIFICATE", 17) != NULL);
 
-    /* /simpleenroll - server issues CertificateRequest via PHA mid-call,
-     * wolfSSL answers from the pre-loaded identity. All of this is
-     * pumped through poll() via WANT_READ/WANT_WRITE returns. */
-    WolfCertBuffer issued = { 0 };
-    REQUIRE(pump_simple_enroll(es, csr.data, csr.len, &issued) == 0);
-    REQUIRE(memmem(issued.data, issued.len, "BEGIN CERTIFICATE", 17) != NULL);
+        wolfcert_buffer_free(&ca_pem);
+        wolfcert_buffer_free(&issued);
+        wolfcert_est_session_close(es);
 
-    wolfcert_buffer_free(&ca_pem);
-    wolfcert_buffer_free(&issued);
-    wolfcert_est_session_close(es);
-
-    wolfcert_server_stop(srv);
-    pthread_join(tid, NULL);
-    wolfcert_server_free(srv);
+        wolfcert_server_stop(srv);
+        pthread_join(tid, NULL);
+        wolfcert_server_free(srv);
+    }
 
     /* --- HTTP Basic on the async session (RFC 7030 section 3.2.3). The
      * credentials must ride every request the session pumps out, so /cacerts
      * and /simpleenroll both have to satisfy a server that demands them.
-     * Reuses the CSR built above against a second, Basic-only server. */
+     * Runs against a second, Basic-only server. */
     WolfCertServerCfgSrv bcfg = {
         .protocol        = WOLFCERT_PROTO_EST,
         .bind_host       = "127.0.0.1",
@@ -250,6 +257,8 @@ int main(void)
     free(cli_cert);
     free(cli_key);
     wolfcert_cleanup();
+    if (pha_skipped)
+        return 77;
     printf("OK\n");
     return 0;
 }

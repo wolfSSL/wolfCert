@@ -40,6 +40,16 @@ jobs:
             build: cmake
             wolfssl: full
             cmake_extra: -DWOLFCERT_WERROR=ON
+          - name: cmake-full-opensslextra
+            os: ubuntu-latest
+            build: cmake
+            wolfssl: full-opensslextra
+            cmake_extra: -DWOLFCERT_WERROR=ON
+          - name: cmake-full-all
+            os: ubuntu-latest
+            build: cmake
+            wolfssl: full-all
+            cmake_extra: -DWOLFCERT_WERROR=ON
           - name: autoconf-full
             os: ubuntu-latest
             build: autoconf

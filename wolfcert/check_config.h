@@ -88,8 +88,9 @@
 /* Mandatory wolfSSL features. Rebuild wolfSSL with:
  *   ./configure --enable-pkcs7 --enable-certgen --enable-certreq \
  *       --enable-certext --enable-keygen --enable-cryptocb \
- *       --enable-base64encode --enable-opensslextra --enable-sni \
- *       CPPFLAGS="-DWOLFSSL_ALT_NAMES -DWOLFSSL_CERT_NAME_ALL" */
+ *       --enable-base64encode --enable-sni \
+ *       CPPFLAGS="-DWOLFSSL_ALT_NAMES -DWOLFSSL_CERT_NAME_ALL \
+ *                 -DWOLFSSL_PUBLIC_ASN" */
 #ifndef HAVE_PKCS7
 #error "wolfSSL is missing HAVE_PKCS7; rebuild wolfSSL with --enable-pkcs7."
 #endif
@@ -110,9 +111,6 @@
 #endif
 #ifndef WOLFSSL_BASE64_ENCODE
 #error "wolfSSL is missing WOLFSSL_BASE64_ENCODE; rebuild wolfSSL with --enable-base64encode."
-#endif
-#ifndef OPENSSL_EXTRA
-#error "wolfSSL is missing OPENSSL_EXTRA; rebuild wolfSSL with --enable-opensslextra."
 #endif
 #ifndef WOLFSSL_ALT_NAMES
 #error "wolfSSL is missing WOLFSSL_ALT_NAMES; rebuild wolfSSL with CPPFLAGS=\"-DWOLFSSL_ALT_NAMES\"."

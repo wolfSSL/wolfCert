@@ -34,9 +34,17 @@ result at compile time, so a contradictory or incomplete config fails with a
 clear `#error` rather than a confusing downstream error. It enforces the same
 rules the configure step does: at least one key algorithm, SCEP requires RSA
 (RFC 8894), and the wolfSSL feature set wolfCert depends on (PKCS#7, cert
-gen/req/ext, key gen, CryptoCb, base64 encode, OpenSSL-extra, alt names,
+gen/req/ext, key gen, CryptoCb, base64 encode, alt names,
 `WOLFSSL_CERT_NAME_ALL`, AES, SHA-256, and TLS 1.2 or 1.3). The header you copy
 documents the matching wolfSSL configure flags.
+
+A **shared** libwolfssl must also export the ASN helpers wolfCert calls, which
+takes `WOLFSSL_PUBLIC_ASN` (the lean choice) or the OpenSSL compatibility layer;
+a static wolfSSL links them without it. `check_config.h` cannot test that, so a
+missing export surfaces as an undefined `wc_SetDNSEntry` / `SetLength` at link
+time. The EST test server's post-handshake-auth mode also needs
+`KEEP_PEER_CERT` and `WOLFSSL_HAVE_TLS_UNIQUE`; without them it returns
+`WOLFCERT_ERR_UNSUPPORTED`.
 
 wolfCert reads that feature set through `<wolfssl/wolfcrypt/settings.h>`, so a
 wolfSSL configured by its own `user_settings.h` is validated correctly and needs

@@ -34,6 +34,8 @@ jobs:
           # ---- Linux: full canonical, both build systems ----
           - { name: cmake-full,            os: ubuntu-latest, build: cmake,    wolfssl: full }
           - { name: autoconf-full,         os: ubuntu-latest, build: autoconf, wolfssl: full }
+          - { name: cmake-full-opensslextra, os: ubuntu-latest, build: cmake,  wolfssl: full-opensslextra }
+          - { name: cmake-full-all,        os: ubuntu-latest, build: cmake,    wolfssl: full-all }
           # ---- wolfSSL key-alg / crypto variants (also gated in pr.yml; kept
           #      here to seed their distinct prefixes + retest fresh master) ----
           - { name: cmake-est-only-nonrsa, os: ubuntu-latest, build: cmake,    wolfssl: est-only-nonrsa, cmake_extra: -DWOLFCERT_ENABLE_SCEP=OFF }

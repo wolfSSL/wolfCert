@@ -34,6 +34,11 @@
 #include <stdio.h>
 #include <string.h>
 
+#if defined(WOLFCERT_HAVE_EST) || defined(WOLFCERT_HAVE_SCEP)
+#include "../integration/tls_test_util.h"
+#include <wolfssl/wolfcrypt/pkcs7.h>
+#endif
+
 #if defined(WOLFCERT_HAVE_SCEP) && defined(WOLFCERT_HAVE_RSA)
 #include <wolfssl/wolfcrypt/asn.h>
 #include <wolfssl/wolfcrypt/asn_public.h>
@@ -103,6 +108,296 @@ static int test_pkcs7(void)
     size_t lens[1] = { sizeof(junk) };
     REQUIRE(wolfcert_pkcs7_build_certs_only(certs, lens, 1, &out, NULL)
             == WOLFCERT_ERR_PARSE);
+    return 0;
+}
+
+/* Mint a self-signed certificate named `cn` as DER into `out`. */
+static int mint_cert_der(const char* cn, uint8_t* out, size_t cap,
+                         size_t* out_len)
+{
+    uint8_t* cert_pem = NULL;
+    uint8_t* key_pem = NULL;
+    size_t cert_len = 0;
+    size_t key_len = 0;
+    DerBuffer* der = NULL;
+    int rc;
+
+    rc = mint_self_id(cn, 1, &cert_pem, &cert_len, &key_pem, &key_len);
+    if (rc == 0)
+        rc = wc_PemToDer(cert_pem, (long)cert_len, CERT_TYPE, &der, NULL, NULL,
+                         NULL);
+    if (rc == 0 && der->length > cap)
+        rc = -1;
+    if (rc == 0) {
+        memcpy(out, der->buffer, der->length);
+        *out_len = der->length;
+    }
+
+    wc_FreeDer(&der);
+    free(cert_pem);
+    free(key_pem);
+    return rc;
+}
+
+/* Header size of the definite-length TLV at p. */
+static size_t tlv_hdr_len(const uint8_t* p)
+{
+    return (p[1] & 0x80) ? 2 + (size_t)(p[1] & 0x7F) : 2;
+}
+
+/* BER forms bundle_to_ber() writes. */
+enum { BER_WRAPPERS, BER_STREAMED, BER_CERT_LIST };
+
+/* Re-encode a certs-only bundle with indefinite lengths on its outer wrappers
+ * and, per `form`, on encapContentInfo (carrying content, as a streaming
+ * encoder writes it) or on the certificate list. The caller frees *out. */
+static int bundle_to_ber(const uint8_t* der, size_t der_len, int form,
+                         uint8_t** out, size_t* out_len)
+{
+    static const uint8_t wrap[] = { 0xA0, 0x80, 0x30, 0x80 };
+    static const uint8_t list_open[] = { 0xA0, 0x80 };
+    static const uint8_t signer_infos[] = { 0x31, 0x00 };
+    static const uint8_t eoc[6] = { 0 };
+    /* encapContentInfo as the encoder writes it, after version and an empty
+     * digestAlgorithms, and its streamed form holding the content "A". */
+    static const uint8_t encap[] = {
+        0x30, 0x0B, 0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01,
+        0x07, 0x01
+    };
+    static const uint8_t encap_streamed[] = {
+        0x30, 0x80, 0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01,
+        0x07, 0x01, 0xA0, 0x80, 0x24, 0x80, 0x04, 0x01, 0x41, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00
+    };
+    const size_t encap_at = 5;
+    const size_t list_at = encap_at + sizeof(encap);
+    const uint8_t* oid = der + tlv_hdr_len(der);
+    size_t oid_len = 2 + (size_t)oid[1];
+    const uint8_t* body = oid + oid_len + tlv_hdr_len(oid + oid_len);
+    const uint8_t* piece[5];
+    size_t piece_len[5];
+    size_t pieces = 0;
+    size_t body_len;
+    size_t list_hdr;
+    size_t i;
+    uint8_t* p;
+
+    body += tlv_hdr_len(body);
+    body_len = (size_t)(der + der_len - body);
+    if (form != BER_WRAPPERS &&
+            (body_len < list_at + 4 ||
+             memcmp(body + encap_at, encap, sizeof(encap)) != 0 ||
+             body[list_at] != 0xA0 ||
+             memcmp(body + body_len - sizeof(signer_infos), signer_infos,
+                    sizeof(signer_infos)) != 0))
+        return -1;
+
+    if (form == BER_WRAPPERS) {
+        piece[0] = body;
+        piece_len[0] = body_len;
+        pieces = 1;
+    }
+    else if (form == BER_STREAMED) {
+        piece[0] = body;
+        piece_len[0] = encap_at;
+        piece[1] = encap_streamed;
+        piece_len[1] = sizeof(encap_streamed);
+        piece[2] = body + list_at;
+        piece_len[2] = body_len - list_at;
+        pieces = 3;
+    }
+    else {
+        list_hdr = tlv_hdr_len(body + list_at);
+        piece[0] = body;
+        piece_len[0] = list_at;
+        piece[1] = list_open;
+        piece_len[1] = sizeof(list_open);
+        piece[2] = body + list_at + list_hdr;
+        piece_len[2] = body_len - list_at - list_hdr - sizeof(signer_infos);
+        piece[3] = eoc;
+        piece_len[3] = 2;
+        piece[4] = signer_infos;
+        piece_len[4] = sizeof(signer_infos);
+        pieces = 5;
+    }
+
+    *out_len = 2 + oid_len + sizeof(wrap) + sizeof(eoc);
+    for (i = 0; i < pieces; i++)
+        *out_len += piece_len[i];
+    *out = (uint8_t*)malloc(*out_len);
+    if (*out == NULL)
+        return -1;
+
+    p = *out;
+    *p++ = 0x30;
+    *p++ = 0x80;
+    memcpy(p, oid, oid_len);
+    p += oid_len;
+    memcpy(p, wrap, sizeof(wrap));
+    p += sizeof(wrap);
+    for (i = 0; i < pieces; i++) {
+        memcpy(p, piece[i], piece_len[i]);
+        p += piece_len[i];
+    }
+    memcpy(p, eoc, sizeof(eoc));
+    return 0;
+}
+
+/* Does extracting `bundle` as DER give certs[0..count) in order? */
+static int extracts_in_order(const uint8_t* bundle, size_t bundle_len,
+                             const uint8_t* const* certs, const size_t* lens,
+                             size_t count)
+{
+    WolfCertBuffer out = { 0 };
+    size_t off = 0;
+    size_t i;
+    int ok;
+
+    ok = wolfcert_pkcs7_certs_to_der(bundle, bundle_len, &out, NULL)
+         == WOLFCERT_OK;
+    for (i = 0; ok && i < count; i++) {
+        ok = off + lens[i] <= out.len &&
+             memcmp(out.data + off, certs[i], lens[i]) == 0;
+        off += lens[i];
+    }
+    ok = ok && off == out.len;
+
+    wolfcert_buffer_free(&out);
+    return ok;
+}
+
+/* Is `bundle` refused with `want`, with nothing handed back? */
+static int refused_with(const uint8_t* bundle, size_t bundle_len, int want)
+{
+    WolfCertBuffer out = { 0 };
+    int rc = wolfcert_pkcs7_certs_to_der(bundle, bundle_len, &out, NULL);
+    int ok = (rc == want && out.data == NULL);
+
+    wolfcert_buffer_free(&out);
+    return ok;
+}
+
+/* Does this wolfSSL build accept the bundle at all? */
+static int wolfssl_accepts(const uint8_t* bundle, size_t bundle_len)
+{
+    PKCS7* p7 = wc_PKCS7_New(NULL, INVALID_DEVID);
+    int ok;
+
+    if (p7 == NULL)
+        return 0;
+
+    ok = wc_PKCS7_VerifySignedData(p7, (byte*)bundle, (word32)bundle_len) == 0;
+    wc_PKCS7_Free(p7);
+    return ok;
+}
+
+/* Re-encode `p7` as BER and check it as extracts_in_order() does. A BER form
+ * this wolfSSL build does not accept counts as a pass. */
+static int ber_extracts_in_order(const WolfCertBuffer* p7, int form,
+                                 const uint8_t* const* certs,
+                                 const size_t* lens, size_t count)
+{
+    uint8_t* ber = NULL;
+    size_t ber_len = 0;
+    int ok;
+
+    ok = bundle_to_ber(p7->data, p7->len, form, &ber, &ber_len) == 0;
+    if (ok && wolfssl_accepts(ber, ber_len))
+        ok = extracts_in_order(ber, ber_len, certs, lens, count);
+
+    free(ber);
+    return ok;
+}
+
+/* DER and BER bundles come back whole and in order up to the limit; one more,
+ * a non-certificate or an unknown entry is refused. Each case frees before
+ * asserting so a failed REQUIRE cannot leak. */
+static int test_pkcs7_bundle(void)
+{
+    static const uint8_t not_cert[] = { 0x30, 0x03, 0x02, 0x01, 0x00 };
+    static const uint8_t empty_seq[] = { 0x30, 0x00 };
+    const uint8_t* certs[WOLFCERT_PKCS7_MAX_CERTS + 1];
+    size_t lens[WOLFCERT_PKCS7_MAX_CERTS + 1];
+    uint8_t a[2048];
+    uint8_t b[2048];
+    size_t a_len = 0;
+    size_t b_len = 0;
+    WolfCertBuffer p7 = { 0 };
+    uint8_t* last = NULL;
+    int built;
+    int der_ok;
+    int ber_ok;
+    int streamed_ok;
+    int accepted;
+    int refused;
+    size_t i;
+
+    REQUIRE(mint_cert_der("bundle cert A", a, sizeof(a), &a_len) == 0);
+    REQUIRE(mint_cert_der("bundle cert B", b, sizeof(b), &b_len) == 0);
+    for (i = 0; i < WOLFCERT_PKCS7_MAX_CERTS + 1; i++) {
+        certs[i] = (i % 2 == 0) ? a : b;
+        lens[i]  = (i % 2 == 0) ? a_len : b_len;
+    }
+
+    built = wolfcert_pkcs7_build_certs_only(certs, lens,
+                WOLFCERT_PKCS7_MAX_CERTS, &p7, NULL) == WOLFCERT_OK;
+    der_ok = built && extracts_in_order(p7.data, p7.len, certs, lens,
+                                        WOLFCERT_PKCS7_MAX_CERTS);
+    ber_ok = built && ber_extracts_in_order(&p7, BER_WRAPPERS, certs, lens,
+                                            WOLFCERT_PKCS7_MAX_CERTS);
+    streamed_ok = built && ber_extracts_in_order(&p7, BER_STREAMED, certs,
+                                                 lens,
+                                                 WOLFCERT_PKCS7_MAX_CERTS);
+    wolfcert_buffer_free(&p7);
+    REQUIRE(built);
+    REQUIRE(der_ok);
+    REQUIRE(ber_ok);
+    REQUIRE(streamed_ok);
+
+    built = wolfcert_pkcs7_build_certs_only(certs, lens, 1, &p7, NULL)
+            == WOLFCERT_OK;
+    ber_ok = built && ber_extracts_in_order(&p7, BER_CERT_LIST, certs, lens, 1);
+    wolfcert_buffer_free(&p7);
+    REQUIRE(built);
+    REQUIRE(ber_ok);
+
+    built = wolfcert_pkcs7_build_certs_only(certs, lens,
+                WOLFCERT_PKCS7_MAX_CERTS + 1, &p7, NULL) == WOLFCERT_OK;
+    der_ok = built && refused_with(p7.data, p7.len, WOLFCERT_ERR_UNSUPPORTED);
+    wolfcert_buffer_free(&p7);
+    REQUIRE(built);
+    REQUIRE(der_ok);
+
+    certs[1] = not_cert;
+    lens[1] = sizeof(not_cert);
+    built = wolfcert_pkcs7_build_certs_only(certs, lens, 2, &p7, NULL)
+            == WOLFCERT_OK;
+    accepted = built && wolfssl_accepts(p7.data, p7.len);
+    refused = accepted && refused_with(p7.data, p7.len, WOLFCERT_ERR_PARSE);
+    wolfcert_buffer_free(&p7);
+    REQUIRE(built);
+    REQUIRE(accepted);
+    REQUIRE(refused);
+
+    /* Turn an empty SEQUENCE after A into an empty OCTET STRING, which no
+     * CertificateChoices alternative allows. */
+    certs[1] = empty_seq;
+    lens[1] = sizeof(empty_seq);
+    built = wolfcert_pkcs7_build_certs_only(certs, lens, 2, &p7, NULL)
+            == WOLFCERT_OK;
+    if (built) {
+        last = p7.data + p7.len - 2 - sizeof(empty_seq);
+        built = memcmp(last, empty_seq, sizeof(empty_seq)) == 0;
+    }
+    if (built)
+        last[0] = 0x04;
+    accepted = built && wolfssl_accepts(p7.data, p7.len);
+    refused = accepted && refused_with(p7.data, p7.len, WOLFCERT_ERR_PARSE);
+    wolfcert_buffer_free(&p7);
+    REQUIRE(built);
+    REQUIRE(accepted);
+    REQUIRE(refused);
+
     return 0;
 }
 #endif
@@ -263,6 +558,8 @@ int main(void)
         return 1;
 #if defined(WOLFCERT_HAVE_EST) || defined(WOLFCERT_HAVE_SCEP)
     if (test_pkcs7())
+        return 1;
+    if (test_pkcs7_bundle())
         return 1;
 #endif
     if (test_csr_pem())

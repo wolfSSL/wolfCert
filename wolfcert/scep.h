@@ -45,6 +45,9 @@ typedef struct {
 WOLFCERT_API int wolfcert_scep_get_ca_caps(const WolfCertServerCfg* srv,
                                            WolfCertScepCaps* out_caps);
 
+/* GetCACert, returning the CA/RA certificate(s) as PEM. Returns
+ * WOLFCERT_ERR_UNSUPPORTED when a bundle holds more than
+ * WOLFCERT_PKCS7_MAX_CERTS certificates (see docs/EMBEDDED.md). */
 WOLFCERT_API int wolfcert_scep_get_ca_cert(const WolfCertServerCfg* srv,
                                            WolfCertBuffer* out_ca_pem);
 
@@ -256,7 +259,8 @@ WOLFCERT_API int wolfcert_scep_get_cert(const WolfCertServerCfg* srv,
  * of the current CA's expiry, so the device can install the new trust
  * anchor before the old one stops being honored. Returns
  * WOLFCERT_ERR_NOT_FOUND when the server has no roll-over configured
- * (HTTP 404).
+ * (HTTP 404), and WOLFCERT_ERR_UNSUPPORTED when the response holds more than
+ * WOLFCERT_PKCS7_MAX_CERTS certificates (see docs/EMBEDDED.md).
  *
  * The response is a CMS SignedData signed by the current CA. current_ca_der is
  * the current CA certificate(s) in DER (one or more concatenated DER certs,

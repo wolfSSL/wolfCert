@@ -27,7 +27,9 @@
 extern "C" {
 #endif
 
-/* GET /.well-known/est/cacerts - returns the CA chain as PEM. */
+/* GET /.well-known/est/cacerts - returns the CA chain as PEM. Returns
+ * WOLFCERT_ERR_UNSUPPORTED when the chain holds more than
+ * WOLFCERT_PKCS7_MAX_CERTS certificates (see docs/EMBEDDED.md). */
 WOLFCERT_API int wolfcert_est_get_cacerts(const WolfCertServerCfg* srv,
                                           WolfCertBuffer* out_ca_pem);
 

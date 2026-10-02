@@ -114,16 +114,20 @@ static int der_put_len(byte* out, size_t cap, size_t n)
  * here would land SET { SET { ... } } on the wire, which every other
  * RFC 8894 implementation rejects.
  *
- * Returns total bytes written, or -1 if `cap` is too small. */
+ * Returns total bytes written, WOLFCERT_ERR_BAD_ARG if `v` is not a
+ * PrintableString, or WOLFCERT_ERR_MEMORY if `cap` is too small. */
 static int enc_printable_n(const byte* v, size_t vl, byte* out, size_t cap)
 {
+    if (!wolfcert_is_printable_string(v, vl))
+        return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "scep",
+                            "attribute value is not a PrintableString");
     if (cap < 1)
-        return -1;
+        return WOLFCERT_ERR_MEMORY;
 
     out[0] = 0x13;
     int ll = der_put_len(out + 1, cap - 1, vl);
     if (ll < 0 || 1 + (size_t)ll + vl > cap)
-        return -1;
+        return WOLFCERT_ERR_MEMORY;
 
     memcpy(out + 1 + ll, v, vl);
     return (int)(1 + (size_t)ll + vl);
@@ -263,7 +267,7 @@ static int build_signed_attribs(const WolfCertScepAttrs* a,
     if (a->message_type != NULL) {
         int vl = enc_printable(a->message_type, scratch + off, scratch_cap - off);
         if (vl < 0)
-            return WOLFCERT_ERR_MEMORY;
+            return vl;
 
         attrs[n].oid = OID_MSG_TYPE;
         attrs[n].oidSz = sizeof(OID_MSG_TYPE);
@@ -282,7 +286,7 @@ static int build_signed_attribs(const WolfCertScepAttrs* a,
         int vl = enc_printable_n(a->transaction_id, a->transaction_id_len,
                                  scratch + off, scratch_cap - off);
         if (vl < 0)
-            return WOLFCERT_ERR_MEMORY;
+            return vl;
 
         attrs[n].oid = OID_TRANS_ID;
         attrs[n].oidSz = sizeof(OID_TRANS_ID);
@@ -320,7 +324,7 @@ static int build_signed_attribs(const WolfCertScepAttrs* a,
     if (a->pki_status != NULL) {
         int vl = enc_printable(a->pki_status, scratch + off, scratch_cap - off);
         if (vl < 0)
-            return WOLFCERT_ERR_MEMORY;
+            return vl;
 
         attrs[n].oid = OID_PKI_STATUS;
         attrs[n].oidSz = sizeof(OID_PKI_STATUS);
@@ -332,7 +336,7 @@ static int build_signed_attribs(const WolfCertScepAttrs* a,
     if (a->fail_info != NULL) {
         int vl = enc_printable(a->fail_info, scratch + off, scratch_cap - off);
         if (vl < 0)
-            return WOLFCERT_ERR_MEMORY;
+            return vl;
 
         attrs[n].oid = OID_FAIL_INFO;
         attrs[n].oidSz = sizeof(OID_FAIL_INFO);

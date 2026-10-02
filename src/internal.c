@@ -94,6 +94,20 @@ char* wolfcert_strdup(const char* s, void* heap)
     return r;
 }
 
+int wolfcert_is_printable_string(const uint8_t* s, size_t len)
+{
+    size_t i;
+
+    for (i = 0; i < len; i++) {
+        uint8_t c = s[i];
+        if ((c < 'A' || c > 'Z') && (c < 'a' || c > 'z') &&
+                (c < '0' || c > '9') &&
+                (c == 0 || strchr(" '()+,-./:=?", c) == NULL))
+            return 0;
+    }
+    return 1;
+}
+
 const char* wolfcert_last_error_message(void)
 {
     return g_err.message;

@@ -578,6 +578,7 @@ static int blocking_poll_path(WolfCertServer* s)
     WolfCertScepResult r1 = { 0 };
     WolfCertScepResult r2 = { 0 };
     WolfCertScepResult r3 = { 0 };
+    WolfCertScepResult r4 = { 0 };
     uint8_t long_tid[200];
     int ret = 1;
 
@@ -605,13 +606,19 @@ static int blocking_poll_path(WolfCertServer* s)
     /* A 200-byte transactionID reaches the server intact: the round trip
      * completes and the server answers FAILURE/badCertId for the unknown
      * transaction, rather than the client refusing the argument. */
-    memset(long_tid, 0x11, sizeof(long_tid));
+    memset(long_tid, 'A', sizeof(long_tid));
     REQUIRE_CLEAN(wolfcert_scep_session_get_cert_initial_ex(sess, &caps,
                 ca_der->buffer, ca_der->length, ca_der->buffer, ca_der->length,
                 NULL, 0, dk, csr.data, csr.len,
                 long_tid, sizeof(long_tid), &r3) == WOLFCERT_OK);
     REQUIRE_CLEAN(r3.status == WOLFCERT_SCEP_STATUS_FAILURE);
     REQUIRE_CLEAN(r3.fail_info == 4);
+
+    long_tid[1] = '_';
+    REQUIRE_CLEAN(wolfcert_scep_session_get_cert_initial_ex(sess, &caps,
+                ca_der->buffer, ca_der->length, ca_der->buffer, ca_der->length,
+                NULL, 0, dk, csr.data, csr.len,
+                long_tid, sizeof(long_tid), &r4) == WOLFCERT_ERR_BAD_ARG);
 
     ret = 0;
 cleanup:
@@ -620,6 +627,7 @@ cleanup:
     wolfcert_scep_result_free(&r1);
     wolfcert_scep_result_free(&r2);
     wolfcert_scep_result_free(&r3);
+    wolfcert_scep_result_free(&r4);
     if (ca_der != NULL)
         wc_FreeDer(&ca_der);
     wolfcert_buffer_free(&ca_pem);

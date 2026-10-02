@@ -179,8 +179,8 @@ typedef struct {
     const char*  url;
     const char*  trust_file;
     const char*  user;
-    const char*  pass;
-    const char*  challenge;
+    char*        pass;
+    char*        challenge;
     const char*  client_cert_file;
     const char*  client_key_file;
     const char*  key_type;
@@ -227,8 +227,24 @@ static int opt_append(const char*** arr, size_t* len, size_t* cap,
     return 0;
 }
 
+/* Copy a secret option value, then wipe it from argv so ps cannot show it. */
+static int opt_secret(char** dst, char* arg)
+{
+    if (*dst != NULL)
+        free_secret(*dst, strlen(*dst));
+
+    *dst = strdup(arg);
+    wc_ForceZero(arg, (word32)strlen(arg));
+
+    return *dst == NULL ? -1 : 0;
+}
+
 static void opts_free(Opts* opts)
 {
+    if (opts->pass != NULL)
+        free_secret(opts->pass, strlen(opts->pass));
+    if (opts->challenge != NULL)
+        free_secret(opts->challenge, strlen(opts->challenge));
     free(opts->san_dns);
     free(opts->san_ip);
     free(opts->san_uri);
@@ -292,10 +308,12 @@ static int parse_common(int argc, char** argv, Opts* opts)
                 opts->user = optarg;
                 break;
             case 'P':
-                opts->pass = optarg;
+                if (opt_secret(&opts->pass, optarg) != 0)
+                    return -1;
                 break;
             case 'X':
-                opts->challenge = optarg;
+                if (opt_secret(&opts->challenge, optarg) != 0)
+                    return -1;
                 break;
             case 'M':
                 opts->client_cert_file = optarg;

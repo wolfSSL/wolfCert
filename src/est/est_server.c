@@ -1016,24 +1016,6 @@ static int reenroll_identity_check(WolfCertServer* s,
 #endif
 }
 
-/* Parse the PKCS#10 request and check its self-signature. */
-static int csr_verify(const uint8_t* csr_der, size_t csr_len, void* heap)
-{
-    DecodedCert dc;
-    int rc;
-
-    wc_InitDecodedCert(&dc, (byte*)csr_der, (word32)csr_len, heap);
-    rc = wc_ParseCert(&dc, CERTREQ_TYPE, VERIFY, NULL);
-    wc_FreeDecodedCert(&dc);
-    if (rc == MEMORY_E)
-        return WOLFCERT_ERR_WC(rc, "est", "ParseCert(CSR)");
-    if (rc != 0)
-        return WOLFCERT_ERR(WOLFCERT_ERR_PARSE, "est",
-            "CSR does not parse or verify (%d)", rc);
-
-    return WOLFCERT_OK;
-}
-
 static int handler_enroll(WolfCertServer* s, int fd, const EstRequest* req,
                           int reenroll)
 {
@@ -1130,7 +1112,8 @@ static int handler_enroll(WolfCertServer* s, int fd, const EstRequest* req,
         EstPriv* p = (EstPriv*)s->priv;
         uint8_t h[32];
         /* The reenroll identity check has already verified the CSR. */
-        rc = reenroll ? WOLFCERT_OK : csr_verify(csr.data, csr.len, s->heap);
+        rc = reenroll ? WOLFCERT_OK :
+                        wolfcert_csr_verify(csr.data, csr.len, s->heap);
         if (rc == WOLFCERT_ERR_MEMORY) {
             send_error(s, fd, 500, "Server Error", "cannot check the CSR\n");
             wolfcert_buffer_free(&csr);

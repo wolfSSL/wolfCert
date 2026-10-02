@@ -29,6 +29,7 @@
 #include <wolfssl/ssl.h>
 #include <wolfssl/wolfcrypt/asn.h>          /* SHA256h */
 #include <wolfssl/wolfcrypt/asn_public.h>
+#include <wolfssl/wolfcrypt/pkcs7.h>
 #include <wolfssl/wolfcrypt/random.h>
 #include <wolfssl/wolfcrypt/rsa.h>
 
@@ -385,14 +386,40 @@ static int check_pubkey_txid(const WolfCertServerCfg* cli,
     return rc;
 }
 
-/* The content-cipher checks force an AES-CBC cipher, so they only exist when
- * wolfSSL can supply one. */
-#if defined(HAVE_AES_CBC) && \
-        (defined(WOLFSSL_AES_128) || defined(WOLFSSL_AES_256))
-#define WOLFCERT_TEST_HAVE_CIPHER_OVERRIDE
-#endif
+/* A CSR whose self-signature is broken gets past the SPKI and challenge checks
+ * and is only refused at issuance, which must still answer with a CertRep. */
+static int check_bad_csr_sig(const WolfCertServerCfg* cli,
+                             const WolfCertScepCaps* caps,
+                             const WolfCertKey* key,
+                             const uint8_t* csr, size_t csr_len,
+                             const uint8_t* ca_der_buf, size_t ca_der_len)
+{
+    WolfCertScepResult r = { 0 };
+    uint8_t* bad = NULL;
+    int rc = WOLFCERT_OK;
 
-#ifdef WOLFCERT_TEST_HAVE_CIPHER_OVERRIDE
+    bad = (uint8_t*)WOLFCERT_XMALLOC(csr_len, NULL);
+    if (bad == NULL)
+        rc = WOLFCERT_ERR_MEMORY;
+    if (rc == WOLFCERT_OK) {
+        memcpy(bad, csr, csr_len);
+        bad[csr_len - 1] ^= 0x01;
+        rc = wolfcert_scep_pkcs_req_ex(cli, caps, ca_der_buf, ca_der_len,
+                                       ca_der_buf, ca_der_len, key,
+                                       bad, csr_len, &r);
+        if (rc != WOLFCERT_OK)
+            fprintf(stderr, "bad CSR signature: rc=%d (%s)\n", rc,
+                    wolfcert_strerror(rc));
+    }
+    if (rc == WOLFCERT_OK && (r.status != WOLFCERT_SCEP_STATUS_FAILURE ||
+                              r.fail_info != 2))
+        rc = -1;
+
+    wolfcert_scep_result_free(&r);
+    WOLFCERT_XFREE(bad, NULL);
+    return rc;
+}
+
 /* proto_opts.scep.content_cipher override: enrolling with an explicit
  * cipher must still issue a cert - the server de-envelops whatever OID the
  * request carries - proving AES-256 (and explicit AES-128) interoperate. */
@@ -425,7 +452,6 @@ static int check_content_cipher(const WolfCertServerCfg* cli,
     wolfcert_key_free(key);
     return rc;
 }
-#endif /* WOLFCERT_TEST_HAVE_CIPHER_OVERRIDE */
 
 /* The listener canned_srv_thread() accepts on and the response it sends. */
 struct canned_ctx {
@@ -815,7 +841,6 @@ static void* msgtype_srv_thread(void* arg)
     return NULL;
 }
 
-#ifdef WOLFCERT_TEST_HAVE_CIPHER_OVERRIDE
 /* The end-to-end cipher check above only proves the server de-enveloped
  * whatever arrived, which it does for any OID, so it would pass even if the
  * override were ignored. Read the algorithm off the wire instead. */
@@ -857,7 +882,6 @@ static int check_content_cipher_wire(const WolfCertScepCaps* caps,
     REQUIRE(strcmp(mc.cipher, expect) == 0);
     return 0;
 }
-#endif /* WOLFCERT_TEST_HAVE_CIPHER_OVERRIDE */
 
 /* proto_opts.scep.renewal_msg_type picks the messageType a renewal carries,
  * while the signer stays the certificate being replaced either way. Default is
@@ -1030,7 +1054,6 @@ static int check_getnextca_ca_id(const uint8_t* ca_der_buf, size_t ca_der_len)
     return 0;
 }
 
-#if defined(HAVE_AES_CBC) && defined(WOLFSSL_AES_128)
 /* RFC 8894 section 3.2.1 requires transactionID and a fresh senderNonce in every
  * pkiMessage; the client always sends both, so POST hand-built ones instead. */
 static int check_required_attrs(WolfCertServer* s, const WolfCertKeyCfg* kcfg,
@@ -1043,7 +1066,7 @@ static int check_required_attrs(WolfCertServer* s, const WolfCertKeyCfg* kcfg,
     WolfCertBuffer env  = { 0 };
     uint8_t* signer = NULL;
     size_t   signer_len = 0;
-    uint8_t  tid[16], snonce[16];
+    uint8_t  tid[16], snonce[16], snonce_long[17];
     size_t   i;
     int      rc;
 
@@ -1059,12 +1082,13 @@ static int check_required_attrs(WolfCertServer* s, const WolfCertKeyCfg* kcfg,
         rc = wolfcert_scep_envelop(ca_der_buf, ca_der_len, csr.data, csr.len,
                                    AES128CBCb, &env, NULL);
 
-    memset(tid,    0x11, sizeof(tid));
+    memset(tid,    'A', sizeof(tid));
     memset(snonce, 0x22, sizeof(snonce));
+    memset(snonce_long, 0x33, sizeof(snonce_long));
 
-    /* Each round omits one required attribute; the last is the control that
-     * proves this raw-POST harness reaches the issuance path at all. */
-    for (i = 0; rc == WOLFCERT_OK && i < 7; ++i) {
+    /* Each round omits or mis-sizes one required attribute; the last is the
+     * control that proves this raw-POST harness reaches the issuance path. */
+    for (i = 0; rc == WOLFCERT_OK && i < 9; ++i) {
         WolfCertScepAttrs a = { .message_type = i == 4 ? NULL :
                                                 i == 5 ? ""   : "19" };
         WolfCertBuffer msg = { 0 };
@@ -1095,6 +1119,15 @@ static int check_required_attrs(WolfCertServer* s, const WolfCertKeyCfg* kcfg,
             a.transaction_id = tid;   a.transaction_id_len = sizeof(tid);
             a.sender_nonce = snonce;  a.sender_nonce_len = sizeof(snonce);
         }
+        else if (i == 6) {                  /* short senderNonce */
+            a.transaction_id = tid;   a.transaction_id_len = sizeof(tid);
+            a.sender_nonce = snonce;  a.sender_nonce_len = 8;
+        }
+        else if (i == 7) {                  /* long senderNonce */
+            a.transaction_id = tid;   a.transaction_id_len = sizeof(tid);
+            a.sender_nonce = snonce_long;
+            a.sender_nonce_len = sizeof(snonce_long);
+        }
         else {                              /* control: all three present */
             a.transaction_id = tid;   a.transaction_id_len = sizeof(tid);
             a.sender_nonce = snonce;  a.sender_nonce_len = sizeof(snonce);
@@ -1112,8 +1145,8 @@ static int check_required_attrs(WolfCertServer* s, const WolfCertKeyCfg* kcfg,
                           msg.data, msg.len, 0, &rsp, &rsp_len);
         wolfcert_buffer_free(&msg);
 
-        if (i < 6) {
-            /* An attribute that is absent or empty is not a pkiMessage. */
+        if (i < 8) {
+            /* An absent, empty or missized attribute is not a pkiMessage. */
             ok = (st == 400);
         }
         else {
@@ -1170,6 +1203,134 @@ static int check_required_attrs(WolfCertServer* s, const WolfCertKeyCfg* kcfg,
 
     WOLFCERT_XFREE(signer, NULL);
     wolfcert_buffer_free(&env);
+    wolfcert_buffer_free(&kder);
+    wolfcert_buffer_free(&csr);
+    wolfcert_key_free(key);
+
+    return rc;
+}
+
+/* Sign a PKCSReq whose transactionID value is `tid` and POST it. The
+ * transactionID is tagged PrintableString whatever its bytes, which
+ * wolfcert_scep_build_pki_message refuses to encode. */
+static int post_raw_tid(uint16_t port, const uint8_t* signer, size_t signer_len,
+                        const WolfCertBuffer* kder, const char* tid)
+{
+    static const byte oid_msg_type[] =
+        { 0x06,0x0A,0x60,0x86,0x48,0x01,0x86,0xF8,0x45,0x01,0x09,0x02 };
+    static const byte oid_snonce[] =
+        { 0x06,0x0A,0x60,0x86,0x48,0x01,0x86,0xF8,0x45,0x01,0x09,0x05 };
+    static const byte oid_tid[] =
+        { 0x06,0x0A,0x60,0x86,0x48,0x01,0x86,0xF8,0x45,0x01,0x09,0x07 };
+    static const byte msg_type[] = { 0x13, 0x02, '1', '9' };
+    static const byte junk[] = { 0x04, 0x02, 0xAB, 0xCD };
+    byte        tid_val[2 + 16];
+    byte        snonce[2 + 16];
+    PKCS7Attrib attribs[3];
+    PKCS7*      p7 = NULL;
+    WC_RNG      rng;
+    uint8_t*    buf = NULL;
+    uint8_t*    rsp = NULL;
+    size_t      rsp_len = 0;
+    size_t      tid_len = strlen(tid);
+    int         n = 0;
+    int         st = -1;
+
+    if (tid_len > 16 || wc_InitRng(&rng) != 0)
+        return -1;
+
+    tid_val[0] = 0x13;
+    tid_val[1] = (byte)tid_len;
+    memcpy(tid_val + 2, tid, tid_len);
+    snonce[0] = 0x04;
+    snonce[1] = 16;
+    memset(snonce + 2, 0x22, 16);
+
+    attribs[0].oid     = oid_msg_type;
+    attribs[0].oidSz   = sizeof(oid_msg_type);
+    attribs[0].value   = msg_type;
+    attribs[0].valueSz = sizeof(msg_type);
+    attribs[1].oid     = oid_tid;
+    attribs[1].oidSz   = sizeof(oid_tid);
+    attribs[1].value   = tid_val;
+    attribs[1].valueSz = (word32)(2 + tid_len);
+    attribs[2].oid     = oid_snonce;
+    attribs[2].oidSz   = sizeof(oid_snonce);
+    attribs[2].value   = snonce;
+    attribs[2].valueSz = sizeof(snonce);
+
+    p7 = wc_PKCS7_New(NULL, INVALID_DEVID);
+    buf = (uint8_t*)malloc(8192);
+    if (p7 != NULL && buf != NULL &&
+            wc_PKCS7_InitWithCert(p7, (byte*)signer, (word32)signer_len) == 0) {
+        p7->rng             = &rng;
+        p7->privateKey      = kder->data;
+        p7->privateKeySz    = (word32)kder->len;
+        p7->encryptOID      = RSAk;
+        p7->hashOID         = SHA256h;
+        p7->content         = (byte*)junk;
+        p7->contentSz       = sizeof(junk);
+        p7->signedAttribs   = attribs;
+        p7->signedAttribsSz = 3;
+        n = wc_PKCS7_EncodeSignedData(p7, buf, 8192);
+    }
+
+    if (n > 0)
+        st = raw_http_req(port, "POST", "/scep?operation=PKIOperation",
+                          "application/x-pki-message", buf, (size_t)n, 0,
+                          &rsp, &rsp_len);
+
+    free(rsp);
+    free(buf);
+    if (p7 != NULL)
+        wc_PKCS7_Free(p7);
+    wc_FreeRng(&rng);
+    return st;
+}
+
+/* The server must reject a signed request whose transactionID is not a
+ * PrintableString; the same message with a valid one is the control. */
+static int check_unprintable_tid(uint16_t port, const WolfCertKeyCfg* kcfg)
+{
+    WolfCertCertMeta meta = { .subject_dn = "CN=scep-tid" };
+    WolfCertKey*   key  = NULL;
+    WolfCertBuffer csr  = { 0 };
+    WolfCertBuffer kder = { 0 };
+    uint8_t* signer = NULL;
+    size_t   signer_len = 0;
+    int      st;
+    int      rc;
+
+    rc = wolfcert_key_generate(kcfg, &key);
+    if (rc == WOLFCERT_OK)
+        rc = wolfcert_csr_build(key, &meta, &csr);
+    if (rc == WOLFCERT_OK)
+        rc = wolfcert_key_to_der(key, &kder);
+    if (rc == WOLFCERT_OK)
+        rc = wolfcert_scep_self_signed_rsa((RsaKey*)key->impl, csr.data,
+                                           csr.len, &signer, &signer_len, NULL);
+
+    if (rc == WOLFCERT_OK) {
+        st = post_raw_tid(port, signer, signer_len, &kder, "tid@1");
+        if (st != 400) {
+            fprintf(stderr, "FAIL %s:%d '@' transactionID got status %d\n",
+                    __FILE__, __LINE__, st);
+            rc = -1;
+        }
+    }
+
+    /* The control reaches de-enveloping, which answers the junk content with
+     * a signed FAILURE. */
+    if (rc == WOLFCERT_OK) {
+        st = post_raw_tid(port, signer, signer_len, &kder, "tid-1");
+        if (st != 200) {
+            fprintf(stderr, "FAIL %s:%d control transactionID got status %d\n",
+                    __FILE__, __LINE__, st);
+            rc = -1;
+        }
+    }
+
+    WOLFCERT_XFREE(signer, NULL);
     wolfcert_buffer_free(&kder);
     wolfcert_buffer_free(&csr);
     wolfcert_key_free(key);
@@ -1343,8 +1504,6 @@ static int check_malformed_dispatch(uint16_t port, const WolfCertKeyCfg* kcfg,
     return rc;
 }
 
-#endif /* HAVE_AES_CBC && WOLFSSL_AES_128 */
-
 int main(void)
 {
     REQUIRE(wolfcert_init(NULL) == WOLFCERT_OK);
@@ -1372,13 +1531,8 @@ int main(void)
     REQUIRE(caps.post_pki_operation);
     REQUIRE(caps.sha256);
 
-#if defined(WOLFSSL_AES_128) && defined(HAVE_AES_CBC)
     REQUIRE(caps.aes == 1);
     REQUIRE(caps.scep_standard == 1);
-#else
-    REQUIRE(caps.aes == 0);
-    REQUIRE(caps.scep_standard == 0);
-#endif
     REQUIRE(caps.renewal);
 
     WolfCertBuffer ca_pem = { 0 };
@@ -1428,6 +1582,9 @@ int main(void)
     REQUIRE(check_pubkey_txid(&cli, &caps, &kcfg,
                               ca_der->buffer, ca_der->length) == WOLFCERT_OK);
 
+    REQUIRE(check_bad_csr_sig(&cli, &caps, dk, csr.data, csr.len,
+                              ca_der->buffer, ca_der->length) == WOLFCERT_OK);
+
     /* ---- RSA-4096 enrollment ---------------------------------------------- */
     rc = check_rsa4096(&cli, &caps, ca_der->buffer, ca_der->length);
     if (rc != WOLFCERT_OK)
@@ -1453,18 +1610,16 @@ int main(void)
     wolfcert_buffer_free(&issued_hash);
 
     /* ---- Content-cipher override: explicit AES-256 and AES-128 both enroll.
-     * Each half needs the cipher wolfSSL was actually built with; scep_prepare
-     * returns WOLFCERT_ERR_UNSUPPORTED for one the library cannot do. */
-#if defined(WOLFSSL_AES_256) && defined(HAVE_AES_CBC)
+     * AES-256 needs wolfSSL built with it; scep_prepare returns
+     * WOLFCERT_ERR_UNSUPPORTED otherwise. */
+#if defined(WOLFSSL_AES_256)
     REQUIRE(check_content_cipher(&cli, &caps, &kcfg, ca_der->buffer,
                                  ca_der->length, WOLFCERT_SCEP_CIPHER_AES256)
             == WOLFCERT_OK);
 #endif
-#if defined(WOLFSSL_AES_128) && defined(HAVE_AES_CBC)
     REQUIRE(check_content_cipher(&cli, &caps, &kcfg, ca_der->buffer,
                                  ca_der->length, WOLFCERT_SCEP_CIPHER_AES128)
             == WOLFCERT_OK);
-#endif
 
     /* ---- Renewal messageType. The signer is the certificate being replaced
      * in both cases; only the attribute changes, and the in-tree server routes
@@ -1530,18 +1685,16 @@ int main(void)
 
     /* ...and the same options read off the wire, since the server de-envelops
      * any OID and so cannot tell an honoured override from an ignored one. */
-#if defined(WOLFSSL_AES_256) && defined(HAVE_AES_CBC)
+#if defined(WOLFSSL_AES_256)
     REQUIRE(check_content_cipher_wire(&caps, &kcfg, ca_der->buffer,
                                       ca_der->length,
                                       WOLFCERT_SCEP_CIPHER_AES256,
                                       "aes256") == 0);
 #endif
-#if defined(WOLFSSL_AES_128) && defined(HAVE_AES_CBC)
     REQUIRE(check_content_cipher_wire(&caps, &kcfg, ca_der->buffer,
                                       ca_der->length,
                                       WOLFCERT_SCEP_CIPHER_AES128,
                                       "aes128") == 0);
-#endif
 
     /* The session captures the SCEP options at open, so that path needs its own
      * check rather than inheriting the one-shot coverage above. */
@@ -1588,17 +1741,15 @@ int main(void)
     REQUIRE(raw_http_status(wolfcert_server_port(s),
                 "/scep?operation=PKIOperation&message=QUJD", "XYZ") == 400); /* body freed */
 
-#if defined(HAVE_AES_CBC) && defined(WOLFSSL_AES_128)
     REQUIRE(check_required_attrs(s, &kcfg, ca_der->buffer,
                                  ca_der->length) == WOLFCERT_OK);
+
+    REQUIRE(check_unprintable_tid(wolfcert_server_port(s), &kcfg)
+            == WOLFCERT_OK);
 
     REQUIRE(check_malformed_dispatch(wolfcert_server_port(s), &kcfg,
                                      ca_der->buffer, ca_der->length)
             == WOLFCERT_OK);
-#else
-    printf("SKIP required-attrs and malformed-dispatch "
-           "(wolfSSL built without AES-128-CBC)\n");
-#endif
 
 #ifdef WOLFCERT_HAVE_ED25519
     /* Ed25519 signer must be rejected cleanly (RFC 8894 requires RSA). */
@@ -1719,7 +1870,8 @@ int main(void)
         uint8_t snonce[16], rnonce[16];
         memset(snonce, 0x5A, sizeof(snonce));
         memset(rnonce, 0xA5, sizeof(rnonce));
-        const uint8_t wtid[16] = { 0 };
+        const uint8_t wtid[16] =
+            { '0','1','2','3','4','5','6','7','8','9','A','B','C','D','E','F' };
         WolfCertScepAttrs wattrs = {
             .transaction_id  = wtid,   .transaction_id_len  = sizeof(wtid),
             .sender_nonce    = snonce, .sender_nonce_len    = sizeof(snonce),

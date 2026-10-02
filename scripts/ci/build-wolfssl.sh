@@ -62,7 +62,7 @@ KNOWN_CONFIGS=(
     # wolfSSL's own configure refuses to drop AES/SHA-256/all-TLS/all-key-algs
     # (those are cascade-required), so wolfCert's compile-time #error guards for
     # them in check_config.h cannot be fed by a real wolfSSL build.
-    neg-no-rsa neg-no-pkcs7 neg-no-public-asn
+    neg-no-rsa neg-no-pkcs7 neg-no-public-asn neg-no-aes128
 )
 
 # Emit the configure argument list (one per line) for a config name.
@@ -167,6 +167,10 @@ resolve_flags() {
             # No ASN-export macro -> "does not export its ASN helpers".
             _base_flags
             printf '%s\n' 'CPPFLAGS=-DWOLFSSL_ALT_NAMES -DWOLFSSL_CERT_NAME_ALL -DKEEP_PEER_CERT -DWOLFSSL_HAVE_TLS_UNIQUE' ;;
+        neg-no-aes128)
+            # NO_AES_128 with SCEP still requested -> "requires AES-128-CBC".
+            _base_flags
+            printf '%s\n' 'CPPFLAGS=-DWOLFSSL_ALT_NAMES -DWOLFSSL_CERT_NAME_ALL -DKEEP_PEER_CERT -DWOLFSSL_HAVE_TLS_UNIQUE -DWOLFSSL_PUBLIC_ASN -DNO_AES_128' ;;
         *)
             echo "ERROR: unknown wolfSSL config '$cfg'." >&2
             echo "       Known: ${KNOWN_CONFIGS[*]}" >&2

@@ -131,6 +131,11 @@
 #ifdef NO_SHA256
 #error "wolfSSL was built with NO_SHA256; wolfCert requires SHA-256. Rebuild wolfSSL with --enable-sha256."
 #endif
+/* RFC 8894 section 2.9 makes AES128-CBC mandatory-to-implement for SCEP. */
+#if defined(WOLFCERT_HAVE_SCEP) && (!defined(WOLFSSL_AES_128) || \
+    !defined(HAVE_AES_CBC) || !defined(HAVE_AES_DECRYPT))
+#error "wolfCert SCEP requires AES-128-CBC (RFC 8894). Rebuild wolfSSL without NO_AES_128, NO_AES_CBC or NO_AES_DECRYPT, or drop WOLFCERT_HAVE_SCEP."
+#endif
 /* wc_ConstantCompare backs every constant-time comparison of secret material
  * (SCEP CA fingerprint / challenge password, EST Basic-auth credential). A
  * wolfSSL built WOLFSSL_NO_CONST_CMP drops the symbol, so catch it here with a

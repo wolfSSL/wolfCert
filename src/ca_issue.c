@@ -743,6 +743,24 @@ WOLFCERT_TEST_VIS int wolfcert_copy_csr_subject(const DecodedCert* dc, Cert* nc)
 #undef COPY_SUBJ_E
 #undef COPY_SUBJ
 
+/* Parse the PKCS#10 request and check its self-signature. */
+int wolfcert_csr_verify(const uint8_t* csr_der, size_t csr_len, void* heap)
+{
+    DecodedCert dc;
+    int rc;
+
+    wc_InitDecodedCert(&dc, (byte*)csr_der, (word32)csr_len, heap);
+    rc = wc_ParseCert(&dc, CERTREQ_TYPE, VERIFY, NULL);
+    wc_FreeDecodedCert(&dc);
+    if (rc == MEMORY_E)
+        return WOLFCERT_ERR_WC(rc, "ca", "ParseCert(CSR)");
+    if (rc != 0)
+        return WOLFCERT_ERR(WOLFCERT_ERR_PARSE, "ca",
+            "CSR does not parse or verify (%d)", rc);
+
+    return WOLFCERT_OK;
+}
+
 int wolfcert_ca_issue(WolfCertCa* ca,
                       const uint8_t* csr_der, size_t csr_len,
                       uint8_t** out_cert, size_t* out_len)

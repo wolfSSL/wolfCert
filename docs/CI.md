@@ -59,10 +59,10 @@ make -j && make check
 
 The negative-config gate asserts wolfCert's configure hard-fails on an
 unsupportable wolfSSL. It covers the cases a *buildable* wolfSSL can express
-(`no-rsa-scep`, `no-pkcs7`, `no-public-asn`); wolfSSL itself refuses to drop
-AES / SHA-256 / all TLS / all key algorithms, so wolfCert's compile-time
-`#error` guards for those (`wolfcert/check_config.h`) are validated at compile
-time, not by this gate.
+(`no-rsa-scep`, `no-pkcs7`, `no-public-asn`, `no-aes128-scep`); wolfSSL
+itself refuses to drop AES / SHA-256 / all TLS / all key algorithms, so
+wolfCert's compile-time `#error` guards for those (`wolfcert/check_config.h`)
+are validated at compile time, not by this gate.
 
 ```sh
 scripts/ci/assert-configure-fails.sh              # all cases, both build systems

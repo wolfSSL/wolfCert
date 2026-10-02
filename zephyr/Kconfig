@@ -32,7 +32,9 @@ config WOLFCERT_SCEP
 	bool "SCEP (RFC 8894) support"
 	depends on WOLFCERT_RSA
 	help
-	  Enable the SCEP client.
+	  Enable the SCEP client. RFC 8894 makes AES-128-CBC mandatory, so the
+	  wolfSSL settings file must not define NO_AES_128, NO_AES_CBC or
+	  NO_AES_DECRYPT.
 
 config WOLFCERT_BUILTIN_TRANSPORT
 	bool "Built-in BSD-socket transport"

@@ -588,8 +588,6 @@ static const char* scep_renewal_msg_type(WolfCertScepRenewalMsgType m)
     return (m == WOLFCERT_SCEP_RENEWAL_MSG_PKCS_REQ) ? "19" : "17";
 }
 
-/* Shared SCEP round-trip sizes. */
-#define SCEP_NONCE_SZ 16
 /* A random transactionID is 16 RNG bytes expanded to 32 hex characters. */
 #define SCEP_TXID_RAND_SZ 16
 
@@ -727,18 +725,13 @@ static int scep_prepare(void* heap, const WolfCertScepCaps* caps,
      * can talk to a peer that requires a particular algorithm (e.g. a wolfSCEP
      * deployment expecting AES-256). AUTO keeps the RFC 8894 default: the
      * GetCACaps "AES" keyword advertises AES-128-CBC; otherwise fall back to
-     * the mandatory-to-implement triple DES-CBC. A wolfSSL built without 3DES
-     * cannot serve 3DES, so reject that request/fallback with a clear error
-     * instead of a cryptic encoder failure. */
+     * triple DES-CBC. A wolfSSL built without 3DES cannot serve 3DES, so
+     * reject that request/fallback with a clear error instead of a cryptic
+     * encoder failure. */
     switch (cipher) {
         case WOLFCERT_SCEP_CIPHER_AES128:
-#if !defined(WOLFSSL_AES_128) || !defined(HAVE_AES_CBC)
-            return WOLFCERT_ERR(WOLFCERT_ERR_UNSUPPORTED, "scep",
-                "AES-128-CBC content cipher requested but wolfSSL lacks it");
-#else
             enc_oid = AES128CBCb;
             break;
-#endif
         case WOLFCERT_SCEP_CIPHER_AES256:
 #if !defined(WOLFSSL_AES_256) || !defined(HAVE_AES_CBC)
             return WOLFCERT_ERR(WOLFCERT_ERR_UNSUPPORTED, "scep",
@@ -757,21 +750,14 @@ static int scep_prepare(void* heap, const WolfCertScepCaps* caps,
 #endif
         case WOLFCERT_SCEP_CIPHER_AUTO:
         default:
-            /* The "AES" capability names AES-128-CBC and nothing else, so a
-             * wolfSSL that cannot do AES-128 has to take the 3DES path even
-             * against an AES-advertising peer rather than silently substitute
-             * a cipher the CA never offered. */
-#if defined(WOLFSSL_AES_128) && defined(HAVE_AES_CBC)
             if (caps != NULL && caps->aes) {
                 enc_oid = AES128CBCb;
             }
-            else
-#endif
-            {
+            else {
 #ifdef NO_DES3
                 return WOLFCERT_ERR(WOLFCERT_ERR_UNSUPPORTED, "scep",
-                    "no usable content cipher: AES-128-CBC unavailable or "
-                    "unadvertised, and wolfSSL lacks the 3DES fallback");
+                    "no usable content cipher: CA does not advertise AES and "
+                    "wolfSSL lacks the 3DES fallback");
 #else
                 enc_oid = DES3b;
 #endif

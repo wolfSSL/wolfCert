@@ -227,6 +227,23 @@ else()
         "the rsa:* key type will return WOLFCERT_ERR_UNSUPPORTED.")
 endif()
 
+# AES-128-CBC: mandatory-to-implement for SCEP (RFC 8894 section 2.9).
+if(WOLFCERT_ENABLE_SCEP)
+    unset(_have_aes128cbc CACHE)
+    check_c_source_compiles("${_wc_wolfssl_prologue}
+        #if !defined(WOLFSSL_AES_128) || !defined(HAVE_AES_CBC) || !defined(HAVE_AES_DECRYPT)
+        #error noaes128cbc
+        #endif
+        int main(void) { return 0; }
+    " _have_aes128cbc)
+    if(NOT _have_aes128cbc)
+        message(FATAL_ERROR
+            "wolfCert SCEP requires AES-128-CBC (RFC 8894). Rebuild wolfSSL "
+            "without NO_AES_128, NO_AES_CBC or NO_AES_DECRYPT, or set "
+            "-DWOLFCERT_ENABLE_SCEP=OFF for an EST-only build.")
+    endif()
+endif()
+
 # TLS: the HTTPS transport needs at least TLS 1.2 or TLS 1.3; the endpoints pin
 # their floor to whichever lower version is available.
 unset(_have_tls12 CACHE)

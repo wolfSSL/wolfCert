@@ -269,6 +269,20 @@ AS_IF([test "x$have_rsa" = "xno"],
        RSA and the rsa:* key type will return WOLFCERT_ERR_UNSUPPORTED.])])])
 AM_CONDITIONAL([WOLFCERT_HAVE_RSA], [test "x$have_rsa" = "xyes"])
 
+# AES-128-CBC: mandatory-to-implement for SCEP (RFC 8894 section 2.9).
+AS_IF([test "x$enable_scep" = "xyes"],
+  [AC_MSG_CHECKING([whether wolfSSL provides AES-128-CBC])
+   AC_COMPILE_IFELSE(
+     [AC_LANG_PROGRAM(WOLFCERT_WOLFSSL_PROLOGUE,
+      [[#if !defined(WOLFSSL_AES_128) || !defined(HAVE_AES_CBC) || !defined(HAVE_AES_DECRYPT)
+        #error noaes128cbc
+        #endif]])],
+     [AC_MSG_RESULT([yes])],
+     [AC_MSG_RESULT([no])
+      AC_MSG_ERROR([wolfCert SCEP requires AES-128-CBC (RFC 8894). Rebuild
+        wolfSSL without NO_AES_128, NO_AES_CBC or NO_AES_DECRYPT, or configure
+        with --disable-scep.])])])
+
 # TLS: the HTTPS transport needs at least TLS 1.2 or TLS 1.3; the endpoints pin
 # their floor to whichever lower version is available.
 AC_MSG_CHECKING([whether wolfSSL provides TLS 1.2])

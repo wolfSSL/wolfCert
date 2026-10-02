@@ -115,8 +115,8 @@ typedef struct {
     WolfCertScepStatus status;
     /* cert_pem is owned and populated iff status == SUCCESS. */
     WolfCertBuffer     cert_pem;
-    /* transaction_id (binary) is owned and populated whenever the server
-     * returns a CertRep; callers echo it back via get_cert_initial. */
+    /* transaction_id (PrintableString) is owned and populated whenever the
+     * server returns a CertRep; callers echo it back via get_cert_initial. */
     uint8_t*           transaction_id;
     size_t             transaction_id_len;
     /* RFC 8894 section 3.2.1.4 failInfo; meaningful only when status==FAILURE.
@@ -202,7 +202,8 @@ WOLFCERT_API int wolfcert_scep_renewal_req(const WolfCertServerCfg* srv,
  *
  * `transaction_id` must be the value returned by the prior request. It is
  * carried verbatim and the client imposes no length of its own, so whatever
- * the server chose is echoed back to it unchanged.
+ * the server chose is echoed back to it unchanged. A value outside the
+ * PrintableString character set returns WOLFCERT_ERR_BAD_ARG.
  * `ra_cert` is the envelope target; `ca_bundle` is the trusted GetCACert bundle
  * the response signer is checked against (see wolfcert_scep_pkcs_req_ex). */
 WOLFCERT_API int wolfcert_scep_get_cert_initial(const WolfCertServerCfg* srv,

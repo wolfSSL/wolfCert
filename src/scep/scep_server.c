@@ -46,17 +46,9 @@
 
 /* Content-encryption cipher for the CertRep and its GetCACaps tokens. RFC 8894
  * section 3.5.2: "AES" names AES128-CBC, and "SCEPStandard" implies "AES". */
-#if defined(WOLFSSL_AES_128) && defined(HAVE_AES_CBC)
-    #define SCEP_SRV_ENC_OID    AES128CBCb
-    #define SCEP_SRV_CIPHER_CAP "AES\r\n"
-    #define SCEP_SRV_STD_CAP    "SCEPStandard\r\n"
-#elif !defined(NO_DES3)
-    #define SCEP_SRV_ENC_OID    DES3b
-    #define SCEP_SRV_CIPHER_CAP "DES3\r\n"
-    #define SCEP_SRV_STD_CAP    ""
-#else
-    #error "wolfCert's SCEP test server needs AES-128-CBC or 3DES-CBC; rebuild wolfSSL with one of them, or configure without the test server"
-#endif
+#define SCEP_SRV_ENC_OID    AES128CBCb
+#define SCEP_SRV_CIPHER_CAP "AES\r\n"
+#define SCEP_SRV_STD_CAP    "SCEPStandard\r\n"
 
 typedef struct {
     /* rawbuf owns the request-line + header bytes read off the wire. It is
@@ -114,6 +106,7 @@ typedef struct {
     int          fault_rng_fail;
     int          fault_getcert_wrong_cert;
     int          fault_getcert_no_signer;
+    int          fault_oom;
     WolfCertCa   wrong_ca;
     int          wrong_ca_ready;
 #endif
@@ -138,6 +131,12 @@ WOLFCERT_TEST_VIS void wolfcert_scep_server_set_getcert_fault(WolfCertServer* s,
 
     p->fault_getcert_wrong_cert = wrong_cert;
     p->fault_getcert_no_signer  = no_signer;
+}
+
+WOLFCERT_TEST_VIS void wolfcert_scep_server_set_oom_fault(WolfCertServer* s,
+                                                          int when)
+{
+    ((ScepPriv*)s->priv)->fault_oom = when;
 }
 #endif
 
@@ -717,37 +716,6 @@ static const ScepIssued* issued_find(ScepPriv* p, void* heap,
     return NULL;
 }
 
-/* Issue the cert and answer with a success CertRep. */
-static int issue_and_reply(WolfCertServer* s, int fd,
-                           const uint8_t* csr, size_t csr_len,
-                           const uint8_t* env_target, size_t env_target_len,
-                           const uint8_t* tid, size_t tid_len,
-                           const uint8_t* snonce, size_t snonce_len)
-{
-    uint8_t* issued = NULL;
-    size_t issued_len = 0;
-    int rc = wolfcert_ca_issue(&s->ca, csr, csr_len, &issued, &issued_len);
-    if (rc != WOLFCERT_OK) {
-        send_text(s, fd, 400, "Bad CSR", "text/plain", "");
-        return rc;
-    }
-
-    if (s->cfg.scep_enable_get_cert) {
-        int reg_rc = issued_record((ScepPriv*)s->priv, s->heap, issued,
-                                   issued_len);
-        if (reg_rc != WOLFCERT_OK)
-            WOLFCERT_LOG_DBG("scep", "GetCert registry allocation failed: %d",
-                             reg_rc);
-    }
-
-    rc = send_cert_rep(s, fd, issued, issued_len,
-                       env_target, env_target_len,
-                       tid, tid_len, snonce, snonce_len, "0", NULL);
-
-    WOLFCERT_XFREE(issued, s->heap);
-    return rc;
-}
-
 /* Answer a rejected pkiMessage with a signed CertRep carrying pkiStatus
  * FAILURE and failInfo, per RFC 8894 section 3.2.1. */
 static int send_pki_failure(WolfCertServer* s, int fd,
@@ -758,6 +726,72 @@ static int send_pki_failure(WolfCertServer* s, int fd,
     /* A FAILURE CertRep carries no messageData, hence no envelope target. */
     return send_cert_rep(s, fd, NULL, 0, NULL, 0,
                          tid, tid_len, snonce, snonce_len, "2", fail_info);
+}
+
+/* Issue the cert and answer with a success CertRep. *did_issue, when given, is
+ * set once the CA has issued, whatever the reply's outcome. */
+static int issue_and_reply(WolfCertServer* s, int fd,
+                           const uint8_t* csr, size_t csr_len,
+                           const uint8_t* env_target, size_t env_target_len,
+                           const uint8_t* tid, size_t tid_len,
+                           const uint8_t* snonce, size_t snonce_len,
+                           int* did_issue)
+{
+    uint8_t* issued = NULL;
+    size_t issued_len = 0;
+    int rc = wolfcert_ca_issue(&s->ca, csr, csr_len, &issued, &issued_len);
+
+    if (did_issue != NULL)
+        *did_issue = 0;
+#if defined(WOLFCERT_BUILD_TESTING)
+    if (rc == WOLFCERT_OK && ((ScepPriv*)s->priv)->fault_oom == 1) {
+        WOLFCERT_XFREE(issued, s->heap);
+        issued = NULL;
+        rc = WOLFCERT_ERR_MEMORY;
+    }
+#endif
+    if (rc == WOLFCERT_ERR_MEMORY) {
+        send_text(s, fd, 500, "Server Error", "text/plain", "");
+        return rc;
+    }
+    if (rc != WOLFCERT_OK) {
+        int send_rc;
+
+        /* Closed by the non-OK return; the flag is for the header. */
+        s->keep_alive = 0;
+        send_rc = send_pki_failure(s, fd, tid, tid_len, snonce, snonce_len,
+                                   "2" /* badRequest */);
+        if (send_rc != WOLFCERT_OK)
+            WOLFCERT_LOG_DBG("scep", "CertRep send failed: %d", send_rc);
+
+        return rc;
+    }
+
+    if (did_issue != NULL)
+        *did_issue = 1;
+
+    if (s->cfg.scep_enable_get_cert) {
+        int reg_rc = issued_record((ScepPriv*)s->priv, s->heap, issued,
+                                   issued_len);
+        if (reg_rc != WOLFCERT_OK)
+            WOLFCERT_LOG_DBG("scep", "GetCert registry allocation failed: %d",
+                             reg_rc);
+    }
+
+#if defined(WOLFCERT_BUILD_TESTING)
+    if (((ScepPriv*)s->priv)->fault_oom == 2) {
+        WOLFCERT_XFREE(issued, s->heap);
+        send_text(s, fd, 500, "Server Error", "text/plain", "");
+        return WOLFCERT_ERR_MEMORY;
+    }
+#endif
+
+    rc = send_cert_rep(s, fd, issued, issued_len,
+                       env_target, env_target_len,
+                       tid, tid_len, snonce, snonce_len, "0", NULL);
+
+    WOLFCERT_XFREE(issued, s->heap);
+    return rc;
 }
 
 /* Handle messageType=19 (PKCSReq) or 17 (RenewalReq) freshly arrived. */
@@ -772,13 +806,23 @@ static int handle_enroll(WolfCertServer* s, int fd, const char* mt,
     size_t         env_target_len = signer_cert ? signer_cert_len : s->ca.cert_der_len;
 
     /* Enforce signer/CSR SPKI match. */
-    if (signer_cert != NULL &&
-            signer_matches_csr(signer_cert, signer_cert_len,
-                               csr->data, csr->len, s->heap) != WOLFCERT_OK) {
-        /* Report the failure as a CertRep, then close the connection. */
-        s->keep_alive = 0;
-        return send_pki_failure(s, fd, tid, tid_len, snonce, snonce_len,
-                                "2" /* badRequest */);
+    if (signer_cert != NULL) {
+        int mrc = signer_matches_csr(signer_cert, signer_cert_len,
+                                     csr->data, csr->len, s->heap);
+#if defined(WOLFCERT_BUILD_TESTING)
+        if (mrc == WOLFCERT_OK && ((ScepPriv*)s->priv)->fault_oom == 3)
+            mrc = WOLFCERT_ERR_MEMORY;
+#endif
+        if (mrc == WOLFCERT_ERR_MEMORY) {
+            send_text(s, fd, 500, "Server Error", "text/plain", "");
+            return mrc;
+        }
+        if (mrc != WOLFCERT_OK) {
+            /* Report the failure as a CertRep, then close the connection. */
+            s->keep_alive = 0;
+            return send_pki_failure(s, fd, tid, tid_len, snonce, snonce_len,
+                                    "2" /* badRequest */);
+        }
     }
 
     if (check_challenge(csr->data, csr->len, s->cfg_challenge,
@@ -793,6 +837,19 @@ static int handle_enroll(WolfCertServer* s, int fd, const char* mt,
         /* Defer issuance; return pkiStatus=3 (PENDING). The client polls
          * with GetCertInitial (messageType 20) referencing this txid. */
         ScepPriv* p = (ScepPriv*)s->priv;
+
+        /* Refuse now a CSR that could never issue, rather than park it. */
+        int vrc = wolfcert_csr_verify(csr->data, csr->len, s->heap);
+        if (vrc == WOLFCERT_ERR_MEMORY) {
+            send_text(s, fd, 500, "Server Error", "text/plain", "");
+            return vrc;
+        }
+        if (vrc != WOLFCERT_OK) {
+            s->keep_alive = 0;
+            return send_pki_failure(s, fd, tid, tid_len, snonce, snonce_len,
+                                    "2" /* badRequest */);
+        }
+
         if (pending_find(p, tid, tid_len) == NULL) {
             int add = pending_add(p, s->heap, tid, tid_len,
                                   csr->data, csr->len,
@@ -812,15 +869,16 @@ static int handle_enroll(WolfCertServer* s, int fd, const char* mt,
 
     return issue_and_reply(s, fd, csr->data, csr->len,
                            env_target, env_target_len,
-                           tid, tid_len, snonce, snonce_len);
+                           tid, tid_len, snonce, snonce_len, NULL);
 }
 
 /* Handle messageType=20 (GetCertInitial): poll for a pending enrollment.
- * Test-server policy: the first poll for a known transactionID issues
- * the cert and drains the queue entry; subsequent polls for unknown
- * transactionIDs return pkiStatus=2 (FAILURE) rather than pretending
- * to be pending forever. */
+ * Test-server policy: the first poll for a known transactionID, signed with
+ * the parked CSR's key, issues the cert and drains the queue entry. Any
+ * other poll gets pkiStatus=2 (FAILURE) and leaves the queue unchanged. */
 static int handle_get_cert_initial(WolfCertServer* s, int fd,
+                                   const uint8_t* signer_cert,
+                                   size_t signer_cert_len,
                                    const uint8_t* tid, size_t tid_len,
                                    const uint8_t* snonce, size_t snonce_len)
 {
@@ -831,37 +889,37 @@ static int handle_get_cert_initial(WolfCertServer* s, int fd,
                                 "4" /* badCertId: no such transaction */);
     }
 
+    /* Only the key that parked the request may release it. */
+    int mrc = signer_cert == NULL ? WOLFCERT_ERR_AUTH :
+              signer_matches_csr(signer_cert, signer_cert_len,
+                                 e->csr_der, e->csr_len, s->heap);
+#if defined(WOLFCERT_BUILD_TESTING)
+    if (mrc == WOLFCERT_OK && p->fault_oom == 3)
+        mrc = WOLFCERT_ERR_MEMORY;
+#endif
+    if (mrc == WOLFCERT_ERR_MEMORY) {
+        send_text(s, fd, 500, "Server Error", "text/plain", "");
+        return mrc;
+    }
+    if (mrc != WOLFCERT_OK) {
+        return send_pki_failure(s, fd, tid, tid_len, snonce, snonce_len,
+                                "4" /* badCertId */);
+    }
+
     /* Approve on first poll. A production implementation would hold
      * requests until an admin acts on a queue; for the test server a
      * single round trip through pending is enough to exercise the
      * RFC 8894 section 3.3.3 flow end-to-end. */
     e->polls++;
-    uint8_t* csr_copy = (uint8_t*)WOLFCERT_XMALLOC(e->csr_len, s->heap);
-    if (csr_copy == NULL) {
-        send_text(s, fd, 500, "Server Error", "text/plain", "");
-        return WOLFCERT_ERR_MEMORY;
-    }
+    int did_issue = 0;
+    int rc = issue_and_reply(s, fd, e->csr_der, e->csr_len,
+                             e->signer_cert_der, e->signer_cert_len,
+                             tid, tid_len, snonce, snonce_len, &did_issue);
 
-    memcpy(csr_copy, e->csr_der, e->csr_len);
-    size_t   csr_len_local = e->csr_len;
-    uint8_t* tgt = (uint8_t*)WOLFCERT_XMALLOC(e->signer_cert_len, s->heap);
-    if (tgt == NULL) {
-        WOLFCERT_XFREE(csr_copy, s->heap);
-        send_text(s, fd, 500, "Server Error", "text/plain", "");
-        return WOLFCERT_ERR_MEMORY;
-    }
+    /* Out of memory before issuing keeps the request for another poll. */
+    if (rc != WOLFCERT_ERR_MEMORY || did_issue)
+        pending_remove(p, s->heap, e);
 
-    memcpy(tgt, e->signer_cert_der, e->signer_cert_len);
-    size_t tgt_len = e->signer_cert_len;
-
-    pending_remove(p, s->heap, e);
-
-    int rc = issue_and_reply(s, fd, csr_copy, csr_len_local,
-                             tgt, tgt_len,
-                             tid, tid_len, snonce, snonce_len);
-
-    WOLFCERT_XFREE(csr_copy, s->heap);
-    WOLFCERT_XFREE(tgt,      s->heap);
     return rc;
 }
 
@@ -940,9 +998,12 @@ static int handle_pki_op(WolfCertServer* s, int fd, const ScepRequest* req)
         goto out;
     }
 
-    /* RFC 8894 section 3.2.1 requires all three in every message, so one that
-     * omits any of them is not a pkiMessage a CertRep could answer. */
-    if (tid == NULL || tid_len == 0 || snonce == NULL || snonce_len == 0 ||
+    /* RFC 8894 section 3.2.1 requires all three in every message, with a
+     * PrintableString transactionID and a 16-byte senderNonce, or no CertRep
+     * could answer it. */
+    if (tid == NULL || tid_len == 0 ||
+            !wolfcert_is_printable_string(tid, tid_len) ||
+            snonce == NULL || snonce_len != SCEP_NONCE_SZ ||
             mt == NULL || mt[0] == '\0') {
         s->keep_alive = 0;
         send_text(s, fd, 400, "Bad Message", "text/plain", "");
@@ -953,9 +1014,7 @@ static int handle_pki_op(WolfCertServer* s, int fd, const ScepRequest* req)
     rc = wolfcert_scep_deenvelop(s->ca.cert_der, s->ca.cert_der_len,
                                   s->ca.key_der,  s->ca.key_der_len,
                                   env.data, env.len, &csr, s->heap);
-    if (rc != WOLFCERT_OK && strcmp(mt, "20") != 0) {
-        /* Decryption matters for 19/17 (CSR inside); for 20 the payload
-         * is IssuerAndSubject which the server matches by txid anyway. */
+    if (rc != WOLFCERT_OK) {
         const char* fail_info = rc == WOLFCERT_ERR_UNSUPPORTED
                                     ? "0" /* badAlg */
                                     : "2" /* badRequest */;
@@ -975,7 +1034,8 @@ static int handle_pki_op(WolfCertServer* s, int fd, const ScepRequest* req)
                            tid, tid_len, snonce, snonce_len);
     }
     else if (strcmp(mt, "20") == 0) {
-        rc = handle_get_cert_initial(s, fd, tid, tid_len, snonce, snonce_len);
+        rc = handle_get_cert_initial(s, fd, signer_cert, signer_cert_len,
+                                     tid, tid_len, snonce, snonce_len);
     }
     else if (strcmp(mt, "21") == 0 && s->cfg.scep_enable_get_cert) {
         const uint8_t* gc_signer     = signer_cert;

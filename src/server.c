@@ -301,6 +301,17 @@ int wolfcert_server_start(const WolfCertServerCfgSrv* cfg, WolfCertServer** out)
             "EST enrollment needs http_basic_user or tls_client_ca_pem, "
             "or est_allow_anonymous_enroll");
 
+    /* Only EST requests the certificate that PHA defers past the handshake. */
+    if (cfg->protocol != WOLFCERT_PROTO_EST && cfg->tls_post_handshake_auth)
+        return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "server",
+            "post-handshake auth is supported only for EST");
+
+    struct in_addr bind_addr = { .s_addr = htonl(INADDR_ANY) };
+    if (cfg->bind_host != NULL &&
+            inet_pton(AF_INET, cfg->bind_host, &bind_addr) != 1)
+        return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "server",
+            "bind_host \"%s\" is not a numeric IPv4 address", cfg->bind_host);
+
     void* heap = cfg->heap ? cfg->heap : wolfcert_default_heap();
     WolfCertServer* s = (WolfCertServer*)WOLFCERT_XMALLOC(sizeof(*s), heap);
     if (s == NULL)
@@ -317,8 +328,6 @@ int wolfcert_server_start(const WolfCertServerCfgSrv* cfg, WolfCertServer** out)
     s->ops       = ops;
     s->heap      = heap;
 
-    s->cfg_bind_host = wolfcert_strdup(cfg->bind_host ? cfg->bind_host : "0.0.0.0", heap);
-
     if (cfg->challenge_password)
         s->cfg_challenge = wolfcert_strdup(cfg->challenge_password, heap);
 
@@ -328,8 +337,7 @@ int wolfcert_server_start(const WolfCertServerCfgSrv* cfg, WolfCertServer** out)
     if (cfg->http_basic_pass)
         s->cfg_basic_pass = wolfcert_strdup(cfg->http_basic_pass, heap);
 
-    if (s->cfg_bind_host == NULL ||
-            (cfg->challenge_password && s->cfg_challenge == NULL) ||
+    if ((cfg->challenge_password && s->cfg_challenge == NULL) ||
             (cfg->http_basic_user && s->cfg_basic_user == NULL) ||
             (cfg->http_basic_pass && s->cfg_basic_pass == NULL)) {
         wolfcert_server_free(s);
@@ -395,9 +403,8 @@ int wolfcert_server_start(const WolfCertServerCfgSrv* cfg, WolfCertServer** out)
     int yes = 1;
     setsockopt(s->listen_fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
 
-    struct sockaddr_in sa = { .sin_family = AF_INET, .sin_port = htons(cfg->bind_port) };
-    if (inet_pton(AF_INET, s->cfg_bind_host, &sa.sin_addr) != 1)
-        sa.sin_addr.s_addr = htonl(INADDR_ANY);
+    struct sockaddr_in sa = { .sin_family = AF_INET, .sin_port = htons(cfg->bind_port),
+                              .sin_addr = bind_addr };
 
     if (bind(s->listen_fd, (struct sockaddr*)&sa, sizeof(sa)) < 0 ||
             listen(s->listen_fd, 8) < 0) {
@@ -596,7 +603,10 @@ void wolfcert_server_free(WolfCertServer* srv)
         close(srv->listen_fd);
 
     wolfcert_ca_free(&srv->ca);
-    WOLFCERT_XFREE(srv->cfg_bind_host,  srv->heap);
+    if (srv->cfg_challenge != NULL)
+        wc_ForceZero(srv->cfg_challenge, (word32)strlen(srv->cfg_challenge));
+    if (srv->cfg_basic_pass != NULL)
+        wc_ForceZero(srv->cfg_basic_pass, (word32)strlen(srv->cfg_basic_pass));
     WOLFCERT_XFREE(srv->cfg_challenge,  srv->heap);
     WOLFCERT_XFREE(srv->cfg_basic_user, srv->heap);
     WOLFCERT_XFREE(srv->cfg_basic_pass, srv->heap);

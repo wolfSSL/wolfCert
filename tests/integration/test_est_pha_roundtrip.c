@@ -200,6 +200,13 @@ int main(void)
     bad.est_allow_anonymous_enroll = 1;
     REQUIRE(wolfcert_server_start(&bad, &srv) == WOLFCERT_ERR_BAD_ARG);
     REQUIRE(srv == NULL);
+#ifdef WOLFCERT_HAVE_SCEP
+    /* SCEP never requests the certificate, so PHA would drop mTLS there. */
+    bad = cfg;
+    bad.protocol = WOLFCERT_PROTO_SCEP;
+    REQUIRE(wolfcert_server_start(&bad, &srv) == WOLFCERT_ERR_BAD_ARG);
+    REQUIRE(srv == NULL);
+#endif
 
     int start_rc = wolfcert_server_start(&cfg, &srv);
     if (start_rc == WOLFCERT_ERR_UNSUPPORTED) {

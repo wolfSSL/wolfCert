@@ -368,7 +368,7 @@ static int check_no_envelope(const uint8_t* ca_der, size_t ca_len,
     static const uint8_t ENVELOPED_OID[] =
         { 0x06,0x09,0x2A,0x86,0x48,0x86,0xF7,0x0D,0x01,0x07,0x03 };
     static const uint8_t tid[16] =
-        { 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 };
+        { '0','1','2','3','4','5','6','7','8','9','A','B','C','D','E','F' };
     uint8_t sn[16];
     uint8_t rn[16];
 
@@ -2025,9 +2025,6 @@ static int test_scep_rejects_est_cfg(void)
     return 0;
 }
 
-/* Only meaningful where wolfSSL can actually run an AES-CBC content cipher. */
-#if defined(HAVE_AES_CBC) && \
-        (defined(WOLFSSL_AES_128) || defined(WOLFSSL_AES_256))
 /* The content-cipher choice reaches the wire: enveloping with AES256CBCb /
  * AES128CBCb yields a message carrying the matching AES-CBC OID. */
 static int test_envelop_cipher_oid(void)
@@ -2045,7 +2042,7 @@ static int test_envelop_cipher_oid(void)
     size_t   ca_len  = 0, key_len = 0;
     REQUIRE(make_ca(&ca_der, &ca_len, &key_der, &key_len) == 0);
 
-#if defined(WOLFSSL_AES_256) && defined(HAVE_AES_CBC)
+#if defined(WOLFSSL_AES_256)
     WolfCertBuffer env256 = { 0 };
     REQUIRE(wolfcert_scep_envelop(ca_der, ca_len, payload, sizeof(payload),
                                   AES256CBCb, &env256, NULL) == WOLFCERT_OK);
@@ -2054,19 +2051,16 @@ static int test_envelop_cipher_oid(void)
     wolfcert_buffer_free(&env256);
 #endif
 
-#if defined(WOLFSSL_AES_128) && defined(HAVE_AES_CBC)
     WolfCertBuffer env128 = { 0 };
     REQUIRE(wolfcert_scep_envelop(ca_der, ca_len, payload, sizeof(payload),
                                   AES128CBCb, &env128, NULL) == WOLFCERT_OK);
     REQUIRE(memmem(env128.data, env128.len, OID_AES128, sizeof(OID_AES128)) != NULL);
     wolfcert_buffer_free(&env128);
-#endif
 
     free(ca_der);
     free(key_der);
     return 0;
 }
-#endif /* HAVE_AES_CBC && (WOLFSSL_AES_128 || WOLFSSL_AES_256) */
 
 static const byte scep_oid_msg_type[] =
     { 0x06,0x0A,0x60,0x86,0x48,0x01,0x86,0xF8,0x45,0x01,0x09,0x02 };
@@ -2432,11 +2426,8 @@ int main(void)
         return 1;
     if (test_scep_rejects_est_cfg())
         return 1;
-#if defined(HAVE_AES_CBC) && \
-        (defined(WOLFSSL_AES_128) || defined(WOLFSSL_AES_256))
     if (test_envelop_cipher_oid())
         return 1;
-#endif
     if (test_ca_fingerprint())
         return 1;
     if (test_pki_get_url())

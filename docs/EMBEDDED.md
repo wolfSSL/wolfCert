@@ -33,8 +33,9 @@ never `#define ... 0`, because the code tests presence with `#ifdef`.**
 result at compile time, so a contradictory or incomplete config fails with a
 clear `#error` rather than a confusing downstream error. It enforces the same
 rules the configure step does: at least one key algorithm, SCEP requires RSA
-(RFC 8894), and the wolfSSL feature set wolfCert depends on (PKCS#7, cert
-gen/req/ext, key gen, CryptoCb, base64 encode, alt names,
+and AES-128-CBC (both RFC 8894, so `NO_AES_128`, `NO_AES_CBC` and
+`NO_AES_DECRYPT` rule SCEP out), and the wolfSSL feature set wolfCert depends
+on (PKCS#7, cert gen/req/ext, key gen, CryptoCb, base64 encode, alt names,
 `WOLFSSL_CERT_NAME_ALL`, AES, SHA-256, and TLS 1.2 or 1.3). The header you copy
 documents the matching wolfSSL configure flags.
 

@@ -44,7 +44,8 @@
  *     value of 0 still counts as enabled.
  *   - At least one key algorithm must be enabled.
  *   - SCEP is RSA-only (RFC 8894): enabling WOLFCERT_HAVE_SCEP requires
- *     WOLFCERT_HAVE_RSA.
+ *     WOLFCERT_HAVE_RSA, and a wolfSSL with AES-128-CBC encrypt and decrypt
+ *     (no NO_AES_128, NO_AES_CBC or NO_AES_DECRYPT).
  *
  * The enabled set must also be backed by the wolfSSL you link against. wolfCert
  * requires a wolfSSL (>= 5.9.4) built with at least:

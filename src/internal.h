@@ -163,6 +163,7 @@ void wolfcert_buffer_free_secure(WolfCertBuffer* buf);
 
 /* Rebuild an issued certificate's subject from a decoded CSR. */
 WOLFCERT_TEST_VIS int  wolfcert_copy_csr_subject(const DecodedCert* dc, Cert* nc);
+int  wolfcert_csr_verify(const uint8_t* csr_der, size_t csr_len, void* heap);
 WOLFCERT_TEST_VIS int  wolfcert_ca_issue(WolfCertCa* ca, const uint8_t* csr_der,
                                          size_t csr_len, uint8_t** out_cert,
                                          size_t* out_len);
@@ -177,7 +178,6 @@ typedef struct {
 
 struct WolfCertServer {
     WolfCertServerCfgSrv    cfg;
-    char*                   cfg_bind_host;
     char*                   cfg_challenge;
     char*                   cfg_basic_user;
     char*                   cfg_basic_pass;
@@ -255,6 +255,11 @@ WOLFCERT_TEST_VIS void wolfcert_scep_server_set_getcert_fault(WolfCertServer* s,
 
 WOLFCERT_TEST_VIS void wolfcert_scep_server_set_faults(WolfCertServer* s,
     int omit_recipient_nonce, int sign_with_wrong_key, int rng_fail);
+
+/* Out of memory: 1 fails wolfcert_ca_issue, 2 the reply after issuing, 3 the
+ * signer/CSR key match; 0 clears it. */
+WOLFCERT_TEST_VIS void wolfcert_scep_server_set_oom_fault(WolfCertServer* s,
+                                                          int when);
 #endif
 
 /* ---- error reporting --------------------------------------------------- */
@@ -404,6 +409,8 @@ WOLFCERT_TEST_VIS size_t wolfcert_oid_to_dotted(const uint8_t* oid, size_t oid_l
                                                 char* out, size_t out_cap);
 
 /* SCEP pkiMessage helpers. */
+#define SCEP_NONCE_SZ 16
+
 typedef struct {
     const uint8_t* transaction_id;
     size_t transaction_id_len;
@@ -515,6 +522,9 @@ WOLFCERT_TEST_VIS int wolfcert_scep_build_next_ca_response(
  * Result is heap-allocated; caller frees with WOLFCERT_XFREE(..., heap). */
 int wolfcert_extract_spki(const uint8_t* der, size_t len, int is_csr,
                           uint8_t** out_spki, size_t* out_len, void* heap);
+
+/* 1 if every byte is in the X.680 PrintableString repertoire, else 0. */
+int wolfcert_is_printable_string(const uint8_t* s, size_t len);
 
 /* RFC 8894: a CertRep must be signed by the CA or its RA. Confirm the response
  * signer certificate shares a public key with some certificate in the trusted

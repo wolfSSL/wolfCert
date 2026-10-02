@@ -32,6 +32,9 @@ configure time if the installed wolfSSL lacks any of `HAVE_PKCS7`,
 `WOLFSSL_KEY_GEN`, `WOLF_CRYPTO_CB`, `WOLFSSL_BASE64_ENCODE`,
 `WOLFSSL_ALT_NAMES`, or `WOLFSSL_CERT_NAME_ALL`, or if it was built with
 `NO_AES` / `NO_SHA256`, or if it provides neither TLS 1.2 nor TLS 1.3.
+With SCEP enabled it also needs AES-128-CBC encrypt and decrypt
+(`NO_AES_128`, `NO_AES_CBC` or `NO_AES_DECRYPT` hard-fail), since RFC 8894
+makes it mandatory-to-implement.
 It also link-probes the `WOLFSSL_ASN_API` helpers it calls, which a shared
 libwolfssl exports only under one of `WOLFSSL_PUBLIC_ASN` (the lean choice),
 `OPENSSL_EXTRA`, `OPENSSL_EXTRA_X509_SMALL` or `WOLFSSL_TEST_CERT`; a static

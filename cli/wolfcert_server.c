@@ -58,7 +58,7 @@ static void print_usage(FILE* out)
 {
     fprintf(out,
         "wolfcert-server %s\n"
-        "Usage: wolfcert-server --proto est|scep [--listen HOST:PORT]\n"
+        "Usage: wolfcert-server --proto est|scep [--listen ADDR:PORT]\n"
         "                       [--basic USER:PASS] [--challenge PASS]\n"
         "                       [--tls-cert PEM --tls-key PEM [--tls-client-ca PEM]]\n"
         "                       [--scep-require-approval] [--scep-enable-next-ca]\n"
@@ -66,7 +66,7 @@ static void print_usage(FILE* out)
         "\n"
         "Options:\n"
         "  --proto est|scep         Protocol to serve (required)\n"
-        "  --listen HOST:PORT       Bind address (default 0.0.0.0:8080)\n"
+        "  --listen ADDR:PORT       Numeric IPv4 bind address (default 0.0.0.0:8080)\n"
         "  --basic USER:PASS        Require HTTP Basic auth (EST enroll); both non-empty\n"
         "  --challenge PASS         Require this SCEP challengePassword in the CSR\n"
         "  --tls-cert PEMFILE       Terminate TLS with this server certificate (PEM);\n"
@@ -78,7 +78,8 @@ static void print_usage(FILE* out)
         "                           /simplereenroll also needs --tls-client-ca and a\n"
         "                           KEEP_PEER_CERT wolfSSL\n"
         "  --scep-require-approval  Defer SCEP PKCSReq/RenewalReq (pkiStatus=PENDING); issue\n"
-        "                           on first GetCertInitial with the same transactionID\n"
+        "                           on the first GetCertInitial with the same\n"
+        "                           transactionID, signed with the CSR's key\n"
         "  --scep-enable-next-ca    Advertise + answer GetNextCACert (RFC 8894 section 4.7),\n"
         "                           generating a roll-over CA on first request\n"
         "  --scep-enable-get-cert   Answer GetCert (RFC 8894 section 3.3.4), returning a\n"
@@ -92,7 +93,8 @@ static void print_usage(FILE* out)
         "                           TLS 1.3 post-handshake auth (RFC 8446 section 4.6.2): initial\n"
         "                           handshake is anonymous, client cert is requested when\n"
         "                           EST /simpleenroll is hit on the kept-alive connection.\n"
-        "                           Requires --tls-cert/-key and --tls-client-ca.\n"
+        "                           Requires --proto est, --tls-cert/-key and\n"
+        "                           --tls-client-ca.\n"
         "  --csrattrs-file PATH     Serve this DER-encoded CsrAttrs blob (RFC 7030 section 4.5.2)\n"
         "                           from GET /.well-known/est/csrattrs; without this the\n"
         "                           server answers 204 No Content.\n"
@@ -124,14 +126,27 @@ static int parse_listen(const char* arg, char** host, uint16_t* port)
     return 0;
 }
 
-static int parse_basic(const char* arg, char** user, char** pass)
+static void free_secret(char* s)
 {
-    const char* colon = strchr(arg, ':');
+    if (s != NULL) {
+        wc_ForceZero(s, (word32)strlen(s));
+        free(s);
+    }
+}
+
+static int parse_basic(char* arg, char** user, char** pass)
+{
+    char* colon = strchr(arg, ':');
     if (colon == NULL || colon == arg || colon[1] == '\0')
         return -1;
 
+    free(*user);
+    free_secret(*pass);
     *user = strndup(arg, (size_t)(colon - arg));
     *pass = strdup(colon + 1);
+    wc_ForceZero(colon + 1, (word32)strlen(colon + 1));
+    if (*user == NULL || *pass == NULL)
+        return -2;
 
     return 0;
 }
@@ -209,6 +224,7 @@ int main(int argc, char** argv)
     size_t csr_attrs_blob_len = 0;
     int est_require_csr_attrs = 0;
     int est_allow_anonymous   = 0;
+    int basic_rc;
     int c;
 
     while ((c = getopt_long(argc, argv, "", opts, NULL)) != -1) {
@@ -223,13 +239,24 @@ int main(int argc, char** argv)
                 }
                 break;
             case 'b':
-                if (parse_basic(optarg, &user, &pass) != 0) {
+                basic_rc = parse_basic(optarg, &user, &pass);
+                if (basic_rc == -2) {
+                    fprintf(stderr, "out of memory copying --basic\n");
+                    return 1;
+                }
+                if (basic_rc != 0) {
                     fprintf(stderr, "invalid --basic (expected non-empty USER:PASS)\n");
                     return 1;
                 }
                 break;
             case 'X':
-                challenge = optarg;
+                free_secret(challenge);
+                challenge = strdup(optarg);
+                wc_ForceZero(optarg, (word32)strlen(optarg));
+                if (challenge == NULL) {
+                    fprintf(stderr, "out of memory copying --challenge\n");
+                    return 1;
+                }
                 break;
             case 'C':
                 tls_cert = slurp(optarg, &tls_cert_len);
@@ -355,7 +382,8 @@ int main(int argc, char** argv)
             free(csr_attrs_blob);
             free(host);
             free(user);
-            free(pass);
+            free_secret(pass);
+            free_secret(challenge);
             free(tls_cert);
             free(tls_key);
             free(tls_ca);
@@ -393,7 +421,10 @@ int main(int argc, char** argv)
 
     int rc = wolfcert_server_start(&cfg, &g_server);
     if (rc != WOLFCERT_OK) {
+        const char* m = wolfcert_last_error_message();
         fprintf(stderr, "wolfcert-server: start failed (%s)\n", wolfcert_strerror(rc));
+        if (m != NULL && *m != '\0')
+            fprintf(stderr, "wolfcert-server: %s\n", m);
         goto out;
     }
 
@@ -413,7 +444,8 @@ out:
     g_server = NULL;
     free(host);
     free(user);
-    free(pass);
+    free_secret(pass);
+    free_secret(challenge);
     free(tls_cert);
     free(tls_key);
     free(tls_ca);

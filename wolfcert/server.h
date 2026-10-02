@@ -35,8 +35,8 @@ typedef struct WolfCertServer WolfCertServer;
 
 typedef struct {
     WolfCertProtocol protocol;
-    const char*      bind_host;          /* e.g. "0.0.0.0"; ignored when
-                                          * serve_fd() is used directly */
+    const char*      bind_host;          /* numeric IPv4, NULL = all
+                                          * interfaces */
     uint16_t         bind_port;
     WolfCertStoreOps* ca_store;          /* optional: persist the local CA
                                             across runs; NULL = regen on
@@ -76,11 +76,11 @@ typedef struct {
     size_t           tls_client_ca_pem_len;
 
     /* SCEP manual-approval mode. When set, PKCSReq/RenewalReq return
-     * pkiStatus=PENDING instead of issuing immediately; the client must
-     * poll with GetCertInitial. The test server's built-in policy auto-
-     * approves a pending request on the first poll that quotes its
-     * transactionID, which is enough to exercise the pending -> issued
-     * transition end-to-end without an admin UI. */
+     * pkiStatus=PENDING instead of issuing immediately, or FAILURE when the
+     * CSR signature does not verify; the client must poll with
+     * GetCertInitial. The test server's built-in policy auto-approves a
+     * pending request on the first poll that quotes its transactionID and
+     * is signed with the parked CSR's key. */
     int              scep_require_approval;
 
     /* SCEP CA roll-over. When set, the server advertises GetNextCACert
@@ -115,9 +115,10 @@ typedef struct {
     int              est_retry_after_sec;
 
     /* TLS 1.3 post-handshake auth (RFC 8446 section 4.6.2) for EST enrollment,
-     * checked against `tls_client_ca_pem`, which it requires.
-     * wolfcert_server_start() returns WOLFCERT_ERR_UNSUPPORTED without
-     * KEEP_PEER_CERT and WOLFSSL_HAVE_TLS_UNIQUE; see docs/ARCHITECTURE.md. */
+     * checked against `tls_client_ca_pem`, which it requires. Other protocols
+     * reject it with WOLFCERT_ERR_BAD_ARG. wolfcert_server_start() returns
+     * WOLFCERT_ERR_UNSUPPORTED without KEEP_PEER_CERT and
+     * WOLFSSL_HAVE_TLS_UNIQUE; see docs/ARCHITECTURE.md. */
     int              tls_post_handshake_auth;
 
     /* EST /csrattrs body. When set, the EST server returns this

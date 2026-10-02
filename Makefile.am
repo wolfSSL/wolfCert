@@ -197,6 +197,7 @@ test_scep_roundtrip_SOURCES = tests/integration/test_scep_roundtrip.c
 test_scep_roundtrip_CPPFLAGS = $(AM_CPPFLAGS) -I$(top_srcdir)/src
 test_scep_roundtrip_LDADD   = libwolfcert.la $(WOLFSSL_LIBS) -lpthread
 test_scep_poll_roundtrip_SOURCES = tests/integration/test_scep_poll_roundtrip.c
+test_scep_poll_roundtrip_CPPFLAGS = $(AM_CPPFLAGS) -I$(top_srcdir)/src
 test_scep_poll_roundtrip_LDADD   = libwolfcert.la $(WOLFSSL_LIBS) -lpthread
 test_scep_async_roundtrip_SOURCES = tests/integration/test_scep_async_roundtrip.c
 test_scep_async_roundtrip_LDADD   = libwolfcert.la $(WOLFSSL_LIBS) -lpthread

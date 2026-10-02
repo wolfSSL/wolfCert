@@ -913,6 +913,41 @@ static int test_leaf_ca_rejected(void)
 }
 #endif /* WOLFCERT_HAVE_ECC */
 
+static int test_bad_bind_host_rejected(void)
+{
+    static const char* const hosts[] = {
+        "localhost", "::1", "", "127.0.0.300", "127.0.0.1 "
+    };
+    WolfCertServerCfgSrv cfg;
+    WolfCertServer* srv = NULL;
+    WolfCertBuffer left = { 0 };
+    size_t i;
+
+    for (i = 0; i < sizeof(hosts) / sizeof(hosts[0]); i++) {
+        WolfCertStoreOps* mem = wolfcert_store_memory_open(NULL);
+        REQUIRE(mem != NULL);
+
+        ca_store_cfg(&cfg, mem);
+        cfg.bind_host = hosts[i];
+        REQUIRE(wolfcert_server_start(&cfg, &srv) == WOLFCERT_ERR_BAD_ARG);
+        REQUIRE(srv == NULL);
+        REQUIRE(mem->read(mem->ctx, "ca.cert.der", &left) ==
+                WOLFCERT_ERR_NOT_FOUND);
+        REQUIRE(mem->read(mem->ctx, "ca.key.der", &left) ==
+                WOLFCERT_ERR_NOT_FOUND);
+        wolfcert_store_memory_close(mem);
+    }
+
+    /* NULL binds every interface and must still start. */
+    ca_store_cfg(&cfg, NULL);
+    cfg.bind_host = NULL;
+    REQUIRE(wolfcert_server_start(&cfg, &srv) == WOLFCERT_OK);
+    REQUIRE(wolfcert_server_port(srv) != 0);
+    wolfcert_server_free(srv);
+
+    return 0;
+}
+
 int main(void)
 {
     REQUIRE(test_static_mem_init() == 0);
@@ -957,6 +992,8 @@ int main(void)
         return 1;
 #endif
     if (test_ca_key_usage())
+        return 1;
+    if (test_bad_bind_host_rejected())
         return 1;
 
 #if CA_STORE_NEEDS_TLS

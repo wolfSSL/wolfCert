@@ -164,8 +164,10 @@ what enables the post-handshake-auth bootstrap below.
 
 **Test server PHA mode.** `WolfCertServerCfgSrv.tls_post_handshake_auth`
 turns the in-tree server into the other end of shape 3. It needs
-`tls_client_ca_pem`; without it `wolfcert_server_start()` returns
-`WOLFCERT_ERR_BAD_ARG`. The CTX gets `WOLFSSL_VERIFY_POST_HANDSHAKE` and not
+`tls_client_ca_pem` and the EST protocol; without either
+`wolfcert_server_start()` returns `WOLFCERT_ERR_BAD_ARG`, since no other
+protocol requests the deferred certificate. The CTX gets
+`WOLFSSL_VERIFY_POST_HANDSHAKE` and not
 `FAIL_IF_NO_PEER_CERT`, so a TLS 1.3 handshake stays anonymous and a TLS 1.2
 client can still fetch `/cacerts`. A TLS 1.2 client is asked for its cert
 during the handshake, since TLS 1.2 has no PHA. On the first `/simpleenroll`

@@ -413,35 +413,6 @@ static int scep_build_txid(const ScepTxidSel* sel,
     return WOLFCERT_OK;
 }
 
-/* The caller has already checked that key->type is WOLFCERT_KEY_RSA. */
-static int rsa_key_to_der(const WolfCertKey* key, void* heap,
-                          uint8_t** out_der, size_t* out_len)
-{
-    uint8_t* der;
-    int sz;
-    int n;
-
-    sz = wc_RsaKeyToDer((RsaKey*)key->impl, NULL, 0);
-    if (sz <= 0)
-        return WOLFCERT_ERR_WC(sz, "scep", "RsaKeyToDer");
-
-    der = (uint8_t*)WOLFCERT_XMALLOC((size_t)sz, heap);
-    if (der == NULL)
-        return WOLFCERT_ERR_MEMORY;
-
-    n = wc_RsaKeyToDer((RsaKey*)key->impl, der, (word32)sz);
-    if (n <= 0) {
-        wc_ForceZero(der, (word32)sz);
-        WOLFCERT_XFREE(der, heap);
-        return WOLFCERT_ERR_WC(n, "scep", "RsaKeyToDer");
-    }
-
-    *out_der = der;
-    *out_len = (size_t)n;
-
-    return WOLFCERT_OK;
-}
-
 WOLFCERT_TEST_VIS int wolfcert_scep_pem_has_cert(const uint8_t* pem, size_t pem_len,
                                      const uint8_t* issuer, size_t issuer_len,
                                      const uint8_t* serial, size_t serial_len,
@@ -690,6 +661,11 @@ static int scep_call_check(const ScepCall* c)
             "SCEP (RFC 8894) requires an RSA signer for pkiMessage; "
             "Ed25519/Ed448/ML-DSA are not permitted");
 
+    /* PKCS#7 takes the private key as DER, which a key_id key cannot give. */
+    if (pki && c->key->id_len > 0)
+        return WOLFCERT_ERR(WOLFCERT_ERR_UNSUPPORTED, "scep",
+                            "SCEP cannot sign or decrypt with a key_id key");
+
     return WOLFCERT_OK;
 }
 
@@ -796,6 +772,8 @@ static int scep_session_connect(WolfCertScepSession* s,
         .client_cert_len    = srv->client_cert_len,
         .client_key         = srv->client_key,
         .client_key_len     = srv->client_key_len,
+        .client_key_src     = srv->client_key_src,
+        .client_key_dev_id  = srv->client_key_dev_id,
         .transport          = srv->transport,
         .heap               = s->heap,
     };
@@ -1155,6 +1133,7 @@ static int scep_session_begin_pki_op(WolfCertScepSession* s, const ScepCall* c,
     WolfCertBuffer pki = { 0 };
     char* url = NULL;
     int use_post = 0;
+    int key_len = 0;
     int rc = WOLFCERT_OK;
 
     c->res_out->heap = heap;
@@ -1213,8 +1192,9 @@ static int scep_session_begin_pki_op(WolfCertScepSession* s, const ScepCall* c,
     }
 
     if (rc == WOLFCERT_OK)
-        rc = rsa_key_to_der(c->key, heap, &s->in_signer_key,
-                            &s->in_signer_key_len);
+        rc = wolfcert_key_export_der(c->key, &s->in_signer_key, &key_len,
+                                     heap);
+    s->in_signer_key_len = (size_t)key_len;
     if (rc == WOLFCERT_OK)
         rc = scep_prepare(s, c, msg_type, content, content_len, &pki);
     if (rc == WOLFCERT_OK)

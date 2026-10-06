@@ -1205,6 +1205,72 @@ static int test_chunked_complete_resume(void)
     return 0;
 }
 
+/* A client key source other than _BUFFER is checked before any connection. */
+static int test_client_key_checks(void)
+{
+    static const uint8_t cert[] = "-----BEGIN CERTIFICATE-----";
+    static const uint8_t id[] = { 0x01, 0x02 };
+    WolfCertHttpRequest req = {
+        .method            = "GET",
+        .url               = "https://127.0.0.1:1/x",
+        .client_key        = id,
+        .client_key_len    = sizeof(id),
+        .client_key_src    = WOLFCERT_CLIENT_KEY_ID,
+        .client_key_dev_id = 7,
+    };
+    WolfCertHttpSessionCfg scfg = {
+        .base_url          = "https://127.0.0.1:1",
+        .client_key        = id,
+        .client_key_len    = sizeof(id),
+        .client_key_src    = WOLFCERT_CLIENT_KEY_ID,
+        .client_key_dev_id = 7,
+    };
+    WolfCertHttpResponse resp;
+    WolfCertHttpSession* s = NULL;
+
+    REQUIRE(wolfcert_http_request(&req, &resp) == WOLFCERT_ERR_BAD_ARG);
+    REQUIRE(wolfcert_http_session_open(&scfg, &s) == WOLFCERT_ERR_BAD_ARG);
+    scfg.client_cert       = cert;
+    scfg.client_cert_len   = sizeof(cert);
+    scfg.client_key_dev_id = WOLFCERT_DEVID_SOFTWARE;
+    REQUIRE(wolfcert_http_session_open(&scfg, &s) == WOLFCERT_ERR_BAD_ARG);
+    scfg.client_key_dev_id = 7;
+    scfg.client_cert_len   = 0;
+    REQUIRE(wolfcert_http_session_open(&scfg, &s) == WOLFCERT_ERR_BAD_ARG);
+    scfg.client_cert_len   = sizeof(cert);
+    scfg.client_key_len    = 0;
+    REQUIRE(wolfcert_http_session_open(&scfg, &s) == WOLFCERT_ERR_BAD_ARG);
+    scfg.client_key_len    = sizeof(id);
+#ifndef WOLFCERT_USE_KEY_ID
+    REQUIRE(wolfcert_http_session_open(&scfg, &s) == WOLFCERT_ERR_UNSUPPORTED);
+#else
+    scfg.base_url = "http://127.0.0.1:1";
+    REQUIRE(wolfcert_http_session_open(&scfg, &s) == WOLFCERT_ERR_BAD_ARG);
+    REQUIRE(strstr(wolfcert_last_error_message(), "https://") != NULL);
+    scfg.base_url = "https://127.0.0.1:1";
+#endif
+    REQUIRE(s == NULL);
+
+    req.client_cert     = cert;
+    req.client_cert_len = sizeof(cert);
+    req.client_key_src  = (WolfCertClientKeySrc)7;
+    REQUIRE(wolfcert_http_request(&req, &resp) == WOLFCERT_ERR_BAD_ARG);
+    req.client_key_src    = WOLFCERT_CLIENT_KEY_ID;
+    req.client_key_dev_id = INVALID_DEVID;
+    REQUIRE(wolfcert_http_request(&req, &resp) == WOLFCERT_ERR_BAD_ARG);
+    req.client_key_dev_id = 7;
+    req.client_cert_len   = 0;
+    REQUIRE(wolfcert_http_request(&req, &resp) == WOLFCERT_ERR_BAD_ARG);
+    req.client_cert_len   = sizeof(cert);
+    req.client_key_len    = WOLFCERT_KEY_ID_MAX_LEN + 1;
+    REQUIRE(wolfcert_http_request(&req, &resp) == WOLFCERT_ERR_BAD_ARG);
+#ifndef WOLFCERT_USE_KEY_ID
+    req.client_key_len = sizeof(id);
+    REQUIRE(wolfcert_http_request(&req, &resp) == WOLFCERT_ERR_UNSUPPORTED);
+#endif
+    return 0;
+}
+
 int main(void)
 {
     /* make check has no per-test timeout, and a framing bug shows as a hang. */
@@ -1292,6 +1358,8 @@ int main(void)
     if (test_chunked_trailer_leading_colon())
         return 1;
     if (test_chunked_uppercase_hex_size())
+        return 1;
+    if (test_client_key_checks())
         return 1;
     wolfcert_cleanup();
     printf("OK\n");

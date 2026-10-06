@@ -287,6 +287,40 @@ static int csr_with_critical_san(const WolfCertBuffer* cert_pem,
 }
 #endif
 
+/* A software key of each type re-enrolls; its DER reaches TLS untyped. */
+static int reenroll_key_type(const WolfCertServerCfg* cli, WolfCertKeyType type,
+                             int param)
+{
+    const WolfCertCertMeta meta = { .subject_dn = "CN=reenroll-type,O=wolfSSL" };
+    WolfCertKeyCfg kcfg = { .type = type, .param = param,
+                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+    WolfCertKey* key = NULL;
+    WolfCertBuffer csr = { 0 };
+    WolfCertEstResult cert = { 0 };
+    WolfCertEstResult renewed = { 0 };
+    int rc;
+
+    REQUIRE(wolfcert_key_generate(&kcfg, &key) == WOLFCERT_OK);
+    REQUIRE(wolfcert_csr_build(key, &meta, &csr) == WOLFCERT_OK);
+    REQUIRE(wolfcert_est_simple_enroll(cli, csr.data, csr.len, &cert) ==
+            WOLFCERT_OK);
+    REQUIRE(cert.status == WOLFCERT_EST_STATUS_SUCCESS);
+    rc = wolfcert_est_simple_reenroll(cli, cert.cert_pem.data,
+                                      cert.cert_pem.len, key, csr.data,
+                                      csr.len, &renewed);
+    if (rc != WOLFCERT_OK)
+        fprintf(stderr, "key type %d reenroll rc=%d (%s)\n", (int)type, rc,
+                wolfcert_last_error_message());
+    REQUIRE(rc == WOLFCERT_OK);
+    REQUIRE(renewed.status == WOLFCERT_EST_STATUS_SUCCESS);
+
+    wolfcert_est_result_free(&renewed);
+    wolfcert_est_result_free(&cert);
+    wolfcert_buffer_free(&csr);
+    wolfcert_key_free(key);
+    return 0;
+}
+
 /* Reenroll of a multi-RDN, multi-SAN cert the server CA issued succeeds; a
  * changed dNSName or a critical SAN (ECC builds) gets 400. */
 static int test_reenroll_server_issued(const uint8_t* tls_cert, size_t tls_cert_len,
@@ -403,6 +437,34 @@ static int test_reenroll_server_issued(const uint8_t* tls_cert, size_t tls_cert_
     REQUIRE(strstr(wolfcert_last_error_message(), "HTTP 400") != NULL);
     REQUIRE(refused.cert_pem.data == NULL);
 #endif
+
+    static const struct { WolfCertKeyType type; int param; } types[] = {
+#ifdef WOLFCERT_HAVE_RSA
+        { WOLFCERT_KEY_RSA, 2048 },
+#endif
+#ifdef WOLFCERT_HAVE_ECC
+        { WOLFCERT_KEY_ECC, 384 },
+#endif
+#ifdef WOLFCERT_HAVE_ED25519
+        { WOLFCERT_KEY_ED25519, 0 },
+#endif
+#ifdef WOLFCERT_HAVE_ED448
+        { WOLFCERT_KEY_ED448, 0 },
+#endif
+#ifdef WOLFCERT_HAVE_MLDSA
+#ifndef WOLFSSL_NO_ML_DSA_44
+        { WOLFCERT_KEY_MLDSA44, 0 },
+#endif
+#ifndef WOLFSSL_NO_ML_DSA_65
+        { WOLFCERT_KEY_MLDSA65, 0 },
+#endif
+#ifndef WOLFSSL_NO_ML_DSA_87
+        { WOLFCERT_KEY_MLDSA87, 0 },
+#endif
+#endif
+    };
+    for (size_t i = 0; i < sizeof(types) / sizeof(types[0]); i++)
+        REQUIRE(reenroll_key_type(&cli, types[i].type, types[i].param) == 0);
 
     wolfcert_server_stop(srv);
     pthread_join(tid, NULL);

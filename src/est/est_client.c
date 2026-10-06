@@ -222,6 +222,8 @@ int wolfcert_est_session_open(const WolfCertServerCfg* srv,
         .client_cert_len           = srv->client_cert_len,
         .client_key                = srv->client_key,
         .client_key_len            = srv->client_key_len,
+        .client_key_src            = srv->client_key_src,
+        .client_key_dev_id         = srv->client_key_dev_id,
         .allow_post_handshake_auth = srv->proto_opts.est.allow_post_handshake_auth,
         .transport                 = srv->transport,
         .heap                      = heap,
@@ -550,8 +552,8 @@ int wolfcert_est_simple_reenroll(const WolfCertServerCfg* srv,
                                  WolfCertEstResult* out)
 {
     WolfCertServerCfg cfg;
-    WolfCertBuffer key_pem = { 0 };
-    int rc;
+    WolfCertBuffer key_der = { 0 };
+    int rc = WOLFCERT_OK;
 
     if (out == NULL)
         return WOLFCERT_ERR_BAD_ARG;
@@ -563,19 +565,25 @@ int wolfcert_est_simple_reenroll(const WolfCertServerCfg* srv,
         return WOLFCERT_ERR_BAD_ARG;
 
     /* The TLS identity is the cert being renewed. */
-    rc = wolfcert_key_to_pem(current_key, &key_pem);
-    if (rc == WOLFCERT_OK) {
-        cfg = *srv;
-        cfg.client_cert     = current_cert;
-        cfg.client_cert_len = current_cert_len;
-        cfg.client_key      = key_pem.data;
-        cfg.client_key_len  = key_pem.len;
+    cfg = *srv;
+    cfg.client_cert       = current_cert;
+    cfg.client_cert_len   = current_cert_len;
+    cfg.client_key_dev_id = current_key->dev_id;
+    if (current_key->id_len > 0) {
+        cfg.client_key     = current_key->id;
+        cfg.client_key_len = current_key->id_len;
+        cfg.client_key_src = WOLFCERT_CLIENT_KEY_ID;
+    }
+    else {
+        rc = wolfcert_key_to_der(current_key, &key_der);
+        cfg.client_key     = key_der.data;
+        cfg.client_key_len = key_der.len;
+        cfg.client_key_src = WOLFCERT_CLIENT_KEY_BUFFER;
+    }
+    if (rc == WOLFCERT_OK)
         rc = est_one_shot(&cfg, EST_OP_SIMPLE_REENROLL, csr_der, csr_der_len,
                           WOLFCERT_ENCODING_PEM, &out->cert_pem, out);
-    }
 
-    if (key_pem.data != NULL)
-        wc_ForceZero(key_pem.data, (word32)key_pem.len);
-    wolfcert_buffer_free(&key_pem);
+    wolfcert_buffer_free_secure(&key_der);
     return rc;
 }

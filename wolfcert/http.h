@@ -65,6 +65,10 @@ typedef struct {
     void*          heap;           /* NULL -> default */
 
     WolfCertTransport transport;
+
+    /* As in WolfCertServerCfg. */
+    WolfCertClientKeySrc client_key_src;
+    int                  client_key_dev_id;
 } WolfCertHttpRequest;
 
 typedef struct {
@@ -108,6 +112,10 @@ typedef struct {
     void*          heap;
 
     WolfCertTransport transport;
+
+    /* As in WolfCertServerCfg. */
+    WolfCertClientKeySrc client_key_src;
+    int                  client_key_dev_id;
 } WolfCertHttpSessionCfg;
 
 /* Connects without verifying the server; the first request runs the TLS

@@ -28,28 +28,42 @@ extern "C" {
 
 typedef struct WolfCertKey WolfCertKey;
 
-/* Generate a key per cfg. With cfg->dev_id != -1 the key lives in the
- * CryptoCb backend registered under that id and the handle only references
- * it. The handle is allocated from cfg->heap, or the default heap if NULL. */
+/* Generate a key per cfg. cfg->dev_id != -1 routes its operations through
+ * that CryptoCb device; with cfg->key_id the key also stays in the device and
+ * the handle only references it. Allocated from cfg->heap or the default. */
 WOLFCERT_API int wolfcert_key_generate(const WolfCertKeyCfg* cfg, WolfCertKey** out_key);
+
+/* Reference a key a CryptoCb device holds under cfg->key_id, its public half
+ * from `cert`, PEM or DER: a curve or RSA size keygen makes, matching a
+ * non-zero cfg->param. Nothing checks that `cert` belongs to that key.
+ * *out_key is NULL after a failure. */
+WOLFCERT_API int wolfcert_key_from_id(const WolfCertKeyCfg* cfg,
+                                      const uint8_t* cert, size_t cert_len,
+                                      WolfCertKey** out_key);
 
 /* Load a software key from PEM or DER; the encoding is auto-detected. */
 WOLFCERT_API int wolfcert_key_from_pem(const uint8_t* data, size_t data_len,
                                        void* heap, WolfCertKey** out_key);
 
-/* Export a software key as PEM. Fails for keys that live behind a CryptoCb
- * that does not permit export. */
+/* Export a software key as PEM. Fails with WOLFCERT_ERR_UNSUPPORTED for a
+ * key with a key_id. */
 WOLFCERT_API int wolfcert_key_to_pem(const WolfCertKey* key, WolfCertBuffer* out_pem);
 
 /* Export a software key as raw DER (same export constraints as
  * wolfcert_key_to_pem). */
 WOLFCERT_API int wolfcert_key_to_der(const WolfCertKey* key, WolfCertBuffer* out_der);
 
+/* Frees the handle; for a key_id key, the device's free callback decides what
+ * happens to the key it holds. */
 WOLFCERT_API void wolfcert_key_free(WolfCertKey* key);
 
 /* Accessors. wolfcert_key_type returns 0 on NULL. */
 WOLFCERT_API WolfCertKeyType wolfcert_key_type(const WolfCertKey* key);
 WOLFCERT_API int wolfcert_key_dev_id(const WolfCertKey* key);
+/* Points *id at the key's backend id, or NULL with *id_len 0 if it has
+ * none. The bytes stay owned by the key. */
+WOLFCERT_API int wolfcert_key_id(const WolfCertKey* key, const uint8_t** id,
+                                 size_t* id_len);
 
 #ifdef __cplusplus
 }

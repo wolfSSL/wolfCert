@@ -30,7 +30,7 @@
 #include <string.h>
 
 static WolfCertKey* alloc_shell(WolfCertKeyType type, int dev_id,
-                                const char* label, void* heap)
+                                const uint8_t* id, size_t id_len, void* heap)
 {
     WolfCertKey* k = (WolfCertKey*)WOLFCERT_XMALLOC(sizeof(*k), heap);
     if (k == NULL)
@@ -41,15 +41,23 @@ static WolfCertKey* alloc_shell(WolfCertKeyType type, int dev_id,
     k->dev_id = dev_id;
     k->heap   = heap;
 
-    if (label != NULL) {
-        k->label = wolfcert_strdup(label, heap);
-        if (k->label == NULL) {
-            WOLFCERT_XFREE(k, heap);
-            return NULL;
-        }
+    if (id_len > 0) {
+        memcpy(k->id, id, id_len);
+        k->id_len = id_len;
     }
 
     return k;
+}
+
+static int check_key_id(const WolfCertKeyCfg* cfg)
+{
+    if (cfg->key_id_len == 0)
+        return cfg->key_id == NULL ? WOLFCERT_OK
+               : WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "keygen",
+                              "key_id is set but key_id_len is 0");
+
+    return wolfcert_key_id_check(cfg->key_id, cfg->key_id_len, cfg->dev_id,
+                                 "keygen");
 }
 
 static void free_shell(WolfCertKey* k)
@@ -61,7 +69,6 @@ static void free_shell(WolfCertKey* k)
     if (a && a->free_)
         a->free_(k);
 
-    WOLFCERT_XFREE(k->label, k->heap);
     WOLFCERT_XFREE(k, k->heap);
 }
 
@@ -75,15 +82,20 @@ int wolfcert_key_generate(const WolfCertKeyCfg* cfg, WolfCertKey** out_key)
         return WOLFCERT_ERR(WOLFCERT_ERR_UNSUPPORTED, "keygen",
                             "unknown or disabled key type %d", (int)cfg->type);
 
+    int rc = check_key_id(cfg);
+    if (rc != WOLFCERT_OK)
+        return rc;
+
     void* heap = cfg->heap ? cfg->heap : wolfcert_default_heap();
-    WolfCertKey* k = alloc_shell(cfg->type, cfg->dev_id, cfg->key_label, heap);
+    WolfCertKey* k = alloc_shell(cfg->type, cfg->dev_id, cfg->key_id,
+                                 cfg->key_id_len, heap);
     if (k == NULL)
         return WOLFCERT_ERR_MEMORY;
 
     /* The RNG is set up first; a DRBG alloc between the large ML-DSA
      * allocations tripped a glibc sysmalloc assertion. */
     WC_RNG rng;
-    int rc = wc_InitRng_ex(&rng, heap, cfg->dev_id);
+    rc = wc_InitRng_ex(&rng, heap, cfg->dev_id);
     if (rc != 0) {
         free_shell(k);
         return WOLFCERT_ERR_WC(rc, "keygen", "InitRng");
@@ -101,6 +113,14 @@ int wolfcert_key_generate(const WolfCertKeyCfg* cfg, WolfCertKey** out_key)
     if (rc != WOLFCERT_OK) {
         free_shell(k);
         return rc;
+    }
+
+    /* wolfSSL 5.9.4 falls back to software keygen when the device declines. */
+    if (k->id_len > 0 && alg->host_priv != NULL && alg->host_priv(k)) {
+        free_shell(k);
+        return WOLFCERT_ERR(WOLFCERT_ERR_UNSUPPORTED, "keygen",
+                            "CryptoCb device %d did not generate the key",
+                            cfg->dev_id);
     }
 
     *out_key = k;
@@ -173,7 +193,8 @@ int wolfcert_key_from_pem(const uint8_t* data, size_t data_len,
     const WolfCertKeyAlg* const* list = wolfcert_key_algs_all();
     for (; *list != NULL; ++list) {
         const WolfCertKeyAlg* a = *list;
-        WolfCertKey* k = alloc_shell(a->type, WOLFCERT_DEVID_SOFTWARE, NULL, heap);
+        WolfCertKey* k = alloc_shell(a->type, WOLFCERT_DEVID_SOFTWARE, NULL, 0,
+                                     heap);
         if (k == NULL) {
             if (der != NULL)
                 wc_FreeDer(&der);
@@ -200,13 +221,142 @@ int wolfcert_key_from_pem(const uint8_t* data, size_t data_len,
     return WOLFCERT_ERR_PARSE;
 }
 
+/* SubjectPublicKeyInfo of a PEM or DER certificate, in a fresh buffer. */
+static int cert_spki(const uint8_t* cert, size_t cert_len, void* heap,
+                     uint8_t** out, word32* out_len)
+{
+    WolfCertBuffer pem_der = { 0 };
+    const uint8_t* der = cert;
+    size_t         der_len = cert_len;
+    uint8_t*       spki = NULL;
+    word32         spki_len = 0;
+    int            rc = WOLFCERT_OK;
+
+    if (!wolfcert_buffer_is_der(cert, cert_len)) {
+        rc = wolfcert_pem_cert_to_der(cert, cert_len, &pem_der, heap);
+        der = pem_der.data;
+        der_len = pem_der.len;
+    }
+    if (rc == WOLFCERT_OK &&
+        (wc_GetSubjectPubKeyInfoDerFromCert(der, (word32)der_len, NULL,
+                                            &spki_len) < 0 || spki_len == 0))
+        rc = WOLFCERT_ERR(WOLFCERT_ERR_PARSE, "keygen",
+                          "public key source is not a certificate");
+    if (rc == WOLFCERT_OK) {
+        spki = (uint8_t*)WOLFCERT_XMALLOC(spki_len, heap);
+        if (spki == NULL)
+            rc = WOLFCERT_ERR_MEMORY;
+    }
+    if (rc == WOLFCERT_OK &&
+        wc_GetSubjectPubKeyInfoDerFromCert(der, (word32)der_len, spki,
+                                           &spki_len) < 0)
+        rc = WOLFCERT_ERR_PARSE;
+
+    wolfcert_buffer_free(&pem_der);
+    if (rc != WOLFCERT_OK) {
+        WOLFCERT_XFREE(spki, heap);
+        return rc;
+    }
+
+    *out     = spki;
+    *out_len = spki_len;
+    return WOLFCERT_OK;
+}
+
+/* The key must have a curve or RSA size keygen makes, and a non-zero param
+ * must name that one. */
+static int check_param(const WolfCertKey* k, int param)
+{
+    int have = 0;
+
+#if !defined(WOLFCERT_HAVE_RSA) && !defined(WOLFCERT_HAVE_ECC)
+    (void)k;
+#endif
+#ifdef WOLFCERT_HAVE_RSA
+    if (k->type == WOLFCERT_KEY_RSA) {
+        if (!wolfcert_rsa_bits_ok(k->rsa_bits))
+            return WOLFCERT_ERR(WOLFCERT_ERR_UNSUPPORTED, "keygen",
+                                "RSA-%d is not 2048, 3072 or 4096",
+                                k->rsa_bits);
+        have = k->rsa_bits;
+    }
+#endif
+#ifdef WOLFCERT_HAVE_ECC
+    if (k->type == WOLFCERT_KEY_ECC &&
+        wolfcert_ecc_param_from_curve(k->curve_id, &have) != WOLFCERT_OK)
+        return WOLFCERT_ERR(WOLFCERT_ERR_UNSUPPORTED, "keygen",
+                            "public key is not on P-256, P-384 or P-521");
+#endif
+    if (param != 0 && have != 0 && param != have)
+        return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "keygen",
+                            "public key is %d bits, param is %d", have, param);
+    return WOLFCERT_OK;
+}
+
+int wolfcert_key_from_id(const WolfCertKeyCfg* cfg,
+                         const uint8_t* cert, size_t cert_len,
+                         WolfCertKey** out_key)
+{
+    if (out_key == NULL)
+        return WOLFCERT_ERR_BAD_ARG;
+    *out_key = NULL;
+    if (cfg == NULL || cfg->key_id_len == 0 || cert == NULL || cert_len == 0)
+        return WOLFCERT_ERR_BAD_ARG;
+
+    int rc = check_key_id(cfg);
+    if (rc != WOLFCERT_OK)
+        return rc;
+
+    const WolfCertKeyAlg* alg = wolfcert_key_alg(cfg->type);
+    if (alg == NULL || alg->pub_decode == NULL)
+        return WOLFCERT_ERR(WOLFCERT_ERR_UNSUPPORTED, "keygen",
+                            "key type %d cannot take a key_id", (int)cfg->type);
+
+    void* heap = cfg->heap ? cfg->heap : wolfcert_default_heap();
+    uint8_t* spki = NULL;
+    word32   spki_len = 0;
+    rc = cert_spki(cert, cert_len, heap, &spki, &spki_len);
+    if (rc != WOLFCERT_OK)
+        return rc;
+
+    WolfCertKey* k = alloc_shell(cfg->type, cfg->dev_id, cfg->key_id,
+                                 cfg->key_id_len, heap);
+    if (k == NULL) {
+        WOLFCERT_XFREE(spki, heap);
+        return WOLFCERT_ERR_MEMORY;
+    }
+
+    rc = alg->alloc_init(k);
+    if (rc == WOLFCERT_OK) {
+        rc = alg->pub_decode(k, spki, spki_len);
+        if (rc == WOLFCERT_ERR_PARSE)
+            rc = WOLFCERT_ERR(WOLFCERT_ERR_PARSE, "keygen",
+                              "certificate key is not a type %d key",
+                              (int)cfg->type);
+    }
+    WOLFCERT_XFREE(spki, heap);
+    if (rc == WOLFCERT_OK)
+        rc = check_param(k, cfg->param);
+    if (rc != WOLFCERT_OK) {
+        free_shell(k);
+        return rc;
+    }
+
+    *out_key = k;
+    return WOLFCERT_OK;
+}
+
 /* Serialize a software key's private DER into a freshly allocated buffer. */
-static int key_export_der(const WolfCertKey* key, uint8_t** out_der,
-                          int* out_len, void* heap)
+int wolfcert_key_export_der(const WolfCertKey* key, uint8_t** out_der,
+                            int* out_len, void* heap)
 {
     const WolfCertKeyAlg* alg = wolfcert_key_alg(key->type);
     if (alg == NULL)
         return WOLFCERT_ERR_UNSUPPORTED;
+    if (key->id_len > 0)
+        return WOLFCERT_ERR(WOLFCERT_ERR_UNSUPPORTED, "keygen",
+                            "the private key stays in CryptoCb device %d",
+                            key->dev_id);
 
     size_t der_cap = alg->der_cap_hint;
     if (key->type == WOLFCERT_KEY_RSA) {
@@ -238,7 +388,7 @@ int wolfcert_key_to_der(const WolfCertKey* key, WolfCertBuffer* out_der)
 
     uint8_t* der = NULL;
     int      der_len = 0;
-    int rc = key_export_der(key, &der, &der_len, key->heap);
+    int rc = wolfcert_key_export_der(key, &der, &der_len, key->heap);
     if (rc != WOLFCERT_OK)
         return rc;
 
@@ -261,7 +411,7 @@ int wolfcert_key_to_pem(const WolfCertKey* key, WolfCertBuffer* out_pem)
     void* heap = key->heap;
     uint8_t* der = NULL;
     int      der_len = 0;
-    int rc = key_export_der(key, &der, &der_len, heap);
+    int rc = wolfcert_key_export_der(key, &der, &der_len, heap);
     if (rc != WOLFCERT_OK)
         return rc;
 
@@ -305,4 +455,14 @@ WolfCertKeyType wolfcert_key_type(const WolfCertKey* k)
 int wolfcert_key_dev_id(const WolfCertKey* k)
 {
     return k ? k->dev_id : 0;
+}
+
+int wolfcert_key_id(const WolfCertKey* k, const uint8_t** id, size_t* id_len)
+{
+    if (k == NULL || id == NULL || id_len == NULL)
+        return WOLFCERT_ERR_BAD_ARG;
+
+    *id     = k->id_len > 0 ? k->id : NULL;
+    *id_len = k->id_len;
+    return WOLFCERT_OK;
 }

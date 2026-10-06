@@ -44,16 +44,27 @@
 #include <string.h>
 
 #ifdef WOLFCERT_HAVE_RSA
+int wolfcert_rsa_bits_ok(int bits)
+{
+    return bits == 2048 || bits == 3072 || bits == 4096;
+}
+
 static int rsa_alloc_init(struct WolfCertKey* k)
 {
     RsaKey* rk = (RsaKey*)WOLFCERT_XMALLOC(sizeof(*rk), k->heap);
     if (rk == NULL)
         return WOLFCERT_ERR_MEMORY;
 
-    int rc = wc_InitRsaKey_ex(rk, k->heap, k->dev_id);
+    int rc;
+#ifdef WOLFCERT_USE_KEY_ID
+    if (k->id_len > 0)
+        rc = wc_InitRsaKey_Id(rk, k->id, (int)k->id_len, k->heap, k->dev_id);
+    else
+#endif
+        rc = wc_InitRsaKey_ex(rk, k->heap, k->dev_id);
     if (rc != 0) {
         WOLFCERT_XFREE(rk, k->heap);
-        return WOLFCERT_ERR_WC(rc, "keygen", "InitRsaKey_ex");
+        return WOLFCERT_ERR_WC(rc, "keygen", "InitRsaKey");
     }
 
     k->impl = rk;
@@ -63,7 +74,7 @@ static int rsa_alloc_init(struct WolfCertKey* k)
 static int rsa_make(struct WolfCertKey* k, const WolfCertKeyCfg* cfg, WC_RNG* rng)
 {
     int bits = cfg->param;
-    if (bits != 2048 && bits != 3072 && bits != 4096)
+    if (!wolfcert_rsa_bits_ok(bits))
         return WOLFCERT_ERR(WOLFCERT_ERR_UNSUPPORTED, "keygen", "bad RSA size %d", bits);
 
     k->rsa_bits = bits;
@@ -83,6 +94,45 @@ static int rsa_priv_decode(struct WolfCertKey* k, const uint8_t* der, word32 len
 static int rsa_priv_to_der(const struct WolfCertKey* k, uint8_t* buf, word32 cap)
 {
     return wc_RsaKeyToDer((RsaKey*)k->impl, buf, cap);
+}
+
+/* Modulus size in bits; wc_RsaEncryptSize rounds up to whole bytes. */
+static int rsa_der_modulus_bits(const uint8_t* der, word32 len)
+{
+    const byte* n = NULL;
+    word32 n_len = 0;
+    word32 idx = 0;
+    int    bits;
+    byte   top;
+
+    if (wc_RsaPublicKeyDecode_ex(der, &idx, len, &n, &n_len, NULL, NULL) != 0)
+        return 0;
+    while (n_len > 0 && n[0] == 0) {
+        n++;
+        n_len--;
+    }
+    if (n_len == 0)
+        return 0;
+    bits = (int)n_len * 8;
+    for (top = n[0]; (top & 0x80) == 0; top <<= 1)
+        bits--;
+    return bits;
+}
+
+static int rsa_pub_decode(struct WolfCertKey* k, const uint8_t* der,
+                          word32 len)
+{
+    word32 idx = 0;
+    if (wc_RsaPublicKeyDecode(der, &idx, (RsaKey*)k->impl, len) != 0)
+        return WOLFCERT_ERR_PARSE;
+
+    k->rsa_bits = rsa_der_modulus_bits(der, len);
+    return WOLFCERT_OK;
+}
+
+static int rsa_host_priv(const struct WolfCertKey* k)
+{
+    return !mp_iszero(&((RsaKey*)k->impl)->d);
 }
 
 static int rsa_pub_check(struct WolfCertKey* k, const uint8_t* pub,
@@ -163,10 +213,16 @@ static int ecc_alloc_init(struct WolfCertKey* k)
     if (ek == NULL)
         return WOLFCERT_ERR_MEMORY;
 
-    int rc = wc_ecc_init_ex(ek, k->heap, k->dev_id);
+    int rc;
+#ifdef WOLFCERT_USE_KEY_ID
+    if (k->id_len > 0)
+        rc = wc_ecc_init_id(ek, k->id, (int)k->id_len, k->heap, k->dev_id);
+    else
+#endif
+        rc = wc_ecc_init_ex(ek, k->heap, k->dev_id);
     if (rc != 0) {
         WOLFCERT_XFREE(ek, k->heap);
-        return WOLFCERT_ERR_WC(rc, "keygen", "ecc_init_ex");
+        return WOLFCERT_ERR_WC(rc, "keygen", "ecc_init");
     }
 
     k->impl = ek;
@@ -201,6 +257,22 @@ static int ecc_priv_decode(struct WolfCertKey* k, const uint8_t* der, word32 len
 static int ecc_priv_to_der(const struct WolfCertKey* k, uint8_t* buf, word32 cap)
 {
     return wc_EccKeyToDer((ecc_key*)k->impl, buf, cap);
+}
+
+static int ecc_pub_decode(struct WolfCertKey* k, const uint8_t* der,
+                          word32 len)
+{
+    word32 idx = 0;
+    if (wc_EccPublicKeyDecode(der, &idx, (ecc_key*)k->impl, len) != 0)
+        return WOLFCERT_ERR_PARSE;
+
+    k->curve_id = wc_ecc_get_curve_id(((ecc_key*)k->impl)->idx);
+    return WOLFCERT_OK;
+}
+
+static int ecc_host_priv(const struct WolfCertKey* k)
+{
+    return !mp_iszero(wc_ecc_key_get_priv((ecc_key*)k->impl));
 }
 
 /* Uncompressed X9.63 point: the 0x04 marker plus two coordinates. */
@@ -281,6 +353,10 @@ static void ecc_free(struct WolfCertKey* k)
 #ifdef WOLFCERT_HAVE_ED25519
 static int ed25519_alloc_init(struct WolfCertKey* k)
 {
+    if (k->id_len > 0)
+        return WOLFCERT_ERR(WOLFCERT_ERR_UNSUPPORTED, "keygen",
+                            "wolfSSL has no key_id init for Ed25519");
+
     ed25519_key* ek = (ed25519_key*)WOLFCERT_XMALLOC(sizeof(*ek), k->heap);
     if (ek == NULL)
         return WOLFCERT_ERR_MEMORY;
@@ -349,6 +425,10 @@ static void ed25519_free(struct WolfCertKey* k)
 #ifdef WOLFCERT_HAVE_ED448
 static int ed448_alloc_init(struct WolfCertKey* k)
 {
+    if (k->id_len > 0)
+        return WOLFCERT_ERR(WOLFCERT_ERR_UNSUPPORTED, "keygen",
+                            "wolfSSL has no key_id init for Ed448");
+
     ed448_key* ek = (ed448_key*)WOLFCERT_XMALLOC(sizeof(*ek), k->heap);
     if (ek == NULL)
         return WOLFCERT_ERR_MEMORY;
@@ -440,10 +520,16 @@ static int mldsa_alloc_init(struct WolfCertKey* k)
     if (dk == NULL)
         return WOLFCERT_ERR_MEMORY;
 
-    int rc = wc_MlDsaKey_Init(dk, k->heap, k->dev_id);
+    int rc;
+#ifdef WOLFCERT_USE_KEY_ID
+    if (k->id_len > 0)
+        rc = wc_MlDsaKey_InitId(dk, k->id, (int)k->id_len, k->heap, k->dev_id);
+    else
+#endif
+        rc = wc_MlDsaKey_Init(dk, k->heap, k->dev_id);
     if (rc != 0) {
         WOLFCERT_XFREE(dk, k->heap);
-        return WOLFCERT_ERR_WC(rc, "keygen", "MlDsaKey_Init");
+        return WOLFCERT_ERR_WC(rc, "keygen", "mldsa_init");
     }
 
     int lvl = mldsa_level_for(k->type);
@@ -476,6 +562,19 @@ static int mldsa_priv_to_der(const struct WolfCertKey* k, uint8_t* buf, word32 c
 {
     /* PKCS#8 v1 PrivateKeyInfo (no public-key field). */
     return wc_MlDsaKey_PrivateKeyToDer((MlDsaKey*)k->impl, buf, cap);
+}
+
+static int mldsa_pub_decode(struct WolfCertKey* k, const uint8_t* der,
+                            word32 len)
+{
+    word32 idx = 0;
+    int rc = wc_MlDsaKey_PublicKeyDecode((MlDsaKey*)k->impl, der, len, &idx);
+    return rc == 0 ? WOLFCERT_OK : WOLFCERT_ERR_PARSE;
+}
+
+static int mldsa_host_priv(const struct WolfCertKey* k)
+{
+    return ((MlDsaKey*)k->impl)->prvKeySet;
 }
 
 /* Adopts the certificate's public half, which a PKCS#8 v1 key lacks. */
@@ -513,6 +612,8 @@ static const WolfCertKeyAlg ALG_RSA = {
     .priv_decode     = rsa_priv_decode,
     .priv_to_der     = rsa_priv_to_der,
     .pub_check       = rsa_pub_check,
+    .pub_decode      = rsa_pub_decode,
+    .host_priv       = rsa_host_priv,
     .free_           = rsa_free,
 };
 #endif
@@ -530,6 +631,8 @@ static const WolfCertKeyAlg ALG_ECC = {
     .priv_decode     = ecc_priv_decode,
     .priv_to_der     = ecc_priv_to_der,
     .pub_check       = ecc_pub_check,
+    .pub_decode      = ecc_pub_decode,
+    .host_priv       = ecc_host_priv,
     .free_           = ecc_free,
 };
 #endif
@@ -582,6 +685,8 @@ static const WolfCertKeyAlg ALG_MLDSA44 = {
     .priv_decode     = mldsa_priv_decode,
     .priv_to_der     = mldsa_priv_to_der,
     .pub_check       = mldsa_pub_check,
+    .pub_decode      = mldsa_pub_decode,
+    .host_priv       = mldsa_host_priv,
     .free_           = mldsa_free,
 };
 #endif
@@ -599,6 +704,8 @@ static const WolfCertKeyAlg ALG_MLDSA65 = {
     .priv_decode     = mldsa_priv_decode,
     .priv_to_der     = mldsa_priv_to_der,
     .pub_check       = mldsa_pub_check,
+    .pub_decode      = mldsa_pub_decode,
+    .host_priv       = mldsa_host_priv,
     .free_           = mldsa_free,
 };
 #endif
@@ -616,6 +723,8 @@ static const WolfCertKeyAlg ALG_MLDSA87 = {
     .priv_decode     = mldsa_priv_decode,
     .priv_to_der     = mldsa_priv_to_der,
     .pub_check       = mldsa_pub_check,
+    .pub_decode      = mldsa_pub_decode,
+    .host_priv       = mldsa_host_priv,
     .free_           = mldsa_free,
 };
 #endif

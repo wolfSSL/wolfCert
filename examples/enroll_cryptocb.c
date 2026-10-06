@@ -66,10 +66,10 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    /* Pass the device id; the rest matches the software path. */
+    /* Pass the device id. A backend that stores keys also takes .key_id,
+     * which this pass-through one cannot serve. */
     WolfCertKeyCfg kcfg = { .type = WOLFCERT_KEY_ECC, .param = 256,
-                            .dev_id = MY_DEV_ID,
-                            .key_label = "demo/device-key" };
+                            .dev_id = MY_DEV_ID };
     WolfCertKey* key = NULL;
     if (wolfcert_key_generate(&kcfg, &key) != WOLFCERT_OK) {
         fprintf(stderr, "keygen failed\n");

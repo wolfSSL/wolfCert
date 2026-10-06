@@ -82,12 +82,27 @@
 #error "WOLFCERT_SCEP_MAX_GET_URL exceeds WOLFCERT_HTTP_QUERY_SZ; raise WOLFCERT_HTTP_QUERY_SZ so the SCEP server can receive the largest GET the client will build."
 #endif
 
+#if defined(WOLF_CRYPTO_CB) && defined(WOLF_PRIVATE_KEY_ID)
+#define WOLFCERT_USE_KEY_ID
+#endif
+
+static inline int wolfcert_devid_is_cb(int dev_id)
+{
+    return dev_id != WOLFCERT_DEVID_SOFTWARE && dev_id != INVALID_DEVID;
+}
+
+/* BAD_ARG or UNSUPPORTED, with a message, unless id names a key a CryptoCb
+ * device can hold in this build. */
+int  wolfcert_key_id_check(const uint8_t* id, size_t id_len, int dev_id,
+                           const char* module);
+
 struct WolfCertKey {
     WolfCertKeyType type;
     int             dev_id;
     int             curve_id;     /* ECC only */
     int             rsa_bits;     /* RSA only */
-    char*           label;
+    uint8_t         id[WOLFCERT_KEY_ID_MAX_LEN];
+    size_t          id_len;
     void*           heap;
     void*           impl;         /* RsaKey* / ecc_key* / ... */
 };
@@ -259,6 +274,7 @@ void wolfcert_logv(WolfCertLogLevel lvl, const char* module, const char* fmt, ..
 int  wolfcert_rng_new(WC_RNG* rng);
 #ifdef WOLFCERT_HAVE_ECC
 int  wolfcert_ecc_curve_from_param(int param, int* out_curve_id, int* out_key_size);
+int  wolfcert_ecc_param_from_curve(int curve_id, int* out_param);
 #endif
 
 /* Returns WOLFCERT_ERR_BAD_ARG unless srv->protocol is want. */
@@ -343,6 +359,11 @@ WOLFCERT_TEST_VIS int wolfcert_find_san(const DecodedCert* dc,
                                         const byte** san, word32* san_len);
 
 WOLFCERT_TEST_VIS int wolfcert_buffer_is_der(const uint8_t* buf, size_t len);
+
+/* Private key DER of a software key; fails for a key with a key_id. The
+ * caller zeroizes and frees *out_der. */
+int wolfcert_key_export_der(const WolfCertKey* key, uint8_t** out_der,
+                            int* out_len, void* heap);
 
 /* Degenerate (certs-only) PKCS#7 helpers. */
 WOLFCERT_TEST_VIS int wolfcert_pkcs7_certs_to_pem(const uint8_t* p7_der, size_t p7_der_len,

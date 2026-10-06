@@ -50,6 +50,13 @@ typedef struct WolfCertKeyAlg {
      * usable after a failure. */
     int  (*pub_check) (struct WolfCertKey* key,
                        const uint8_t* pub, word32 pub_len);
+    /* Decode a SubjectPublicKeyInfo, for a key behind a key_id. NULL if the
+     * type cannot take one. */
+    int  (*pub_decode)(struct WolfCertKey* key,
+                       const uint8_t* der, word32 len);
+    /* Non-zero if the private half sits in host memory. NULL if the type
+     * cannot take a key_id. */
+    int  (*host_priv) (const struct WolfCertKey* key);
     void (*free_)     (struct WolfCertKey* key);
 } WolfCertKeyAlg;
 
@@ -58,5 +65,8 @@ const WolfCertKeyAlg* wolfcert_key_alg(WolfCertKeyType t);
 
 /* NULL-terminated list of compiled-in algorithms. */
 const WolfCertKeyAlg* const* wolfcert_key_algs_all(void);
+
+/* Non-zero for an RSA modulus size wolfCert generates and accepts. */
+int wolfcert_rsa_bits_ok(int bits);
 
 #endif /* WOLFCERT_KEY_ALGS_H */

@@ -106,6 +106,12 @@
 #define WOLFCERT_SCEP_MAX_MSG_SZ  (64 * 1024)
 #endif
 
+/* Max number of certificates accepted from one certs-only PKCS#7 bundle.
+ * See docs/EMBEDDED.md. */
+#ifndef WOLFCERT_PKCS7_MAX_CERTS
+#define WOLFCERT_PKCS7_MAX_CERTS  16
+#endif
+
 /* Upper bound on the length of a base64/percent-encoded PKIOperation GET URL.
  * RFC 8894 section 4.1 lets a client fall back to HTTP GET when the CA does not
  * advertise POSTPKIOperation, carrying the pkiMessage in the `message` query

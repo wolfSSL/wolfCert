@@ -44,7 +44,9 @@ WOLFCERT_API void wolfcert_client_free(WolfCertClient* client);
  *     single-CA-cert case this is exactly that cert's DER, ready to load as
  *     WOLFSSL_FILETYPE_ASN1. With more than one cert it is a concatenation, so
  *     a single ASN.1 load consumes only the first; walk it (each cert is a
- *     complete DER SEQUENCE) or use PEM for multi-cert chains. */
+ *     complete DER SEQUENCE) or use PEM for multi-cert chains.
+ * Returns WOLFCERT_ERR_UNSUPPORTED when the chain holds more than
+ * WOLFCERT_PKCS7_MAX_CERTS certificates (see docs/EMBEDDED.md). */
 WOLFCERT_API int  wolfcert_client_get_ca(WolfCertClient* client,
                                          const WolfCertServerCfg* srv,
                                          WolfCertEncoding encoding,

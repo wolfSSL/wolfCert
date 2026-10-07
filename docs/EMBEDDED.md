@@ -195,7 +195,7 @@ Two related buffers are intentionally **not** exposed as knobs:
   PKCS#7 signed-attribute encoding; shrinking it risks breaking SCEP
   signing rather than saving meaningful RAM.
 
-## 3. SCEP pkiMessage encode buffer
+## 3. SCEP and PKCS#7 message limits
 
 Encoding a SCEP SignedData pkiMessage allocates a one-shot heap buffer
 sized `envelope + signer-cert + WOLFCERT_SCEP_PKI_SLACK`. The slack bounds
@@ -235,6 +235,15 @@ constrained targets. Example:
 ```c
 #define WOLFCERT_SCEP_MAX_MSG_SZ (16 * 1024)
 ```
+
+### Certificate bundles (EST and SCEP)
+
+| Macro | Default | Bounds |
+|-------|---------|--------|
+| `WOLFCERT_PKCS7_MAX_CERTS` | `16` | certificates read from one certs-only PKCS#7 bundle; one more is refused with `WOLFCERT_ERR_UNSUPPORTED` |
+
+A bundle is read up to `WOLFCERT_PKCS7_MAX_CERTS` certificates whatever
+wolfSSL's `MAX_PKCS7_CERTS` is.
 
 ## 4. Heap / static-memory pools
 

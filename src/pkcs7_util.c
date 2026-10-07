@@ -23,8 +23,8 @@
  *     concatenated as PEM or DER.
  *   - build a certs-only SignedData around a set of DER certificates.
  *
- * Both directions go through wolfSSL's wc_PKCS7 API: extraction via
- * wc_PKCS7_VerifySignedData(), encoding via a DEGENERATE_SID SignedData
+ * Both directions go through wolfSSL's wc_PKCS7 API: extraction is validated
+ * by wc_PKCS7_VerifySignedData(), encoding uses a DEGENERATE_SID SignedData
  * (wc_PKCS7_EncodeSignedData() with no signer). Heap hints thread through for
  * wolfSSL static-memory builds.
  */
@@ -36,6 +36,7 @@
 #include <wolfcert/errors.h>
 
 #include <wolfssl/wolfcrypt/pkcs7.h>
+#include <wolfssl/wolfcrypt/asn.h>
 #include <wolfssl/wolfcrypt/asn_public.h>
 #include <wolfssl/wolfcrypt/error-crypt.h>
 
@@ -44,9 +45,8 @@
 
 /* ---- certs-only (degenerate) SignedData extraction --------------------- *
  *
- * wc_PKCS7_VerifySignedData validates the structure and populates
- * pkcs7->cert[] / certSz[]. The bundles we parse are degenerate certs-only
- * SignedData, so there is no signature to verify. */
+ * wc_PKCS7_VerifySignedData validates the structure; the certificates are then
+ * read from the input itself. */
 
 /* Append `n` bytes to a growable WolfCertBuffer. */
 static int acc_append(WolfCertBuffer* acc, size_t* cap, const uint8_t* data,
@@ -95,41 +95,198 @@ static int append_cert(WolfCertBuffer* acc, size_t* cap, const uint8_t* der,
     return rc;
 }
 
+/* Read the TLV header at *idx. Returns 0 with *len set, 1 for an indefinite
+ * length, or -1 when it is malformed. */
+static int tlv_header(const uint8_t* der, word32* idx, word32 max, byte* tag,
+                      int* len)
+{
+    if (GetASNTag(der, idx, tag, max) < 0 || *idx >= max)
+        return -1;
+
+    if (der[*idx] == ASN_INDEF_LENGTH) {
+        (*idx)++;
+        *len = 0;
+        return 1;
+    }
+
+    if (GetLength(der, idx, len, max) < 0)
+        return -1;
+
+    return 0;
+}
+
+/* Move *idx past the end-of-contents marker that closes the indefinite-length
+ * element whose header was just read. */
+static int skip_indef(const uint8_t* der, word32* idx, word32 max)
+{
+    int depth = 1;
+    int hr;
+    byte tag;
+    int len;
+
+    while (depth > 0) {
+        hr = tlv_header(der, idx, max, &tag, &len);
+        if (hr < 0)
+            return -1;
+
+        if (hr == 1)
+            depth++;
+        else if (tag == 0 && len == 0)
+            depth--;
+        else
+            *idx += (word32)len;
+    }
+
+    return 0;
+}
+
+/* Find the certificate list inside the bundle.
+ * Returns -1 when no certificate list is found. */
+static int pkcs7_cert_set(const uint8_t* der, word32 der_len, word32* start,
+                          word32* end)
+{
+    /* Headers from the start of the bundle down to its certificate list.
+     * enter = 1 steps inside the element, 0 skips over it. */
+    static const struct { byte tag; byte enter; } path[] = {
+        { ASN_CONSTRUCTED | ASN_SEQUENCE,         1 },
+        { ASN_OBJECT_ID,                          0 },
+        { ASN_CONSTRUCTED | ASN_CONTEXT_SPECIFIC, 1 },
+        { ASN_CONSTRUCTED | ASN_SEQUENCE,         1 },
+        { ASN_INTEGER,                            0 },
+        { ASN_CONSTRUCTED | ASN_SET,              0 },
+        { ASN_CONSTRUCTED | ASN_SEQUENCE,         0 },
+        { ASN_CONSTRUCTED | ASN_CONTEXT_SPECIFIC, 1 },
+    };
+    const size_t n = sizeof(path) / sizeof(path[0]);
+    word32 idx = 0;
+    size_t i;
+    byte tag;
+    int len = 0;
+    int hr = 0;
+
+    for (i = 0; i < n; i++) {
+        hr = tlv_header(der, &idx, der_len, &tag, &len);
+        if (hr < 0 || tag != path[i].tag)
+            return -1;
+
+        if (!path[i].enter && hr == 0)
+            idx += (word32)len;
+        else if (!path[i].enter && skip_indef(der, &idx, der_len) != 0)
+            return -1;
+    }
+
+    *start = idx;
+    if (hr == 0) {
+        *end = idx + (word32)len;
+    }
+    else {
+        /* An indefinite-length list ends just before its end-of-contents. */
+        if (skip_indef(der, &idx, der_len) != 0)
+            return -1;
+
+        *end = idx - ASN_INDEF_END_SZ;
+    }
+
+    return 0;
+}
+
+/* Is [idx, end) a certificate body: tbsCertificate, signatureAlgorithm and
+ * signatureValue, with nothing after? Returns 0 when it is. */
+static int cert_shape(const uint8_t* der, word32 idx, word32 end)
+{
+    static const byte parts[] = {
+        ASN_CONSTRUCTED | ASN_SEQUENCE,
+        ASN_CONSTRUCTED | ASN_SEQUENCE,
+        ASN_BIT_STRING
+    };
+    size_t i;
+    byte tag;
+    int len;
+
+    for (i = 0; i < sizeof(parts); i++) {
+        if (tlv_header(der, &idx, end, &tag, &len) != 0 || tag != parts[i])
+            return -1;
+
+        idx += (word32)len;
+    }
+
+    return (idx == end) ? 0 : -1;
+}
+
+/* Append every certificate in the certificates field at [idx, end) of `der`,
+ * skipping the tagged CertificateChoices alternatives [0] to [3]. */
+static int append_cert_set(WolfCertBuffer* acc, size_t* cap, const uint8_t* der,
+                           word32 idx, word32 end, int as_pem, void* heap)
+{
+    size_t count = 0;
+    int rc = WOLFCERT_OK;
+    word32 at;
+    byte tag = 0;
+    int len;
+
+    while (rc == WOLFCERT_OK && idx < end) {
+        at = idx;
+        if (tlv_header(der, &idx, end, &tag, &len) != 0)
+            rc = WOLFCERT_ERR(WOLFCERT_ERR_PARSE, "pkcs7",
+                              "malformed certificates field");
+        else if (tag == (ASN_CONSTRUCTED | ASN_SEQUENCE) &&
+                cert_shape(der, idx, idx + (word32)len) != 0)
+            rc = WOLFCERT_ERR(WOLFCERT_ERR_PARSE, "pkcs7",
+                              "certificates field holds a non-certificate");
+        else if (tag != (ASN_CONSTRUCTED | ASN_SEQUENCE) &&
+                (tag < (ASN_CONSTRUCTED | ASN_CONTEXT_SPECIFIC) ||
+                 tag > (ASN_CONSTRUCTED | ASN_CONTEXT_SPECIFIC | 3)))
+            rc = WOLFCERT_ERR(WOLFCERT_ERR_PARSE, "pkcs7",
+                              "certificates field holds an unknown entry");
+        else
+            idx += (word32)len;
+
+        if (rc == WOLFCERT_OK && tag == (ASN_CONSTRUCTED | ASN_SEQUENCE) &&
+                ++count > WOLFCERT_PKCS7_MAX_CERTS)
+            rc = WOLFCERT_ERR(WOLFCERT_ERR_UNSUPPORTED, "pkcs7",
+                              "bundle holds more than WOLFCERT_PKCS7_MAX_CERTS "
+                              "certificates");
+
+        if (rc == WOLFCERT_OK && tag == (ASN_CONSTRUCTED | ASN_SEQUENCE))
+            rc = append_cert(acc, cap, der + at, idx - at, as_pem, heap);
+    }
+
+    return rc;
+}
+
 static int pkcs7_certs_extract(const uint8_t* p7_der, size_t p7_der_len,
                                WolfCertBuffer* out, void* heap, int as_pem)
 {
+    WolfCertBuffer acc = { .heap = heap };
+    size_t cap = 0;
+    PKCS7* p7;
+    word32 start;
+    word32 end;
+    int rc;
+
     if (p7_der == NULL || p7_der_len == 0 || out == NULL)
         return WOLFCERT_ERR_BAD_ARG;
 
-    PKCS7* p7 = wc_PKCS7_New(heap, WOLFCERT_DEVID_SOFTWARE);
+    p7 = wc_PKCS7_New(heap, WOLFCERT_DEVID_SOFTWARE);
     if (p7 == NULL)
         return WOLFCERT_ERR_MEMORY;
 
-    int rc = wc_PKCS7_VerifySignedData(p7, (byte*)p7_der, (word32)p7_der_len);
-    if (rc != 0) {
-        wc_PKCS7_Free(p7);
-        return WOLFCERT_ERR_WC(rc, "pkcs7", "VerifySignedData");
-    }
-
-    WolfCertBuffer acc = { .heap = heap };
-    size_t cap = 0;
-
-    for (int i = 0; i < MAX_PKCS7_CERTS; ++i) {
-        if (p7->cert[i] == NULL || p7->certSz[i] == 0)
-            continue;
-
-        rc = append_cert(&acc, &cap, p7->cert[i], p7->certSz[i], as_pem, heap);
-        if (rc != WOLFCERT_OK) {
-            WOLFCERT_XFREE(acc.data, heap);
-            wc_PKCS7_Free(p7);
-            return rc;
-        }
-    }
+    rc = wc_PKCS7_VerifySignedData(p7, (byte*)p7_der, (word32)p7_der_len);
+    if (rc != 0)
+        rc = WOLFCERT_ERR_WC(rc, "pkcs7", "VerifySignedData");
+    else if (pkcs7_cert_set(p7_der, (word32)p7_der_len, &start, &end) != 0)
+        rc = WOLFCERT_ERR(WOLFCERT_ERR_PARSE, "pkcs7",
+                          "cannot locate the certificate list in bundle");
+    else
+        rc = append_cert_set(&acc, &cap, p7_der, start, end, as_pem, heap);
 
     wc_PKCS7_Free(p7);
-    if (acc.len == 0) {
+    if (rc == WOLFCERT_OK && acc.len == 0)
+        rc = WOLFCERT_ERR_NOT_FOUND;
+
+    if (rc != WOLFCERT_OK) {
         WOLFCERT_XFREE(acc.data, heap);
-        return WOLFCERT_ERR_NOT_FOUND;
+        return rc;
     }
 
     *out = acc;

@@ -21,10 +21,11 @@
  * Minimal SCEP enrollment example.
  *
  * Usage:
- *   enroll_scep <server_url> <subject_dn>
+ *   enroll_scep <server_url> <subject_dn> <ca_sha256_hex>
  *
- * Fetches the CA cert via GetCACert, then PKCSReq-enrolls a fresh 2048-bit
- * RSA key. Writes the issued cert in PEM to stdout.
+ * Fetches the CA cert via GetCACert, checks it against the SHA-256
+ * fingerprint, then PKCSReq-enrolls a fresh 2048-bit RSA key. Writes the
+ * issued cert in PEM to stdout.
  */
 
 #include <wolfcert/wolfcert.h>
@@ -41,10 +42,38 @@
 
 /* SCEP is RSA-only (RFC 8894); other key types enroll over EST. */
 
+static int hex_decode(const char* hex, uint8_t* out, size_t out_len)
+{
+    size_t i;
+
+    if (strlen(hex) != 2 * out_len)
+        return -1;
+
+    for (i = 0; i < 2 * out_len; i++) {
+        char c = hex[i];
+        int v = (c >= '0' && c <= '9') ? c - '0'
+              : (c >= 'a' && c <= 'f') ? c - 'a' + 10
+              : (c >= 'A' && c <= 'F') ? c - 'A' + 10 : -1;
+        if (v < 0)
+            return -1;
+        if (i % 2 == 0)
+            out[i / 2] = (uint8_t)(v << 4);
+        else
+            out[i / 2] |= (uint8_t)v;
+    }
+    return 0;
+}
+
 int main(int argc, char** argv)
 {
-    if (argc < 3) {
-        fprintf(stderr, "usage: %s URL SUBJECT\n", argv[0]);
+    uint8_t fp[32];
+
+    if (argc < 4) {
+        fprintf(stderr, "usage: %s URL SUBJECT CA_SHA256_HEX\n", argv[0]);
+        return 1;
+    }
+    if (hex_decode(argv[3], fp, sizeof(fp)) != 0) {
+        fprintf(stderr, "CA fingerprint must be 64 hex digits\n");
         return 1;
     }
 
@@ -62,6 +91,15 @@ int main(int argc, char** argv)
     DerBuffer* ca_der = NULL;
     if (wc_PemToDer(ca_pem.data, (long)ca_pem.len, CERT_TYPE,
                     &ca_der, NULL, NULL, NULL) != 0) return 2;
+
+    /* GetCACert is unauthenticated over plain HTTP, so pin the CA. */
+    int rc = wolfcert_scep_verify_ca_fingerprint(ca_der->buffer,
+            ca_der->length, fp, sizeof(fp), WOLFCERT_SCEP_FP_SHA256);
+    if (rc != WOLFCERT_OK) {
+        fprintf(stderr, "CA fingerprint check failed: %s\n",
+                wolfcert_strerror(rc));
+        return 2;
+    }
 
     /* 2) Optionally query capabilities. */
     WolfCertScepCaps caps = { 0 };
@@ -81,8 +119,8 @@ int main(int argc, char** argv)
 
     /* 4) PKCSReq. */
     WolfCertBuffer cert = { 0 };
-    int rc = wolfcert_scep_pkcs_req(&srv, &caps, ca_der->buffer, ca_der->length,
-                                    key, csr.data, csr.len, &cert);
+    rc = wolfcert_scep_pkcs_req(&srv, &caps, ca_der->buffer, ca_der->length,
+                                key, csr.data, csr.len, &cert);
     if (rc != WOLFCERT_OK) {
         fprintf(stderr, "PKCSReq failed: %s\n", wolfcert_strerror(rc));
         return 2;

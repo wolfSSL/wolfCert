@@ -82,11 +82,6 @@ if(CONFIG_WOLFCERT)
   # CONFIG_APP_LINK_WITH_WOLFSSL being left at its default.
   target_link_libraries(wolfCert INTERFACE wolfSSL)
 
-  # Without thread-local storage the last-error slot is shared by all threads.
-  if(NOT CONFIG_THREAD_LOCAL_STORAGE)
-    zephyr_library_compile_definitions(WOLFCERT_NO_THREAD_LOCAL)
-  endif()
-
   if(CONFIG_WOLFCERT_BUILD_TESTING)
     target_compile_definitions(wolfCert INTERFACE WOLFCERT_BUILD_TESTING)
     zephyr_library_compile_definitions(WOLFCERT_BUILD_TESTING)

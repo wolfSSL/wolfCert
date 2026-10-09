@@ -182,10 +182,11 @@ done
 
 # One flag per line keeps the spaces inside CPPFLAGS. No mapfile: macOS
 # runners run this under /bin/bash 3.2 on a cache miss.
+_flags=$(resolve_flags "$CONFIG") || exit 2
 CONFIGURE_FLAGS=()
 while IFS= read -r _flag; do
     CONFIGURE_FLAGS+=("$_flag")
-done < <(resolve_flags "$CONFIG")
+done <<< "$_flags"
 
 : "${PREFIX:=$PWD/.wolfssl-install/$CONFIG}"
 : "${JOBS:=$( (command -v nproc >/dev/null && nproc) || sysctl -n hw.ncpu 2>/dev/null || echo 2)}"

@@ -15,7 +15,6 @@ menuconfig WOLFCERT
 	depends on WOLFSSL
 	select NETWORKING
 	select POSIX_API
-	imply THREAD_LOCAL_STORAGE
 	help
 	  Build wolfCert as a Zephyr module. See the top-level README.md for what
 	  the library does and zephyr/README.md for the integration.

@@ -564,7 +564,7 @@ int main(void)
     signal(SIGPIPE, SIG_IGN);
 
     REQUIRE(test_static_mem_init() == 0);
-    REQUIRE(wolfcert_init(NULL) == WOLFCERT_OK);
+    REQUIRE(wolfcert_init(test_heap_hint()) == WOLFCERT_OK);
 
     if (test_oid_to_dotted())
         return 1;

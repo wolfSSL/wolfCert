@@ -955,7 +955,7 @@ static int test_bad_bind_host_rejected(void)
 int main(void)
 {
     REQUIRE(test_static_mem_init() == 0);
-    REQUIRE(wolfcert_init(NULL) == WOLFCERT_OK);
+    REQUIRE(wolfcert_init(test_heap_hint()) == WOLFCERT_OK);
 
 #if CA_STORE_NEEDS_TLS
     REQUIRE(gen_server_identity(&srv_cert_pem, &srv_cert_pem_len,

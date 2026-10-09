@@ -252,6 +252,12 @@ If your target is single-threaded, build wolfSSL with `SINGLE_THREADED`.
 wolfCert holds no locks of its own (init/cleanup delegate refcounting to
 `wolfSSL_Init`/`wolfSSL_Cleanup`), so there is nothing extra to configure.
 
+The error state behind `wolfcert_last_error_message()` is per-thread only
+when wolfSSL's `THREAD_LS_T` is thread-local, which takes `HAVE_THREAD_LS`
+and is never the case on FreeRTOS or Zephyr. Otherwise, as in most RTOS and
+`user_settings.h` builds, it is one global, so make the wolfCert calls whose
+errors you read from one thread.
+
 ## 6. Algorithms & protocols
 
 Strip unused key algorithms and protocols at configure time so their code
@@ -313,9 +319,7 @@ overwrites the idle thread and the image dies later in the interrupt handler
 rather than reporting a stack overflow. Build with
 `CONFIG_HW_STACK_PROTECTION=y` while tuning `CONFIG_MAIN_STACK_SIZE` so an
 overflow names itself. The x86 default `CONFIG_ISR_STACK_SIZE` (2048) is also
-thin once the networking stack is in the image. Every thread's stack also
-holds the thread-local data;
-[`zephyr/README.md` (Sizing)](../zephyr/README.md#sizing) covers how much.
+thin once the networking stack is in the image.
 
 **A clock is not optional.** Without a set wall clock every certificate looks
 not-yet-valid and the failure surfaces as a trust-anchor error, not a clock

@@ -243,7 +243,7 @@ static int test_csr_pem(void)
 int main(void)
 {
     REQUIRE(test_static_mem_init() == 0);
-    REQUIRE(wolfcert_init(NULL) == WOLFCERT_OK);
+    REQUIRE(wolfcert_init(test_heap_hint()) == WOLFCERT_OK);
     if (test_url())
         return 1;
     if (test_base64())

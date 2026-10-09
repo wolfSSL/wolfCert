@@ -19,9 +19,9 @@
 
 /**
  * @file status.h
- * Detail behind the last WOLFCERT_ERR_* code. The state is per-thread on GCC
- * and Clang unless __STDC_NO_THREADS__ or WOLFCERT_NO_THREAD_LOCAL is
- * defined, and global otherwise.
+ * Detail behind the last WOLFCERT_ERR_* code. The state is per-thread when
+ * wolfSSL's THREAD_LS_T is thread-local (HAVE_THREAD_LS without NO_THREAD_LS,
+ * outside FreeRTOS and Zephyr), and global otherwise.
  */
 
 #ifndef WOLFCERT_STATUS_H

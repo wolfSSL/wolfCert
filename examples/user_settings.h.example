@@ -50,4 +50,8 @@
 #define WOLFCERT_HAVE_ED448   1
 #define WOLFCERT_HAVE_MLDSA   1
 
+/* wolfSSL setting for a hosted target sharing this file: makes the error
+ * state per-thread (wolfSSL ignores it on FreeRTOS and Zephyr). */
+/* #define HAVE_THREAD_LS */
+
 #endif /* WOLFCERT_USER_SETTINGS_H */

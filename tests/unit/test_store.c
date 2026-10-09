@@ -109,7 +109,7 @@ static int test_memory(void)
 int main(void)
 {
     REQUIRE(test_static_mem_init() == 0);
-    REQUIRE(wolfcert_init(NULL) == WOLFCERT_OK);
+    REQUIRE(wolfcert_init(test_heap_hint()) == WOLFCERT_OK);
 #ifdef WOLFCERT_HAVE_POSIX_STORE
     if (test_posix())
         return 1;

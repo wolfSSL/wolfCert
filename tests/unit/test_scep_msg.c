@@ -2306,7 +2306,7 @@ static int test_text_attrib_printable(void)
 int main(void)
 {
     REQUIRE(test_static_mem_init() == 0);
-    REQUIRE(wolfcert_init(NULL) == WOLFCERT_OK);
+    REQUIRE(wolfcert_init(test_heap_hint()) == WOLFCERT_OK);
     if (test_getca_url())
         return 1;
     if (test_scep_rejects_est_cfg())

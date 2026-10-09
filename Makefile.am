@@ -112,7 +112,7 @@ check_PROGRAMS     += test_net
 endif
 
 test_smoke_SOURCES  = tests/unit/test_smoke.c
-test_smoke_LDADD    = libwolfcert.la $(WOLFSSL_LIBS)
+test_smoke_LDADD    = libwolfcert.la $(WOLFSSL_LIBS) -lpthread
 test_keygen_SOURCES = tests/unit/test_keygen.c
 test_keygen_LDADD   = libwolfcert.la $(WOLFSSL_LIBS)
 test_csr_SOURCES    = tests/unit/test_csr.c

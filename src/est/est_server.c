@@ -116,6 +116,8 @@ typedef struct {
 
 static void free_req(EstRequest* r)
 {
+    if (r->auth_header != NULL)
+        wc_ForceZero(r->auth_header, (word32)strlen(r->auth_header));
     WOLFCERT_XFREE(r->auth_header, r->heap);
     WOLFCERT_XFREE(r->body, r->heap);
     memset(r, 0, sizeof(*r));
@@ -235,14 +237,14 @@ static int hdr_is(const char* line, size_t llen, const char* name)
            wolfcert_ascii_ncasecmp(line, name, n) == 0;
 }
 
-static int parse_request(WolfCertServer* s, int fd, EstRequest* out, void* heap)
+static int parse_request_in(WolfCertServer* s, int fd, EstRequest* out,
+                            void* heap, char* buf, size_t buf_sz)
 {
     memset(out, 0, sizeof(*out));
     out->heap = heap;
-    char buf[WOLFCERT_HTTP_REQ_BUF_SZ];
     size_t n = 0;
-    while (n < sizeof(buf) - 1) {
-        ssize_t r = wolfcert_io_recv(s, fd, buf + n, sizeof(buf) - 1 - n);
+    while (n < buf_sz - 1) {
+        ssize_t r = wolfcert_io_recv(s, fd, buf + n, buf_sz - 1 - n);
         if (r <= 0)
             return WOLFCERT_ERR_IO;
 
@@ -392,7 +394,7 @@ static int parse_request(WolfCertServer* s, int fd, EstRequest* out, void* heap)
             if (csz == 0)
                 break;
 
-            if (ri + csz > raw_len || body_sz + csz > BODY_CAP) {
+            if (csz > raw_len - ri || csz > BODY_CAP - body_sz) {
                 WOLFCERT_XFREE(body, heap);
                 WOLFCERT_XFREE(raw, heap);
                 return WOLFCERT_ERR_PROTOCOL;
@@ -452,6 +454,16 @@ static int parse_request(WolfCertServer* s, int fd, EstRequest* out, void* heap)
     }
 
     return WOLFCERT_OK;
+}
+
+/* The header block can carry Basic credentials. */
+static int parse_request(WolfCertServer* s, int fd, EstRequest* out, void* heap)
+{
+    char buf[WOLFCERT_HTTP_REQ_BUF_SZ];
+    int rc = parse_request_in(s, fd, out, heap, buf, sizeof(buf));
+
+    wc_ForceZero(buf, (word32)sizeof(buf));
+    return rc;
 }
 
 static void send_all(WolfCertServer* s, int fd, const void* buf, size_t len)
@@ -546,7 +558,9 @@ static int check_basic_auth(const WolfCertServer* s, const char* auth_header)
         memcpy(raw + ul + 1, s->cfg_basic_pass, pl);
 
     WolfCertBuffer enc = { 0 };
-    if (wolfcert_base64_encode(raw, ul + 1 + pl, &enc, s->heap) != WOLFCERT_OK)
+    int erc = wolfcert_base64_encode(raw, ul + 1 + pl, &enc, s->heap);
+    wc_ForceZero(raw, (word32)sizeof(raw));
+    if (erc != WOLFCERT_OK)
         return 0;
 
     /* Constant-time compare of the base64 credential. */
@@ -555,7 +569,7 @@ static int check_basic_auth(const WolfCertServer* s, const char* auth_header)
     if (ok)
         ok = (wc_ConstantCompare((const byte*)tok, enc.data,
                                  (int)enc.len) == 0);
-    wolfcert_buffer_free(&enc);
+    wolfcert_buffer_free_secure(&enc);
 
     return ok;
 }

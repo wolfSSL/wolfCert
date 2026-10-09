@@ -188,7 +188,7 @@ wolfcert_cleanup();
 | `wolfcert/types.h` | `WolfCertServerCfg`, `WolfCertKeyCfg`, `WolfCertCertMeta`, `WolfCertTransport`, `wolfcert_buffer_free` |
 | `wolfcert/keygen.h`, `wolfcert/csr.h` | Key generation, import / export, CSR building |
 | `wolfcert/store.h` | `WolfCertStoreOps` storage vtable, POSIX and in-memory backends |
-| `wolfcert/errors.h`, `wolfcert/status.h`, `wolfcert/log.h` | Error codes, per-thread error detail, log callback |
+| `wolfcert/errors.h`, `wolfcert/status.h`, `wolfcert/log.h` | Error codes, last-error detail, log callback |
 | `wolfcert/memory.h` | Default heap hint, allocation macros |
 | `examples/` | `enroll_est.c`, `enroll_scep.c`, `enroll_cryptocb.c`, `user_settings.h.example` |
 | `examples/certs/` | Test credentials; never ship them |
@@ -229,7 +229,7 @@ contract, alone or in a group comment.
   `getnextca` / `getcert` (SCEP), which is handy for checking a production CA
   before writing code against it.
 - On Zephyr, the EST client sample runs against a host `wolfcert-server`;
-  `zephyr/README.md` has the steps and the per-thread stack sizing.
+  `zephyr/README.md` has the steps and the stack sizing.
 
 ## Gotchas
 
@@ -257,7 +257,8 @@ contract, alone or in a group comment.
   `proto_opts.scep.content_cipher` where the network is untrusted.
 - **Error detail:** `wolfcert_strerror(rc)` names the code;
   `wolfcert_last_error_message()` and `wolfcert_last_wolfssl_err()` give the
-  per-thread detail behind it.
+  detail behind it, per thread when wolfSSL's `THREAD_LS_T` is thread-local
+  (`HAVE_THREAD_LS`, outside FreeRTOS and Zephyr).
 
 ## Further documentation
 

@@ -55,7 +55,7 @@ A few constraints shape the whole library:
    disabled subsystems disappear from the link entirely.
 7. **Minimal, explicit error reporting.** Every function returns a small
    negative `WOLFCERT_ERR_*` code; extended diagnostics (module, underlying
-   wolfSSL error, message) are recorded in thread-local state and retrieved
+   wolfSSL error, message) are recorded in last-error state and retrieved
    via `wolfcert_last_error_message()` / `wolfcert_last_wolfssl_err()`.
 
 ### What wolfCert is not
@@ -418,8 +418,11 @@ wolfcert_set_log_cb(my_log, NULL);
 wolfcert_set_log_level(WOLFCERT_LOG_INFO);   /* default is WARN */
 ```
 
-Extended error state is thread-local. On metal without TLS support, define
-`WOLFCERT_NO_THREAD_LOCAL` and it degrades to a global. After any failing call:
+Extended error state is per-thread when wolfSSL's `THREAD_LS_T` is
+thread-local: `HAVE_THREAD_LS`, which its configure enables where the compiler
+supports it, without `NO_THREAD_LS`, and not on FreeRTOS or Zephyr, where
+wolfSSL leaves `THREAD_LS_T` empty. Otherwise (RTOS and bare-metal builds) the
+state is one global, so keep wolfCert calls on one thread. After any failing call:
 
 ```c
 int rc = wolfcert_est_simple_enroll(&srv, csr, csr_len, &cert);
@@ -431,7 +434,7 @@ if (rc != WOLFCERT_OK) {
 }
 ```
 
-The message string is valid until the next wolfCert call on the same thread.
+The message string is valid until the error state next changes.
 
 ### 4.6 Pluggable transport
 

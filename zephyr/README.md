@@ -79,15 +79,6 @@ See `docs/EMBEDDED.md` section 8. The short version: build with
 `CONFIG_HW_STACK_PROTECTION=y` while tuning `CONFIG_MAIN_STACK_SIZE`, because
 a stack overflow here is reported as something else entirely.
 
-**Every thread's stack also holds the thread-local data.** Zephyr copies all
-of the image's `__thread` variables onto the top of each thread's stack when
-the thread starts, and does not check that they fit. wolfCert's per-thread
-error state brings that copy to ~340 bytes, more than the default 320-byte
-`CONFIG_IDLE_STACK_SIZE`, and the image hard-faults before the boot banner.
-Raise the idle stack to at least 1024 and leave the same ~340 bytes of room on
-every small-stack thread — for example `CONFIG_SYSTEM_WORKQUEUE_STACK_SIZE`,
-and `CONFIG_LOG_PROCESS_THREAD_STACK_SIZE` in a `CONFIG_LOG` build.
-
 ## Networking on qemu_x86
 
 A networked QEMU image defaults to SLIP and waits forever on `/tmp/slip.sock`.
@@ -204,14 +195,13 @@ needs changing. `prj.conf` leaves these to the board:
 - **An entropy source.** The devicetree's `zephyr,entropy` usually provides
   one, as the SoC's TRNG does on FRDM-MCXN947. `CONFIG_TEST_RANDOM_GENERATOR`
   is for emulators only: keys generated from it are predictable.
-- **Stack and heap sizes.** Start from the FRDM-MCXN947 file, and leave room on
-  every thread's stack for the thread-local data (see [Sizing](#sizing)).
+- **Stack and heap sizes.** Start from the FRDM-MCXN947 file (see
+  [Sizing](#sizing)).
 
 ### Troubleshooting
 
 | Symptom | Cause |
 |---|---|
-| `HARD FAULT` repeated before the boot banner | A thread's stack cannot hold the thread-local data; see [Sizing](#sizing) |
 | `peer ip address mismatch` or `peer subject name mismatch` | The server certificate's SAN does not name the host in the URL; issue one with `gen-server-cert.sh` |
 | `enroll failed: TLS error ()`, or `ASN date error, current date is before start of validity` | The device clock is before a certificate's start date; the clock is the build time, so rebuild with `-p` |
 | `ASN no signer error to confirm failure` | `CONFIG_WOLFCERT_SAMPLE_CA_CERT` is not the CA that issued the server's certificate; see [step 2](#2-configure-the-sample) |

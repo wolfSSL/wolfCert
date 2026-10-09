@@ -844,7 +844,7 @@ static int renewal_size_limits(void)
 int main(void)
 {
     REQUIRE(test_static_mem_init() == 0);
-    REQUIRE(wolfcert_init(NULL) == WOLFCERT_OK);
+    REQUIRE(wolfcert_init(test_heap_hint()) == WOLFCERT_OK);
 
 #ifdef WOLFCERT_HAVE_SERVER
     if (subject_copy_rejects_oversized_rdn())

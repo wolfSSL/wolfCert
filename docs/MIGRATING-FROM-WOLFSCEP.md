@@ -75,7 +75,7 @@ wolfSCEP_response(scep, answer, &answerSz, 0);
 if (wolfSCEP_reply_status(scep) == WS_PKI_SUCCESS) { /* ... */ }
 ```
 
-The same enrollment in wolfCert, which is `examples/enroll_scep.c` with the fingerprint check added:
+The same enrollment in wolfCert; `examples/enroll_scep.c` is a runnable version of it:
 
 ```c
 WolfCertServerCfg srv = {
@@ -152,7 +152,7 @@ srv.proto_opts.scep.content_cipher = WOLFCERT_SCEP_CIPHER_AES256;
 
 **Fingerprint verification is now the library's job.** Delete your helper and call `wolfcert_scep_verify_ca_fingerprint`, which hashes the DER certificate and compares in constant time.
 
-**Error codes are a different, smaller set.** wolfSCEP's `WS_*` codes map onto `wolfcert/errors.h`: `WS_BAD_ARGUMENT` to `WOLFCERT_ERR_BAD_ARG`, `WS_MEMORY_E` to `WOLFCERT_ERR_MEMORY`, `WS_PARSE_E` to `WOLFCERT_ERR_PARSE`, the `WS_CBIO_ERR_*` family to `WOLFCERT_ERR_IO` and, in non-blocking mode only, to `WOLFCERT_ERR_WANT_READ` and `WOLFCERT_ERR_WANT_WRITE`. There is no per-call error string; use `wolfcert_strerror` for the code and `wolfcert_last_error_message` for the per-thread detail.
+**Error codes are a different, smaller set.** wolfSCEP's `WS_*` codes map onto `wolfcert/errors.h`: `WS_BAD_ARGUMENT` to `WOLFCERT_ERR_BAD_ARG`, `WS_MEMORY_E` to `WOLFCERT_ERR_MEMORY`, `WS_PARSE_E` to `WOLFCERT_ERR_PARSE`, the `WS_CBIO_ERR_*` family to `WOLFCERT_ERR_IO` and, in non-blocking mode only, to `WOLFCERT_ERR_WANT_READ` and `WOLFCERT_ERR_WANT_WRITE`. There is no per-call error string; use `wolfcert_strerror` for the code and `wolfcert_last_error_message` for the detail.
 
 **TLS is optional for SCEP and mandatory for EST.** SCEP authenticates inside the pkiMessage, so a plaintext `http://` endpoint is accepted. An `https://` endpoint requires `srv.verify_server`: every SCEP entry point, one-shot and session alike, refuses to run unverified rather than completing a silent anonymous handshake, because `verify_server` is the only peer-verification switch in the transport.
 

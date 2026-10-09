@@ -1075,7 +1075,7 @@ static int test_no_builtin_transport(void)
 int main(void)
 {
     REQUIRE(test_static_mem_init() == 0);
-    REQUIRE(wolfcert_init(NULL) == WOLFCERT_OK);
+    REQUIRE(wolfcert_init(test_heap_hint()) == WOLFCERT_OK);
     if (test_roundtrip())
         return 1;
     if (test_byte_at_a_time())

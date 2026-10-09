@@ -55,6 +55,32 @@
 
 static void* server_thread(void* arg) { wolfcert_server_run((WolfCertServer*)arg); return NULL; }
 
+static int cn_is(const DecodedCert* dc, const char* cn)
+{
+    return dc->subjectCN != NULL && dc->subjectCNLen == (int)strlen(cn) &&
+           memcmp(dc->subjectCN, cn, strlen(cn)) == 0;
+}
+
+/* The issued cert's subject CN must equal cn. */
+static int check_subject_cn(const WolfCertBuffer* issued, const char* cn)
+{
+    uint8_t der[4096];
+    DecodedCert dc;
+    int der_len;
+    int match;
+
+    der_len = wc_CertPemToDer(issued->data, (int)issued->len, der,
+                              (int)sizeof(der), CERT_TYPE);
+    REQUIRE(der_len > 0);
+
+    wc_InitDecodedCert(&dc, der, (word32)der_len, NULL);
+    match = wc_ParseCert(&dc, CERT_TYPE, NO_VERIFY, NULL) == 0 &&
+            cn_is(&dc, cn);
+    wc_FreeDecodedCert(&dc);
+    REQUIRE(match);
+    return 0;
+}
+
 #ifdef KEEP_PEER_CERT
 static int impostor_customize(void* wolfssl_cert, void* ctx)
 {
@@ -80,12 +106,9 @@ static int check_renewed_identity(const WolfCertBuffer* issued)
     REQUIRE(der_len > 0);
 
     wc_InitDecodedCert(&dc, der, (word32)der_len, NULL);
-    REQUIRE(wc_ParseCert(&dc, CERT_TYPE, NO_VERIFY, NULL) == 0);
-    REQUIRE(dc.subjectCN != NULL);
-    REQUIRE(dc.subjectCNLen == (int)strlen("reenroll-device"));
-    REQUIRE(memcmp(dc.subjectCN, "reenroll-device",
-                   strlen("reenroll-device")) == 0);
-    found = has_alt(dc.altNames, ASN_IP_TYPE, (const char*)ip,
+    found = wc_ParseCert(&dc, CERT_TYPE, NO_VERIFY, NULL) == 0 &&
+            cn_is(&dc, "reenroll-device") &&
+            has_alt(dc.altNames, ASN_IP_TYPE, (const char*)ip,
                     (int)sizeof(ip));
     wc_FreeDecodedCert(&dc);
     REQUIRE(found);
@@ -375,8 +398,7 @@ int main(void)
         fprintf(stderr, "enroll rc=%d (%s)\n", rc, wolfcert_strerror(rc));
     REQUIRE(rc == WOLFCERT_OK);
     REQUIRE(memmem(issued.data, issued.len, "BEGIN CERTIFICATE", 17) != NULL);
-    REQUIRE(memmem(issued.data, issued.len, "tls-est-client", 14) != NULL ||
-            issued.len > 0);   /* PEM carries subject in DER, not ASCII */
+    REQUIRE(check_subject_cn(&issued, "tls-est-client") == 0);
 
     /* The same trust anchor in DER form. */
     DerBuffer* ta_der = NULL;

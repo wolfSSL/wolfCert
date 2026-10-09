@@ -118,4 +118,4 @@ Email **support@wolfssl.com** instead, and please keep the issue private until a
 3. Add the new files to `EXTRA_DIST` in `zephyr/include.am`.
 4. Add a job to `.github/workflows/zephyr.yml` modelled on the `mcxn` job: the `zephyr-workspace` action with the board's SDK toolchain, twister `--build-only` for the board, then `scripts/ci/twister-assert-ran.py --built-only <scenario>`.
 5. Add a row to both board tables under "EST client sample" in `zephyr/README.md`.
-6. Run it on the hardware: enroll against a host `wolfcert-server`, and check every thread's stack headroom with `CONFIG_THREAD_ANALYZER`, since the thread-local data takes room on each one ("Sizing" in `zephyr/README.md`).
+6. Run it on the hardware: enroll against a host `wolfcert-server`, and check every thread's stack headroom with `CONFIG_THREAD_ANALYZER`.

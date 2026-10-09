@@ -197,7 +197,8 @@ All `WolfCertBuffer` outputs remember which heap they came from, so the same
   build). Keys run in software or through any wolfSSL CryptoCb backend.
 - **SCEP is RSA-only** (per RFC 8894); use EST for the other key types.
 - **EST endpoints:** `/cacerts`, `/simpleenroll`, `/simplereenroll`,
-  `/csrattrs`.
+  `/csrattrs`. The RFC 7030 section 3.5 tls-unique binding is neither sent
+  nor checked; TLS 1.3 does not define tls-unique.
 - **SCEP operations:** `GetCACaps`, `GetCACert`, `GetNextCACert`, `PKCSReq`,
   `RenewalReq`, `GetCert`, plus `pkiStatus=PENDING` + `GetCertInitial` polling.
 - **Transport:** HTTP/1.1 over wolfSSL TLS 1.3/1.2 (trust anchors, SNI,

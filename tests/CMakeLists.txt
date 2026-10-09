@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+find_package(Threads REQUIRED)
 add_executable(test_smoke unit/test_smoke.c)
-target_link_libraries(test_smoke PRIVATE wolfcert)
+target_link_libraries(test_smoke PRIVATE wolfcert Threads::Threads)
 add_test(NAME smoke COMMAND test_smoke)
 
 add_executable(test_keygen unit/test_keygen.c)
@@ -24,7 +25,6 @@ if(WOLFCERT_ENABLE_BUILTIN_TRANSPORT)
     add_test(NAME net COMMAND test_net)
 endif()
 
-find_package(Threads REQUIRED)
 add_executable(test_transport unit/test_transport.c)
 target_include_directories(test_transport PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(test_transport PRIVATE wolfcert)

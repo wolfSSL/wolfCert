@@ -41,13 +41,18 @@ static inline int test_static_mem_init(void)
                             sizeof(g_test_static_pool), WOLFMEM_GENERAL, 1) != 0)
         return -1;
     wolfSSL_SetGlobalHeapHint(g_test_heap_hint);
-    wolfcert_set_default_heap(g_test_heap_hint);
     return 0;
+}
+
+static inline void* test_heap_hint(void)
+{
+    return g_test_heap_hint;
 }
 
 #else
 
 static inline int test_static_mem_init(void) { return 0; }
+static inline void* test_heap_hint(void) { return NULL; }
 
 #endif /* WOLFSSL_STATIC_MEMORY && WOLFSSL_NO_MALLOC */
 

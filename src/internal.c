@@ -32,14 +32,6 @@ static WolfCertLogCb    g_log_cb       = NULL;
 static void*            g_log_ctx      = NULL;
 static WolfCertLogLevel g_log_level    = WOLFCERT_LOG_WARN;
 
-#if defined(__STDC_NO_THREADS__) || defined(WOLFCERT_NO_THREAD_LOCAL)
-# define WOLFCERT_TLS /* empty */
-#elif defined(__GNUC__) || defined(__clang__)
-# define WOLFCERT_TLS __thread
-#else
-# define WOLFCERT_TLS /* empty */
-#endif
-
 typedef struct {
     int  wolfcert_rc;
     int  wolfssl_rc;
@@ -47,7 +39,7 @@ typedef struct {
     char message[256];
 } WolfCertErrState;
 
-static WOLFCERT_TLS WolfCertErrState g_err;
+static THREAD_LS_T WolfCertErrState g_err;
 
 void  wolfcert_set_default_heap(void* heap)
 {

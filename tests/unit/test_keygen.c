@@ -69,7 +69,7 @@ static int roundtrip(WolfCertKeyType type, int param)
 int main(void)
 {
     REQUIRE(test_static_mem_init() == 0);
-    REQUIRE(wolfcert_init(NULL) == WOLFCERT_OK);
+    REQUIRE(wolfcert_init(test_heap_hint()) == WOLFCERT_OK);
 #ifdef WOLFCERT_HAVE_ECC
     if (roundtrip(WOLFCERT_KEY_ECC, 256))
         return 1;

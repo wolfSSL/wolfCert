@@ -153,6 +153,17 @@ WOLFCERT_TEST_VIS void wolfcert_sock_nosigpipe(int fd);
 
 long wolfcert_mono_ms(void);
 
+/* 1 when a Transfer-Encoding value is exactly "chunked", the one coding the
+ * servers decode. */
+int wolfcert_server_te_chunked(const char* v, size_t vlen);
+
+/* Receive the rest of a chunked request body that starts with have[0..have_len)
+ * and decode it, rejecting a body over max_bytes. */
+WOLFCERT_TEST_VIS int wolfcert_server_read_chunked(WolfCertServer* srv, int fd,
+                                 const void* have, size_t have_len,
+                                 size_t max_bytes, uint8_t** body,
+                                 size_t* body_len, void* heap);
+
 WOLFCERT_API const WolfCertServerOps* wolfcert_est_server_ops(void);
 WOLFCERT_API const WolfCertServerOps* wolfcert_scep_server_ops(void);
 
@@ -225,6 +236,24 @@ WOLFCERT_TEST_VIS int  wolfcert_http_url_parse(const char* url, WolfCertUrl* out
 WOLFCERT_TEST_VIS void wolfcert_http_url_free (WolfCertUrl* u);
 WOLFCERT_TEST_VIS int  wolfcert_http_url_origin(const WolfCertUrl* u, void* heap,
                                                 char** out_origin);
+
+/* Resume point for wolfcert_http_chunked_complete(); zero it before the first
+ * call. */
+typedef struct {
+    size_t pos;
+    size_t crlf;
+    size_t chunk;
+    int    in_trailers;
+} WolfCertChunkScan;
+
+/* 1 once the last chunk and its trailer section have arrived, 0 when more
+ * bytes are needed, -1 when the framing is malformed. */
+WOLFCERT_TEST_VIS int wolfcert_http_chunked_complete(const uint8_t* raw,
+                                                     size_t raw_len,
+                                                     WolfCertChunkScan* st);
+int wolfcert_http_chunked_decode(const uint8_t* in, size_t in_len,
+                                 uint8_t** out, size_t* out_len,
+                                 size_t max_bytes, void* heap);
 
 /* strncasecmp() with ASCII-only case folding */
 int wolfcert_ascii_ncasecmp(const char* a, const char* b, size_t n);

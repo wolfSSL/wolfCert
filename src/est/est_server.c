@@ -138,94 +138,6 @@ static int read_line(const char** p, const char* end, char** ls, size_t* ll)
     return 0;
 }
 
-/* Parse the chunk-size line at raw[ri..]. The 8 hex digit cap keeps csz within
- * 32 bits. Returns 0 ok, 1 if the CRLF has not arrived, -1 if malformed. */
-static int read_chunk_size(const uint8_t* raw, size_t raw_len, size_t ri,
-                           size_t* csz, size_t* next)
-{
-    size_t he = ri;
-    size_t hex_digits = 0;
-    size_t v = 0;
-    int parsed = 0;
-
-    while (he + 1 < raw_len && !(raw[he] == '\r' && raw[he+1] == '\n')) {
-        ++he;
-    }
-
-    if (he + 1 >= raw_len)
-        return 1;
-
-    for (size_t k = ri; k < he; ++k) {
-        char c = (char)raw[k];
-        if (c == ';')
-            break; /* chunk-ext */
-
-        int d = (c >= '0' && c <= '9') ? c - '0'
-              : (c >= 'a' && c <= 'f') ? c - 'a' + 10
-              : (c >= 'A' && c <= 'F') ? c - 'A' + 10 : -1;
-        if (d < 0 || ++hex_digits > 8)
-            return -1;
-
-        v = (v << 4) | (size_t)d;
-        parsed = 1;
-    }
-    if (parsed == 0)
-        return -1;
-
-    *csz  = v;
-    *next = he + 2;
-
-    return 0;
-}
-
-/* Walks the framing, since "0\r\n" also occurs in chunk sizes and data.
- * Returns 1 once the last chunk and its trailers have arrived or the framing
- * is malformed (the decode pass rejects it), 0 when more bytes are needed. */
-static int chunked_body_complete(const uint8_t* raw, size_t raw_len)
-{
-    size_t ri = 0;
-    size_t ls = 0;
-
-    while (ri < raw_len) {
-        size_t csz = 0;
-        size_t next = 0;
-        int r = read_chunk_size(raw, raw_len, ri, &csz, &next);
-        if (r > 0)
-            return 0;
-        if (r < 0)
-            return 1;
-
-        ri = next;
-        if (csz == 0) {
-            /* RFC 7230 section 4.1: consume trailers through the blank
-             * line, or the leftover CRLF corrupts the next request. */
-            while (ri < raw_len) {
-                ls = ri;
-                while (ri + 1 < raw_len &&
-                       !(raw[ri] == '\r' && raw[ri + 1] == '\n')) {
-                    ++ri;
-                }
-
-                if (ri + 1 >= raw_len)
-                    return 0;
-                if (ri == ls)
-                    return 1; /* blank line terminates the trailers */
-
-                ri += 2;
-            }
-
-            return 0;
-        }
-
-        if (raw_len - ri < 2 || csz > raw_len - ri - 2)
-            return 0;
-
-        ri += csz + 2;
-    }
-
-    return 0;
-}
-
 /* 1 when the line's field name is `name`, followed directly by ':'. */
 static int hdr_is(const char* line, size_t llen, const char* name)
 {
@@ -274,6 +186,9 @@ static int parse_request(WolfCertServer* s, int fd, EstRequest* out, void* heap)
     if (sp2 == NULL)
         return WOLFCERT_ERR_PROTOCOL;
 
+    int http10 = line + llen - sp2 - 1 == 8 &&
+                 memcmp(sp2 + 1, "HTTP/1.0", 8) == 0;
+
     size_t plen = (size_t)(sp2 - sp1 - 1);
     if (plen >= sizeof(out->path))
         return WOLFCERT_ERR_PROTOCOL;
@@ -282,6 +197,7 @@ static int parse_request(WolfCertServer* s, int fd, EstRequest* out, void* heap)
     out->path[plen] = '\0';
 
     int chunked = 0;
+    int cl_seen = 0;
     while (read_line(&p, end, &line, &llen) == 0 && llen > 0) {
         const char* hc = memchr(line, ':', llen);
 
@@ -290,16 +206,16 @@ static int parse_request(WolfCertServer* s, int fd, EstRequest* out, void* heap)
             return WOLFCERT_ERR_PROTOCOL;
         if (hdr_is(line, llen, "Content-Length")) {
             out->content_length = (size_t)strtoul(hc + 1, NULL, 10);
+            cl_seen = 1;
         }
         else if (hdr_is(line, llen, "Transfer-Encoding")) {
-            const char* v = hc + 1;
-            while (v < line + llen && (*v == ' ' || *v == '\t')) {
-                ++v;
-            }
+            /* Any coding but a lone chunked is refused with 400. */
+            if (chunked ||
+                    !wolfcert_server_te_chunked(hc + 1,
+                                                (size_t)(line + llen - hc - 1)))
+                return WOLFCERT_ERR_PROTOCOL;
 
-            size_t vlen = (size_t)(line + llen - v);
-            if (vlen >= 7 && wolfcert_ascii_ncasecmp(v, "chunked", 7) == 0)
-                chunked = 1;
+            chunked = 1;
         }
         else if (hdr_is(line, llen, "Authorization")) {
             if (out->auth_header != NULL)
@@ -331,95 +247,15 @@ static int parse_request(WolfCertServer* s, int fd, EstRequest* out, void* heap)
 
     size_t body_have = (size_t)(end - p);
     if (chunked) {
+        /* RFC 9112 section 6.1: close after a request framed both ways, and
+         * after an HTTP/1.0 request carrying Transfer-Encoding. */
+        if (cl_seen || http10)
+            out->connection_close = 1;
+
         /* globalsign's estclient always sends chunked request bodies. */
-        static const size_t BODY_CAP = 1 * 1024 * 1024;
-        uint8_t* raw = NULL;
-        size_t raw_len = 0, raw_cap = 0;
-        if (body_have > 0) {
-            raw = (uint8_t*)WOLFCERT_XMALLOC(body_have, heap);
-            if (raw == NULL)
-                return WOLFCERT_ERR_MEMORY;
-
-            memcpy(raw, p, body_have);
-            raw_len = body_have;
-            raw_cap = body_have;
-        }
-
-        while (!chunked_body_complete(raw, raw_len)) {
-            size_t grow = raw_len < 2048 ? 2048 : raw_len;
-            if (raw_len + grow > BODY_CAP + 64 * 1024) {
-                WOLFCERT_XFREE(raw, heap);
-                return WOLFCERT_ERR_PROTOCOL;
-            }
-
-            uint8_t* nb = (uint8_t*)WOLFCERT_XREALLOC(raw, raw_len + grow, heap);
-            if (nb == NULL) {
-                WOLFCERT_XFREE(raw, heap);
-                return WOLFCERT_ERR_MEMORY;
-            }
-
-            raw = nb;
-            raw_cap = raw_len + grow;
-            ssize_t r = wolfcert_io_recv(s, fd, raw + raw_len, raw_cap - raw_len);
-            if (r <= 0) {
-                WOLFCERT_XFREE(raw, heap);
-                return WOLFCERT_ERR_IO;
-            }
-
-            raw_len += (size_t)r;
-        }
-
-        uint8_t* body = (uint8_t*)WOLFCERT_XMALLOC(raw_len + 1, heap);
-        if (body == NULL) {
-            WOLFCERT_XFREE(raw, heap);
-            return WOLFCERT_ERR_MEMORY;
-        }
-
-        size_t body_sz = 0, ri = 0;
-        while (ri < raw_len) {
-            size_t csz = 0;
-            size_t next = 0;
-            int r = read_chunk_size(raw, raw_len, ri, &csz, &next);
-            if (r > 0)
-                break;
-            if (r < 0) {
-                WOLFCERT_XFREE(body, heap);
-                WOLFCERT_XFREE(raw, heap);
-                return WOLFCERT_ERR_PROTOCOL;
-            }
-
-            ri = next;
-            if (csz == 0)
-                break;
-
-            if (ri + csz > raw_len || body_sz + csz > BODY_CAP) {
-                WOLFCERT_XFREE(body, heap);
-                WOLFCERT_XFREE(raw, heap);
-                return WOLFCERT_ERR_PROTOCOL;
-            }
-
-            memcpy(body + body_sz, raw + ri, csz);
-            body_sz += csz;
-            ri += csz;
-            if (ri == raw_len)
-                break;
-
-            if (ri + 2 > raw_len ||
-                raw[ri] != '\r' || raw[ri + 1] != '\n') {
-                WOLFCERT_XFREE(body, heap);
-                WOLFCERT_XFREE(raw, heap);
-                return WOLFCERT_ERR_PROTOCOL;
-            }
-
-            ri += 2;
-        }
-
-        body[body_sz] = '\0';
-        WOLFCERT_XFREE(raw, heap);
-        out->body = body;
-        out->body_len = body_sz;
-
-        return WOLFCERT_OK;
+        return wolfcert_server_read_chunked(s, fd, p, body_have,
+                                            1 * 1024 * 1024, &out->body,
+                                            &out->body_len, heap);
     }
 
     if (out->content_length > 0) {

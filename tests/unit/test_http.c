@@ -1180,6 +1180,73 @@ static int test_chunked_over_max_accumulated(void)
     return oversize_chunk_case(body);
 }
 
+#ifdef WOLFCERT_HAVE_SERVER
+/* The server's chunked reader decodes a buffered body and enforces its decoded
+ * and raw caps before it would read the socket. */
+static int test_server_read_chunked_caps(void)
+{
+    static const char ok[]  = "4\r\nabcd\r\n0\r\n\r\n";
+    static const char big[] = "11\r\n0123456789abcdef0\r\n0\r\n\r\n";
+    const size_t raw_max = 16 + 64 * 1024;
+    uint8_t* body = NULL;
+    size_t body_len = 0;
+    uint8_t* raw;
+    int ok_rc, big_rc, full_rc, over_rc, ok_body;
+
+    ok_rc = wolfcert_server_read_chunked(NULL, -1, ok, sizeof(ok) - 1, 16,
+                                         &body, &body_len, NULL);
+    ok_body = body != NULL && body_len == 4 && memcmp(body, "abcd", 4) == 0;
+    WOLFCERT_XFREE(body, NULL);
+    body = NULL;
+
+    big_rc = wolfcert_server_read_chunked(NULL, -1, big, sizeof(big) - 1, 16,
+                                          &body, &body_len, NULL);
+
+    raw = (uint8_t*)malloc(raw_max + 1);
+    REQUIRE(raw != NULL);
+    memcpy(raw, "FFFFF\r\n", 7);
+    memset(raw + 7, 'A', raw_max + 1 - 7);
+    full_rc = wolfcert_server_read_chunked(NULL, -1, raw, raw_max, 16,
+                                           &body, &body_len, NULL);
+    over_rc = wolfcert_server_read_chunked(NULL, -1, raw, raw_max + 1, 16,
+                                           &body, &body_len, NULL);
+    free(raw);
+
+    REQUIRE(ok_rc == WOLFCERT_OK && ok_body);
+    REQUIRE(big_rc == WOLFCERT_ERR_PROTOCOL);
+    REQUIRE(full_rc == WOLFCERT_ERR_PROTOCOL);
+    REQUIRE(over_rc == WOLFCERT_ERR_PROTOCOL);
+    REQUIRE(body == NULL);
+    return 0;
+}
+#endif
+
+/* Feeding a chunked body a byte at a time gives the same verdict as whole. */
+static int test_chunked_complete_resume(void)
+{
+    static const char ok[] = "4;x=1\r\nabcd\r\n10\r\n0123456789abcdef\r\n"
+                             "0\r\nX-A: 1\r\nX-B: 2\r\n\r\n";
+    static const char bad[] = "4\r\nabcdX\r\n0\r\n\r\n";
+    WolfCertChunkScan st = { 0 };
+    size_t n;
+    int r = 0;
+
+    for (n = 1; n < sizeof(ok) - 1; n++) {
+        r = wolfcert_http_chunked_complete((const uint8_t*)ok, n, &st);
+        REQUIRE(r == 0);
+    }
+    REQUIRE(wolfcert_http_chunked_complete((const uint8_t*)ok, n, &st) == 1);
+
+    memset(&st, 0, sizeof(st));
+    for (n = 1; n < sizeof(bad); n++) {
+        r = wolfcert_http_chunked_complete((const uint8_t*)bad, n, &st);
+        if (r != 0)
+            break;
+    }
+    REQUIRE(r == -1 && n == 9);
+    return 0;
+}
+
 int main(void)
 {
     /* make check has no per-test timeout, and a framing bug shows as a hang. */
@@ -1188,7 +1255,13 @@ int main(void)
     REQUIRE(wolfcert_init(NULL) == WOLFCERT_OK);
     if (test_url_parser())
         return 1;
+#ifdef WOLFCERT_HAVE_SERVER
+    if (test_server_read_chunked_caps())
+        return 1;
+#endif
     if (test_url_origin())
+        return 1;
+    if (test_chunked_complete_resume())
         return 1;
     if (test_loopback_http())
         return 1;

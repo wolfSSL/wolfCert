@@ -836,21 +836,26 @@ static int read_headers(WolfCertConn* c, DynBuf* rx)
     }
 }
 
-/* Parse the chunk-size line at raw[ri..]; *next lands past its CRLF. Returns 0
- * ok, 1 if the CRLF has not arrived, -1 if malformed or over 0xFFFFFFFF. */
-static int read_chunk_size(const uint8_t* raw, size_t raw_len, size_t ri,
-                           size_t* csz, size_t* next)
+/* Advance *at to the next CRLF; 1 if none yet, with *at where to resume. */
+static int find_crlf(const uint8_t* raw, size_t raw_len, size_t* at)
 {
-    size_t he = ri;
+    size_t i = *at;
+
+    while (i + 1 < raw_len && !(raw[i] == '\r' && raw[i + 1] == '\n')) {
+        ++i;
+    }
+    *at = i;
+
+    return i + 1 < raw_len ? 0 : 1;
+}
+
+/* Parse the chunk-size line raw[ri..he). Returns 0 ok, -1 if malformed or over
+ * 0xFFFFFFFF. */
+static int parse_chunk_size(const uint8_t* raw, size_t ri, size_t he,
+                            size_t* csz)
+{
     size_t v = 0;
     int parsed = 0;
-
-    while (he + 1 < raw_len && !(raw[he] == '\r' && raw[he+1] == '\n')) {
-        ++he;
-    }
-
-    if (he + 1 >= raw_len)
-        return 1;
 
     for (size_t k = ri; k < he; ++k) {
         char c = (char)raw[k];
@@ -881,58 +886,50 @@ static int read_chunk_size(const uint8_t* raw, size_t raw_len, size_t ri,
     if (parsed == 0)
         return -1; /* empty chunk-size line */
 
-    *csz  = v;
-    *next = he + 2;
+    *csz = v;
 
     return 0;
 }
 
-/* Walk chunk framing over the bytes received so far. Returns 1 at a
- * zero-length chunk parsed on a chunk-header boundary whose trailer
- * section is closed, 0 when more bytes are needed, -1 when malformed. */
-static int chunked_body_complete(const uint8_t* raw, size_t raw_len)
+WOLFCERT_TEST_VIS int wolfcert_http_chunked_complete(const uint8_t* raw,
+                                                     size_t raw_len,
+                                                     WolfCertChunkScan* st)
 {
-    size_t ri = 0;
-    size_t ls = 0;
+    while (st->pos < raw_len) {
+        size_t ri = st->pos;
+        size_t csz = st->chunk;
 
-    while (ri < raw_len) {
-        size_t csz = 0;
-        size_t next = 0;
-        int r = read_chunk_size(raw, raw_len, ri, &csz, &next);
-        if (r > 0)
-            return 0;
-        if (r < 0)
-            return -1;
+        if (csz > 0) {
+            if (raw_len - ri < 2 || csz > raw_len - ri - 2)
+                return 0; /* payload and its CRLF not yet received */
 
-        ri = next;
-        if (csz == 0) {
-            /* Consume the trailer section through its blank line; stopping
-             * at "0\r\n" desyncs keep-alive. */
-            while (ri < raw_len) {
-                ls = ri;
-                while (ri + 1 < raw_len &&
-                       !(raw[ri] == '\r' && raw[ri + 1] == '\n')) {
-                    ++ri;
-                }
+            if (raw[ri + csz] != '\r' || raw[ri + csz + 1] != '\n')
+                return -1; /* no CRLF closing the chunk payload */
 
-                if (ri + 1 >= raw_len)
-                    return 0; /* trailer line CRLF not fully received */
-                if (ri == ls)
-                    return 1; /* blank line terminates the trailers */
-
-                ri += 2;
-            }
-
-            return 0;
+            st->pos = ri + csz + 2;
+            st->chunk = 0;
+            continue;
         }
 
-        if (raw_len - ri < 2 || csz > raw_len - ri - 2)
-            return 0; /* chunk payload plus trailing CRLF not yet received */
+        if (st->crlf < ri)
+            st->crlf = ri;
+        if (find_crlf(raw, raw_len, &st->crlf) != 0)
+            return 0;
 
-        if (raw[ri + csz] != '\r' || raw[ri + csz + 1] != '\n')
-            return -1; /* no CRLF closing the chunk payload */
+        if (st->in_trailers) {
+            if (st->crlf == ri)
+                return 1; /* blank line terminates the trailers */
+        }
+        else if (parse_chunk_size(raw, ri, st->crlf, &st->chunk) != 0) {
+            return -1;
+        }
+        else if (st->chunk == 0) {
+            /* Consume the trailer section through its blank line; stopping
+             * at "0\r\n" desyncs keep-alive. */
+            st->in_trailers = 1;
+        }
 
-        ri += csz + 2;
+        st->pos = st->crlf + 2;
     }
 
     return 0;
@@ -976,9 +973,9 @@ static int check_trailers(const uint8_t* raw, size_t raw_len)
     return WOLFCERT_ERR_PROTOCOL;
 }
 
-static int decode_chunked(const uint8_t* in, size_t in_len,
-                          uint8_t** out, size_t* out_len,
-                          size_t max_bytes, void* heap)
+int wolfcert_http_chunked_decode(const uint8_t* in, size_t in_len,
+                                 uint8_t** out, size_t* out_len,
+                                 size_t max_bytes, void* heap)
 {
     DynBuf body = { .heap = heap, .max = max_bytes };
     size_t p = 0;
@@ -986,14 +983,15 @@ static int decode_chunked(const uint8_t* in, size_t in_len,
 
     while (p < in_len) {
         size_t clen = 0;
-        size_t next = 0;
+        size_t he = p;
 
-        if (read_chunk_size(in, in_len, p, &clen, &next) != 0) {
+        if (find_crlf(in, in_len, &he) != 0 ||
+                parse_chunk_size(in, p, he, &clen) != 0) {
             WOLFCERT_XFREE(body.buf, heap);
             return WOLFCERT_ERR_PROTOCOL;
         }
 
-        p = next;
+        p = he + 2;
         if (clen == 0) {
             rc = check_trailers(in + p, in_len - p);
             if (rc != WOLFCERT_OK) {
@@ -1051,11 +1049,13 @@ static int read_body(WolfCertConn* c, DynBuf* rx, size_t body_start,
         return WOLFCERT_ERR_PROTOCOL;
 
     if (chunked) {
+        WolfCertChunkScan scan = { 0 };
         int framed;
 
         for (;;) {
-            framed = chunked_body_complete(rx->buf + body_start,
-                                           rx->len - body_start);
+            framed = wolfcert_http_chunked_complete(rx->buf + body_start,
+                                                    rx->len - body_start,
+                                                    &scan);
             if (framed != 0)
                 break;
 
@@ -1072,8 +1072,9 @@ static int read_body(WolfCertConn* c, DynBuf* rx, size_t body_start,
         if (framed < 0)
             return WOLFCERT_ERR_PROTOCOL;
 
-        return decode_chunked(rx->buf + body_start, rx->len - body_start,
-                              out, out_len, max_bytes, heap);
+        return wolfcert_http_chunked_decode(rx->buf + body_start,
+                                            rx->len - body_start,
+                                            out, out_len, max_bytes, heap);
     }
 
     if (length >= 0) {

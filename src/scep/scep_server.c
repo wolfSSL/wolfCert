@@ -199,6 +199,9 @@ static int read_request(WolfCertServer* s, int fd, ScepRequest* out, void* heap)
     if (sp2 == NULL)
         return WOLFCERT_ERR_PROTOCOL;
 
+    int http10 = line + llen - sp2 - 1 == 8 &&
+                 memcmp(sp2 + 1, "HTTP/1.0", 8) == 0;
+
     /* Split the request-target in place inside rawbuf. */
     *sp2 = '\0';
     out->path = sp1 + 1;
@@ -211,11 +214,27 @@ static int read_request(WolfCertServer* s, int fd, ScepRequest* out, void* heap)
         out->query = sp2;   /* empty query string */
     }
 
+    int chunked = 0;
+    int cl_seen = 0;
     while (read_line(&p, end, &line, &llen) == 0 && llen > 0) {
-        if (llen > 14 && strncasecmp(line, "Content-Length", 14) == 0) {
+        const char* hc = memchr(line, ':', llen);
+
+        /* RFC 9112 section 5.1: whitespace before the colon is a 400. */
+        if (hc != NULL && hc > line && (hc[-1] == ' ' || hc[-1] == '\t'))
+            return WOLFCERT_ERR_PROTOCOL;
+        if (llen > 17 && line[17] == ':' &&
+                wolfcert_ascii_ncasecmp(line, "Transfer-Encoding", 17) == 0) {
+            /* Any coding but a lone chunked is refused with 400. */
+            if (chunked || !wolfcert_server_te_chunked(line + 18, llen - 18))
+                return WOLFCERT_ERR_PROTOCOL;
+
+            chunked = 1;
+        }
+        else if (llen > 14 && strncasecmp(line, "Content-Length", 14) == 0) {
             char* c = memchr(line, ':', llen);
             if (c)
                 out->content_length = (size_t)strtoul(c + 1, NULL, 10);
+            cl_seen = 1;
         }
         else if (llen > 10 && strncasecmp(line, "Connection", 10) == 0) {
             char* colon = memchr(line, ':', llen);
@@ -231,6 +250,16 @@ static int read_request(WolfCertServer* s, int fd, ScepRequest* out, void* heap)
     }
 
     size_t have = (size_t)(end - p);
+    if (chunked) {
+        /* RFC 9112 section 6.1: close after a request framed both ways, and
+         * after an HTTP/1.0 request carrying Transfer-Encoding. */
+        if (cl_seen || http10)
+            out->connection_close = 1;
+
+        return wolfcert_server_read_chunked(s, fd, p, have, 1 * 1024 * 1024,
+                                            &out->body, &out->body_len, heap);
+    }
+
     if (out->content_length > 0) {
         if (out->content_length > 1 * 1024 * 1024)
             return WOLFCERT_ERR_PROTOCOL;

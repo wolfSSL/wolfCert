@@ -2272,6 +2272,8 @@ static int test_text_attrib_printable(void)
     static const byte ps_nul[]  = { 0x13, 0x02, '2', 0x00 };
     static const byte fi_nul[]  = { 0x13, 0x03, '0', 0x00, 'x' };
     static const byte mt_utf8[] = { 0x0C, 0x01, '3' };
+    static const byte ps_short[] = { 0x13, 0x05, '2' };
+    static const byte ps_empty[] = { 0x13, 0x00 };
     uint8_t* ca_der  = NULL;
     size_t   ca_len  = 0;
     uint8_t* ca_key  = NULL;
@@ -2294,6 +2296,15 @@ static int test_text_attrib_printable(void)
         check_text_attrib(ca_der, ca_len, ca_key, ca_key_len,
                           scep_oid_msg_type, sizeof(scep_oid_msg_type),
                           mt_utf8, sizeof(mt_utf8),
+                          WOLFCERT_ERR_PROTOCOL, NULL) != 0 ||
+        check_text_attrib(ca_der, ca_len, ca_key, ca_key_len,
+                          scep_oid_pki_status, sizeof(scep_oid_pki_status),
+                          ps_short, sizeof(ps_short),
+                          WOLFCERT_ERR_PROTOCOL, NULL) != 0 ||
+        strstr(wolfcert_last_error_message(), "truncated") == NULL ||
+        check_text_attrib(ca_der, ca_len, ca_key, ca_key_len,
+                          scep_oid_pki_status, sizeof(scep_oid_pki_status),
+                          ps_empty, sizeof(ps_empty),
                           WOLFCERT_ERR_PROTOCOL, NULL) != 0) {
         ret = 1;
     }
@@ -2302,6 +2313,130 @@ static int test_text_attrib_printable(void)
     free(ca_key);
     return ret;
 }
+
+/* A tag or length cut short, or a value overrunning its SET, is truncated. */
+static int test_text_attrib_truncated(void)
+{
+    static const byte cut_tag[]   = { 0x13 };
+    static const byte cut_len81[] = { 0x13, 0x81 };
+    static const byte cut_len82[] = { 0x13, 0x82, 0x00 };
+    static const byte indef[]     = { 0x13, 0x80, '2', 0x00, 0x00 };
+    static const byte cut_set[]   = { 0x31, 0x81 };
+    static const byte over_set[]  = { 0x31, 0x03, 0x13, 0x05, '2' };
+    static const struct {
+        const byte* v;
+        word32      len;
+    } cases[] = {
+        { cut_tag,   sizeof(cut_tag) },
+        { cut_len81, sizeof(cut_len81) },
+        { cut_len82, sizeof(cut_len82) },
+        { indef,     sizeof(indef) },
+        { cut_set,   sizeof(cut_set) },
+        { over_set,  sizeof(over_set) },
+    };
+    uint8_t* ca_der  = NULL;
+    size_t   ca_len  = 0;
+    uint8_t* ca_key  = NULL;
+    size_t   ca_key_len = 0;
+    size_t   i;
+    int      ret = 0;
+
+    REQUIRE(make_ca(&ca_der, &ca_len, &ca_key, &ca_key_len) == 0);
+
+    for (i = 0; ret == 0 && i < sizeof(cases) / sizeof(cases[0]); i++) {
+        wolfcert_clear_error();
+        if (check_text_attrib(ca_der, ca_len, ca_key, ca_key_len,
+                              scep_oid_pki_status, sizeof(scep_oid_pki_status),
+                              cases[i].v, cases[i].len,
+                              WOLFCERT_ERR_PROTOCOL, NULL) != 0 ||
+            strstr(wolfcert_last_error_message(), "truncated") == NULL) {
+            fprintf(stderr, "truncated case %zu: %s\n", i,
+                    wolfcert_last_error_message());
+            ret = 1;
+        }
+    }
+
+    free(ca_der);
+    free(ca_key);
+    return ret;
+}
+
+#ifdef TEST_ALLOC_FAILURES
+/* Failing each allocation in turn must give an error or a parse with every
+ * attribute present. */
+static int test_parse_reports_oom(void)
+{
+    static const byte msg_type[] = { 0x13, 0x02, '1', '9' };
+    static const byte tid[] = { 0x13, 0x01, 'A' };
+    PKCS7Attrib attribs[2];
+    wolfSSL_Malloc_cb  mf;
+    wolfSSL_Free_cb    ff;
+    wolfSSL_Realloc_cb rf;
+    uint8_t* ca_der = NULL;
+    size_t   ca_len = 0;
+    uint8_t* ca_key = NULL;
+    size_t   ca_key_len = 0;
+    uint8_t* msg = NULL;
+    size_t   msg_len = 0;
+    int fails;
+    int rc = WOLFCERT_ERR_MEMORY;
+    int ret = 0;
+
+    attribs[0].oid     = scep_oid_msg_type;
+    attribs[0].oidSz   = sizeof(scep_oid_msg_type);
+    attribs[0].value   = msg_type;
+    attribs[0].valueSz = sizeof(msg_type);
+    attribs[1].oid     = scep_oid_trans_id;
+    attribs[1].oidSz   = sizeof(scep_oid_trans_id);
+    attribs[1].value   = tid;
+    attribs[1].valueSz = sizeof(tid);
+    REQUIRE(make_ca(&ca_der, &ca_len, &ca_key, &ca_key_len) == 0);
+    REQUIRE(make_signed_with_attribs(ca_der, ca_len, ca_key, ca_key_len,
+                                     attribs, 2, &msg, &msg_len) == 0);
+
+    REQUIRE(wolfSSL_GetAllocators(&mf, &ff, &rf) == 0);
+    for (fails = 0; ret == 0 && rc != WOLFCERT_OK; fails++) {
+        WolfCertBuffer env = { 0 };
+        uint8_t* t = NULL;
+        size_t   t_len = 0;
+        uint8_t* signer = NULL;
+        size_t   signer_len = 0;
+        char*    mt = NULL;
+
+        wolfcert_clear_error();
+        g_allocs_left = fails;
+        REQUIRE(wolfSSL_SetAllocators(failing_malloc, failing_free,
+                                      failing_realloc) == 0);
+        rc = wolfcert_scep_parse_pki_message(msg, msg_len, &env, &t, &t_len,
+                NULL, NULL, NULL, NULL, &mt, NULL, &signer, &signer_len,
+                NULL, NULL);
+        REQUIRE(wolfSSL_SetAllocators(mf, ff, rf) == 0);
+        g_allocs_left = -1;
+        /* wolfSSL's PKCS#7 verify can report a failed allocation as a parse
+         * error, so only wolfCert's own allocations must give ERR_MEMORY. */
+        if (rc == WOLFCERT_OK ?
+                (t == NULL || mt == NULL || signer == NULL) :
+                ((rc != WOLFCERT_ERR_MEMORY &&
+                  wolfcert_last_wolfssl_err() == 0) ||
+                 t != NULL || mt != NULL || signer != NULL ||
+                 env.data != NULL)) {
+            fprintf(stderr, "FAIL parse_pki_message with allocation %d "
+                    "failing: %d\n", fails, rc);
+            ret = 1;
+        }
+        WOLFCERT_XFREE(t, NULL);
+        WOLFCERT_XFREE(signer, NULL);
+        WOLFCERT_XFREE(mt, NULL);
+        wolfcert_buffer_free(&env);
+    }
+
+    free(msg);
+    free(ca_der);
+    free(ca_key);
+    REQUIRE(fails > 1);
+    return ret;
+}
+#endif
 
 int main(void)
 {
@@ -2353,7 +2488,13 @@ int main(void)
         return 1;
     if (test_multi_value_signed_attrib())
         return 1;
+#ifdef TEST_ALLOC_FAILURES
+    if (test_parse_reports_oom())
+        return 1;
+#endif
     if (test_text_attrib_printable())
+        return 1;
+    if (test_text_attrib_truncated())
         return 1;
 #ifdef HAVE_ECC
     if (test_envelop_rejects_ecc_ra())

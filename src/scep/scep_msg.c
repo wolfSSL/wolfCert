@@ -729,6 +729,8 @@ WOLFCERT_TEST_VIS int wolfcert_scep_parse_pki_message(const uint8_t* pki_der,
     char*     s;
     uint8_t*  b;
     size_t off, vlen, voff;
+    byte tag;
+    int hdr;
     int seen = 0;
     int bit;
     int rc;
@@ -775,6 +777,9 @@ WOLFCERT_TEST_VIS int wolfcert_scep_parse_pki_message(const uint8_t* pki_der,
                 *out_signer_cert     = sc;
                 *out_signer_cert_len = p7->verifyCertSz;
             }
+            else {
+                rc = WOLFCERT_ERR_MEMORY;
+            }
         }
     }
 
@@ -802,7 +807,7 @@ WOLFCERT_TEST_VIS int wolfcert_scep_parse_pki_message(const uint8_t* pki_der,
     if (out_fail_info)
         *out_fail_info = NULL;
 
-    for (a = p7->decodedAttrib; a != NULL; a = a->next) {
+    for (a = p7->decodedAttrib; rc == WOLFCERT_OK && a != NULL; a = a->next) {
         bit = scep_attr_bit(a);
         if (bit == 0)
             continue;
@@ -814,50 +819,33 @@ WOLFCERT_TEST_VIS int wolfcert_scep_parse_pki_message(const uint8_t* pki_der,
         }
         seen |= bit;
 
-        /* Depending on the wolfSSL version, value is either the outer SET OF
-         * AttributeValue or the bare first AttributeValue. */
-        if (a->valueSz < 2 || a->value == NULL)
-            continue;
-
         v = a->value;
         off = 0;
-
-        if (v[0] == 0x31) {
-            off = 2;
-            if (v[1] == 0x81) {
-                if (a->valueSz < 3)
-                    continue;
-                off = 3;
-            }
-            else if (v[1] == 0x82) {
-                if (a->valueSz < 4)
-                    continue;
-                off = 4;
+        hdr = -1;
+        if (v != NULL) {
+            hdr = der_read_tlv(v, a->valueSz, &tag, &vlen);
+            /* Depending on the wolfSSL version, value is either the outer SET
+             * OF AttributeValue or the bare first AttributeValue. */
+            if (hdr > 0 && tag == 0x31) {
+                off = (size_t)hdr;
+                hdr = der_read_tlv(v + off, vlen, &tag, &vlen);
             }
         }
-
-        if (off + 2 > a->valueSz)
-            continue;
-
-        vlen = v[off + 1];
-        voff = off + 2;
-        if (v[off + 1] == 0x81) {
-            if (off + 3 > a->valueSz)
-                continue;
-
-            vlen = v[off + 2];
-            voff = off + 3;
+        if (hdr < 0) {
+            rc = WOLFCERT_ERR(WOLFCERT_ERR_PROTOCOL, "scep",
+                              "truncated signed attribute in pkiMessage");
+            break;
         }
-        else if (v[off + 1] == 0x82) {
-            if (off + 4 > a->valueSz)
-                continue;
-            vlen = ((size_t)v[off + 2] << 8) | v[off + 3];
-            voff = off + 4;
-        }
+        voff = off + (size_t)hdr;
 
-        if (voff + vlen != a->valueSz) {
+        if (voff + vlen < a->valueSz) {
             rc = WOLFCERT_ERR(WOLFCERT_ERR_PROTOCOL, "scep",
                               "multi-valued signed attribute in pkiMessage");
+            break;
+        }
+        if (vlen == 0) {
+            rc = WOLFCERT_ERR(WOLFCERT_ERR_PROTOCOL, "scep",
+                              "empty signed attribute in pkiMessage");
             break;
         }
 
@@ -865,7 +853,7 @@ WOLFCERT_TEST_VIS int wolfcert_scep_parse_pki_message(const uint8_t* pki_der,
          * which hold no NUL. */
         if ((bit & (SCEP_ATTR_MSG_TYPE | SCEP_ATTR_PKI_STATUS |
                     SCEP_ATTR_FAIL_INFO)) != 0 &&
-            (v[off] != 0x13 || memchr(v + voff, 0, vlen) != NULL)) {
+            (tag != 0x13 || memchr(v + voff, 0, vlen) != NULL)) {
             rc = WOLFCERT_ERR(WOLFCERT_ERR_PROTOCOL, "scep",
                               "signed attribute is not a PrintableString");
             break;
@@ -905,19 +893,23 @@ WOLFCERT_TEST_VIS int wolfcert_scep_parse_pki_message(const uint8_t* pki_der,
 
         if (out_str != NULL) {
             s = (char*)WOLFCERT_XMALLOC(vlen + 1, heap);
-            if (s != NULL) {
-                memcpy(s, v + off, vlen);
-                s[vlen] = '\0';
-                *out_str = s;
+            if (s == NULL) {
+                rc = WOLFCERT_ERR_MEMORY;
+                break;
             }
+            memcpy(s, v + off, vlen);
+            s[vlen] = '\0';
+            *out_str = s;
         }
         else if (out_bin != NULL) {
             b = (uint8_t*)WOLFCERT_XMALLOC(vlen, heap);
-            if (b != NULL) {
-                memcpy(b, v + off, vlen);
-                *out_bin     = b;
-                *out_bin_len = vlen;
+            if (b == NULL) {
+                rc = WOLFCERT_ERR_MEMORY;
+                break;
             }
+            memcpy(b, v + off, vlen);
+            *out_bin     = b;
+            *out_bin_len = vlen;
         }
     }
 

@@ -141,7 +141,7 @@ struct WolfCertServer {
      * retries in wolfcert_io_{recv,send} are allowed only then. */
     int                     poll_timeouts_armed;
     void*                   heap;
-    long                    deadline_ms; /* 0 when none is armed */
+    int64_t                 deadline_ms; /* 0 when none is armed */
 };
 
 /* wolfSSL_read/write on a TLS connection, else recv()/send(). */
@@ -151,7 +151,7 @@ ssize_t wolfcert_io_send(WolfCertServer* srv, int fd, const void* buf, size_t le
 /* Best-effort SO_NOSIGPIPE; a no-op where unsupported or fd is not a socket. */
 WOLFCERT_TEST_VIS void wolfcert_sock_nosigpipe(int fd);
 
-long wolfcert_mono_ms(void);
+int64_t wolfcert_mono_ms(void);
 
 WOLFCERT_API const WolfCertServerOps* wolfcert_est_server_ops(void);
 WOLFCERT_API const WolfCertServerOps* wolfcert_scep_server_ops(void);
@@ -228,6 +228,8 @@ WOLFCERT_TEST_VIS int  wolfcert_http_url_origin(const WolfCertUrl* u, void* heap
 
 /* strncasecmp() with ASCII-only case folding */
 int wolfcert_ascii_ncasecmp(const char* a, const char* b, size_t n);
+/* 1 when the header line's field name is `name`, followed directly by ':'. */
+int wolfcert_http_hdr_is(const char* line, size_t llen, const char* name);
 
 /* `_encode` emits one line; `_encode_mime` wraps at 64 columns, which libest's
  * BIO_f_base64 body parser requires. `_decode` accepts both. */

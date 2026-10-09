@@ -40,9 +40,12 @@ runs:
     - name: Workspace cache key
       id: wskey
       shell: bash
+      env:
+        ZEPHYR_REF: ${{ inputs.zephyr-ref }}
+        WOLFSSL_REF: ${{ inputs.wolfssl-ref }}
+        SCRIPT_HASH: ${{ hashFiles('scripts/ci/zephyr-add-wolfssl.py') }}
       run: |
-        h="${{ hashFiles('scripts/ci/zephyr-add-wolfssl.py') }}"
-        echo "key=zephyr-ws-${RUNNER_OS}-${{ inputs.zephyr-ref }}-${{ inputs.wolfssl-ref }}-${h:0:12}-$(python3 -V | tr -d ' ')" \
+        echo "key=zephyr-ws-${RUNNER_OS}-${ZEPHYR_REF}-${WOLFSSL_REF}-${SCRIPT_HASH:0:12}-$(python3 -V | tr -d ' ')" \
           >> "$GITHUB_OUTPUT"
 
     - name: Restore the Zephyr workspace
@@ -56,6 +59,8 @@ runs:
 
     - name: Initialise the west workspace
       shell: bash
+      env:
+        ZEPHYR_REF: ${{ inputs.zephyr-ref }}
       run: |
         set -euo pipefail
         if [ ! -x "$HOME/zephyr-venv/bin/west" ]; then
@@ -64,14 +69,16 @@ runs:
         fi
         if [ ! -d "$HOME/zephyrproject/.west" ]; then
           "$HOME/zephyr-venv/bin/west" init -m https://github.com/zephyrproject-rtos/zephyr \
-            --mr "${{ inputs.zephyr-ref }}" "$HOME/zephyrproject"
+            --mr "$ZEPHYR_REF" "$HOME/zephyrproject"
         fi
 
     - name: Add wolfSSL to the manifest
       shell: bash
+      env:
+        WOLFSSL_REF: ${{ inputs.wolfssl-ref }}
       run: |
         ./scripts/ci/zephyr-add-wolfssl.py \
-          "$HOME/zephyrproject/zephyr/west.yml" "${{ inputs.wolfssl-ref }}"
+          "$HOME/zephyrproject/zephyr/west.yml" "$WOLFSSL_REF"
 
     - name: Update west modules
       shell: bash
@@ -91,12 +98,16 @@ runs:
 
     - name: Install the Zephyr SDK
       shell: bash
+      env:
+        SDK_VERSION: ${{ inputs.sdk-version }}
+        TOOLCHAIN: ${{ inputs.toolchain }}
       run: |
         set -euo pipefail
-        v="${{ inputs.sdk-version }}"
+        v="$SDK_VERSION"
         cd "$HOME"
-        wget -q "https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v${v}/zephyr-sdk-${v}_linux-x86_64_minimal.tar.xz"
+        wget -q --tries=3 --retry-on-http-error=429,500,502,503,504 \
+          "https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v${v}/zephyr-sdk-${v}_linux-x86_64_minimal.tar.xz"
         tar xf "zephyr-sdk-${v}_linux-x86_64_minimal.tar.xz"
         cd "zephyr-sdk-${v}"
-        ./setup.sh -h -c -t "${{ inputs.toolchain }}"
+        ./setup.sh -h -c -t "$TOOLCHAIN"
         echo "ZEPHYR_SDK_INSTALL_DIR=$HOME/zephyr-sdk-${v}" >> "$GITHUB_ENV"

@@ -56,11 +56,11 @@ void wolfcert_sock_nosigpipe(int fd)
 #endif
 }
 
-long wolfcert_mono_ms(void)
+int64_t wolfcert_mono_ms(void)
 {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+    return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
 /* timeout_ms <= 0 blocks. Returns 0 on success, -1 on error or timeout. */
@@ -133,7 +133,7 @@ int wolfcert_posix_connect(const char* host, int port, int timeout_ms, void* ctx
         return -1;
 
     /* timeout_ms bounds the whole connect across all candidate addresses. */
-    long deadline = (timeout_ms > 0) ? wolfcert_mono_ms() + timeout_ms : 0;
+    int64_t deadline = (timeout_ms > 0) ? wolfcert_mono_ms() + timeout_ms : 0;
 
     int fd = -1;
     for (rp = res; rp != NULL; rp = rp->ai_next) {

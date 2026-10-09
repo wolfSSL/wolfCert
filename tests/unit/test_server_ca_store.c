@@ -17,6 +17,8 @@
  * along with wolfCert.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#define _POSIX_C_SOURCE 200809L
+
 #include <wolfcert/wolfcert.h>
 #include <wolfcert/server.h>
 #include "internal.h"

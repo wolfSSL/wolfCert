@@ -69,6 +69,20 @@ static int assign_rdn(CertName* subject, const char* key, size_t klen,
                 return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "csr",
                     "subject %.*s is %zu bytes, limit %zu", (int)klen, key,
                     vlen, rdn_fields[i].cap - 1);
+            /* wolfSSL encodes these two as PrintableString. */
+            if ((rdn_fields[i].off == offsetof(CertName, country) ||
+                    rdn_fields[i].off == offsetof(CertName, serialDev)) &&
+                    !wolfcert_is_printable_string((const uint8_t*)val, vlen))
+                return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "csr",
+                    "subject %.*s is not a PrintableString", (int)klen, key);
+            /* And emailAddress as IA5String, which is 7-bit. */
+            if (rdn_fields[i].off == offsetof(CertName, email)) {
+                for (size_t j = 0; j < vlen; ++j) {
+                    if ((unsigned char)val[j] >= 0x80)
+                        return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "csr",
+                            "subject %.*s is not an IA5String", (int)klen, key);
+                }
+            }
             memcpy(dst, val, vlen);
             dst[vlen] = '\0';
             return WOLFCERT_OK;
@@ -172,10 +186,17 @@ static int build_san_seq(const WolfCertCertMeta* meta, Cert* cert, void* heap)
 static int ecdsa_sig_for_curve(int curve_id)
 {
     switch (curve_id) {
+#ifdef WOLFSSL_SHA384
         case ECC_SECP384R1:
             return CTC_SHA384wECDSA;
+#endif
+#ifdef WOLFSSL_SHA512
         case ECC_SECP521R1:
             return CTC_SHA512wECDSA;
+#elif defined(WOLFSSL_SHA384)
+        case ECC_SECP521R1:
+            return CTC_SHA384wECDSA;
+#endif
         case ECC_SECP256R1:
         default:
             return CTC_SHA256wECDSA;
@@ -184,7 +205,7 @@ static int ecdsa_sig_for_curve(int curve_id)
 #endif
 
 /* CTC_* signature type for a hash size in bits, or 0 when the key's family
- * has no such hash choice. */
+ * or the wolfSSL build has no such hash. */
 static int sig_type_for_hash(WolfCertKeyType type, int preferred_hash)
 {
 #ifdef WOLFCERT_HAVE_RSA
@@ -192,10 +213,14 @@ static int sig_type_for_hash(WolfCertKeyType type, int preferred_hash)
         switch (preferred_hash) {
             case 256:
                 return CTC_SHA256wRSA;
+#ifdef WOLFSSL_SHA384
             case 384:
                 return CTC_SHA384wRSA;
+#endif
+#ifdef WOLFSSL_SHA512
             case 512:
                 return CTC_SHA512wRSA;
+#endif
             default:
                 return 0;
         }
@@ -206,10 +231,14 @@ static int sig_type_for_hash(WolfCertKeyType type, int preferred_hash)
         switch (preferred_hash) {
             case 256:
                 return CTC_SHA256wECDSA;
+#ifdef WOLFSSL_SHA384
             case 384:
                 return CTC_SHA384wECDSA;
+#endif
+#ifdef WOLFSSL_SHA512
             case 512:
                 return CTC_SHA512wECDSA;
+#endif
             default:
                 return 0;
         }

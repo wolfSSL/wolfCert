@@ -1011,6 +1011,21 @@ static int scep_resolve_ca(const WolfCertServerCfg* srv, const CaPin* pin,
     return rc;
 }
 
+/* A non-200 GetCACaps is a legacy CA with no capabilities; any other failure
+ * stops the command, which reports it. */
+static int scep_fetch_caps(const WolfCertServerCfg* srv, WolfCertScepCaps* caps,
+                           const char* cmd)
+{
+    int rc = wolfcert_scep_get_ca_caps(srv, caps);
+
+    if (rc == WOLFCERT_ERR_HTTP) {
+        fprintf(stderr, "%s: GetCACaps failed, assuming a CA without "
+                        "capabilities (3DES unless --content-cipher)\n", cmd);
+        rc = WOLFCERT_OK;
+    }
+    return rc;
+}
+
 /* Fetch the CA, resolve any pin against it, then run PKCSReq and any polling. */
 static int scep_enroll(const Opts* opts, const WolfCertServerCfg* srv,
                        const CaPin* pin, const WolfCertKey* key,
@@ -1029,8 +1044,9 @@ static int scep_enroll(const Opts* opts, const WolfCertServerCfg* srv,
     rc = scep_resolve_ca(srv, pin, "enroll", &ca_pem, &ca_bundle, &ca_der,
                          &bundle, &bundle_len);
 
+    if (rc == WOLFCERT_OK)
+        rc = scep_fetch_caps(srv, &caps, "enroll");
     if (rc == WOLFCERT_OK) {
-        wolfcert_scep_get_ca_caps(srv, &caps);
         rc = wolfcert_scep_pkcs_req_ex(srv, &caps, ca_der->buffer,
                                        ca_der->length, bundle, bundle_len,
                                        key, csr->data, csr->len, &scep_result);
@@ -1699,7 +1715,14 @@ static int cmd_getcert(int argc, char** argv)
     }
 
     if (ret == 0) {
-        wolfcert_scep_get_ca_caps(&srv, &caps);
+        rc = scep_fetch_caps(&srv, &caps, "getcert");
+        if (rc != WOLFCERT_OK) {
+            fprintf(stderr, "getcert: GetCACaps: %s\n", wolfcert_strerror(rc));
+            ret = 2;
+        }
+    }
+
+    if (ret == 0) {
         rc = wolfcert_scep_get_cert(&srv, &caps, ra_der->buffer, ra_der->length,
                                     bundle, bundle_len,
                                     signer_der->buffer, signer_der->length,

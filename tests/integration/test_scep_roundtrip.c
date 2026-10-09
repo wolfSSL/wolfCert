@@ -187,6 +187,37 @@ static int raw_http_req(uint16_t port, const char* method, const char* target,
     return status;
 }
 
+/* Status code of the reply to a hand-written request, or -1 on no reply. */
+static int raw_request_status(uint16_t port, const char* req)
+{
+    struct sockaddr_in addr;
+    struct timeval tv = { 3, 0 };
+    char resp[64];
+    size_t n = 0;
+    ssize_t r;
+    int fd;
+
+    fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0)
+        return -1;
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) != 0 ||
+            write_all_fd(fd, (const uint8_t*)req, strlen(req)) != 0) {
+        close(fd);
+        return -1;
+    }
+    while (n < 12 && (r = read(fd, resp + n, sizeof(resp) - 1 - n)) > 0)
+        n += (size_t)r;
+    close(fd);
+    resp[n] = '\0';
+
+    return n >= 12 && memcmp(resp, "HTTP/1.1 ", 9) == 0 ? atoi(resp + 9) : -1;
+}
+
 static int raw_http_status(uint16_t port, const char* target, const char* body)
 {
     return raw_http_req(port, "GET", target, NULL,
@@ -1656,6 +1687,15 @@ int main(void)
         tls_cli.verify_server = 1;
         REQUIRE(wolfcert_scep_get_ca_caps(&tls_cli, &tls_caps) != WOLFCERT_ERR_TLS);
     }
+
+    /* A longer field name that starts with Content-Length is not one. */
+    REQUIRE(raw_request_status(wolfcert_server_port(s),
+                "GET /scep?operation=GetCACaps HTTP/1.1\r\n"
+                "Host: 127.0.0.1\r\nContent-Length-Foo: 4\r\n"
+                "Connection: close\r\n\r\n") == 200);
+    REQUIRE(raw_request_status(wolfcert_server_port(s),
+                "GET /scep?operation=GetCACaps HTTP/1.1\r\n"
+                "Host : 127.0.0.1\r\nConnection: close\r\n\r\n") == 400);
 
     /* Malformed GET PKIOperation requests get 400 (RFC 8894 section 4.1). */
     REQUIRE(raw_http_status(wolfcert_server_port(s),

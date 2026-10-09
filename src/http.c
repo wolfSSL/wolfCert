@@ -79,6 +79,14 @@ int wolfcert_ascii_ncasecmp(const char* a, const char* b, size_t n)
     return 0;
 }
 
+int wolfcert_http_hdr_is(const char* line, size_t llen, const char* name)
+{
+    size_t n = strlen(name);
+
+    return llen > n && line[n] == ':' &&
+           wolfcert_ascii_ncasecmp(line, name, n) == 0;
+}
+
 WOLFCERT_TEST_VIS void wolfcert_http_url_free(WolfCertUrl* u)
 {
     if (u == NULL)

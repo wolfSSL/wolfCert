@@ -37,7 +37,6 @@
 #include <netinet/in.h>
 #include <stdio.h>
 #include <string.h>
-#include <strings.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -212,21 +211,21 @@ static int read_request(WolfCertServer* s, int fd, ScepRequest* out, void* heap)
     }
 
     while (read_line(&p, end, &line, &llen) == 0 && llen > 0) {
-        if (llen > 14 && strncasecmp(line, "Content-Length", 14) == 0) {
-            char* c = memchr(line, ':', llen);
-            if (c)
-                out->content_length = (size_t)strtoul(c + 1, NULL, 10);
+        const char* hc = memchr(line, ':', llen);
+
+        /* RFC 9112 section 5.1: whitespace before the colon is a 400. */
+        if (hc != NULL && hc > line && (hc[-1] == ' ' || hc[-1] == '\t'))
+            return WOLFCERT_ERR_PROTOCOL;
+        if (wolfcert_http_hdr_is(line, llen, "Content-Length")) {
+            out->content_length = (size_t)strtoul(hc + 1, NULL, 10);
         }
-        else if (llen > 10 && strncasecmp(line, "Connection", 10) == 0) {
-            char* colon = memchr(line, ':', llen);
-            if (colon != NULL) {
-                const char* v = colon + 1;
-                while (v < line + llen && (*v == ' ' || *v == '\t'))
-                    ++v;
-                size_t vlen = (size_t)(line + llen - v);
-                if (vlen >= 5 && strncasecmp(v, "close", 5) == 0)
-                    out->connection_close = 1;
-            }
+        else if (wolfcert_http_hdr_is(line, llen, "Connection")) {
+            const char* v = hc + 1;
+            while (v < line + llen && (*v == ' ' || *v == '\t'))
+                ++v;
+            size_t vlen = (size_t)(line + llen - v);
+            if (vlen >= 5 && wolfcert_ascii_ncasecmp(v, "close", 5) == 0)
+                out->connection_close = 1;
         }
     }
 
@@ -948,6 +947,10 @@ static int handle_pki_op(WolfCertServer* s, int fd, const ScepRequest* req)
     int rc = wolfcert_scep_parse_pki_message(req->body, req->body_len, &env,
             &tid, &tid_len, &snonce, &snonce_len, &rnonce, &rnonce_len,
             &mt, &ps, &signer_cert, &signer_cert_len, NULL, s->heap);
+    if (rc == WOLFCERT_ERR_MEMORY) {
+        send_text(s, fd, 500, "Server Error", "text/plain", "");
+        goto out;
+    }
     if (rc != WOLFCERT_OK) {
         send_text(s, fd, 400, "Bad Request", "text/plain", "");
         goto out;

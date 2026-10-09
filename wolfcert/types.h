@@ -122,8 +122,9 @@ typedef struct {
      * section 2.4); NULL emits none. At most CTC_NAME_SIZE - 1 chars. */
     const char*        challenge_password;
 
-    /* Optional signature hash size in bits (256 / 384 / 512); 0 uses the key
-     * type's default. Ed25519, Ed448 and ML-DSA ignore it. */
+    /* Optional signature hash size in bits (256 / 384 / 512); 0, or a hash
+     * the wolfSSL build lacks, uses the key type's default. Ed25519, Ed448
+     * and ML-DSA ignore it. */
     int                preferred_hash;
 
     /* Optional: invoked after standard fields are set, before signing. */

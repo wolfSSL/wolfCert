@@ -41,7 +41,6 @@
 
 #include <stdio.h>
 #include <string.h>
-#include <strings.h>
 
 static char* append_query(const char* base, const char* op, void* heap)
 {
@@ -95,7 +94,7 @@ static int has_cap(const char* body, size_t len, const char* needle)
         if (tlen > 0 && body[start + tlen - 1] == '\r')
             --tlen;
 
-        if (tlen == nl && strncasecmp(body + start, needle, nl) == 0)
+        if (tlen == nl && wolfcert_ascii_ncasecmp(body + start, needle, nl) == 0)
             return 1;
 
         if (i < len)

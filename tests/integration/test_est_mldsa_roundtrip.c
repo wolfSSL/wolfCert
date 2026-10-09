@@ -114,6 +114,7 @@ int main(void)
         .protocol        = WOLFCERT_PROTO_EST,
         .bind_host       = "127.0.0.1",
         .bind_port       = 0,
+        .ca_store        = test_ca_store(),
         .http_basic_user = "alice",
         .http_basic_pass = "hunter2",
         .tls_cert_pem    = tls_cert, .tls_cert_pem_len = tls_cert_len,
@@ -156,6 +157,7 @@ int main(void)
     wolfcert_buffer_free(&ca_pem);
     free(tls_cert);
     free(tls_key);
+    test_ca_store_close();
     wolfcert_cleanup();
 
     if (rc == 0)

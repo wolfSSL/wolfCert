@@ -36,6 +36,8 @@
 #include <wolfssl/wolfcrypt/ecc.h>
 #endif
 #include <wolfssl/wolfcrypt/random.h>
+#define USE_CERT_BUFFERS_2048
+#include <wolfssl/certs_test.h>
 #ifndef NO_SHA
 #include <wolfssl/wolfcrypt/sha.h>
 #endif
@@ -55,6 +57,43 @@
             return 1;                                                       \
         }                                                                   \
     } while (0)
+
+static size_t g_rsa_drawn;
+
+/* Decodes the next of wolfSSL's six RSA-2048 test keys, failing once a test
+ * has drawn all six, so no test ever reuses one. */
+static int next_rsa_key(RsaKey* key)
+{
+    static const struct {
+        const unsigned char* der;
+        word32               len;
+    } pool[] = {
+        { ca_key_der_2048,        sizeof(ca_key_der_2048) },
+        { server_key_der_2048,    sizeof(server_key_der_2048) },
+        { client_key_der_2048,    sizeof(client_key_der_2048) },
+        { rsa_key_der_2048,       sizeof(rsa_key_der_2048) },
+        { tsa_key_der_2048,       sizeof(tsa_key_der_2048) },
+        { tsa_chain_key_der_2048, sizeof(tsa_chain_key_der_2048) },
+    };
+    size_t i = g_rsa_drawn;
+    word32 idx = 0;
+
+    if (i >= sizeof(pool) / sizeof(pool[0])) {
+        fprintf(stderr, "test drew more than %zu RSA keys\n",
+                sizeof(pool) / sizeof(pool[0]));
+        return -1;
+    }
+
+    g_rsa_drawn++;
+    return wc_RsaPrivateKeyDecode(pool[i].der, &idx, key, pool[i].len);
+}
+
+/* Run fn with the whole key pool available. */
+static int run_test(int (*fn)(void))
+{
+    g_rsa_drawn = 0;
+    return fn();
+}
 
 /* Throwaway self-signed RSA CA cert and key, both DER; free with free(). */
 static int make_ca(uint8_t** cert_out, size_t* cert_out_len,
@@ -76,7 +115,7 @@ static int make_ca(uint8_t** cert_out, size_t* cert_out_len,
         return -1;
     }
 
-    if (ret == 0 && wc_MakeRsaKey(&key, 2048, WC_RSA_EXPONENT, &rng) != 0)
+    if (ret == 0 && next_rsa_key(&key) != 0)
         ret = -1;
 
     if (ret == 0) {
@@ -163,7 +202,7 @@ static int make_signed_cert(const uint8_t* ca_der, size_t ca_der_len,
                                (word32)ca_key_len) != 0)
         ret = -1;
 
-    if (ret == 0 && wc_MakeRsaKey(&sub_key, 2048, WC_RSA_EXPONENT, &rng) != 0)
+    if (ret == 0 && next_rsa_key(&sub_key) != 0)
         ret = -1;
 
     if (ret == 0) {
@@ -563,7 +602,7 @@ static int test_signer_subject_matches_csr(void)
 
     REQUIRE(wc_InitRng(&rng) == 0);
     REQUIRE(wc_InitRsaKey(&key, NULL) == 0);
-    REQUIRE(wc_MakeRsaKey(&key, 2048, WC_RSA_EXPONENT, &rng) == 0);
+    REQUIRE(next_rsa_key(&key) == 0);
 
     REQUIRE(make_csr(&key, &rng, "device-4711.example.org", "Widgets Inc",
                      &csr_der, &csr_len) == 0);
@@ -611,7 +650,7 @@ static int test_signer_key_usage(void)
 
     REQUIRE(wc_InitRng(&rng) == 0);
     REQUIRE(wc_InitRsaKey(&key, NULL) == 0);
-    REQUIRE(wc_MakeRsaKey(&key, 2048, WC_RSA_EXPONENT, &rng) == 0);
+    REQUIRE(next_rsa_key(&key) == 0);
 
     REQUIRE(make_csr(&key, &rng, "device-9799.example.org", "Widgets Inc",
                      &csr_der, &csr_len) == 0);
@@ -941,10 +980,10 @@ static int test_zero_length_args_rejected(void)
                                 .server_url = "http://127.0.0.1:1/scep" };
     uint8_t            blob[4] = { 1, 2, 3, 4 };
     WolfCertKey*       key = NULL;
-    WolfCertKeyCfg     kcfg = { .type = WOLFCERT_KEY_RSA, .param = 2048,
-                                .dev_id = WOLFCERT_DEVID_SOFTWARE };
 
-    REQUIRE(wolfcert_key_generate(&kcfg, &key) == WOLFCERT_OK);
+    REQUIRE(wolfcert_key_from_pem(client_key_der_2048,
+                                  sizeof(client_key_der_2048), NULL, &key)
+            == WOLFCERT_OK);
 
 #define REJECTS(what, call)                                \
     do {                                                   \
@@ -1016,10 +1055,10 @@ static int test_result_defined_on_early_return(void)
     WolfCertScepCaps   caps = { 0 };
     uint8_t            blob[4] = { 1, 2, 3, 4 };
     WolfCertKey*       key = NULL;
-    WolfCertKeyCfg     kcfg = { .type = WOLFCERT_KEY_RSA, .param = 2048,
-                                .dev_id = WOLFCERT_DEVID_SOFTWARE };
 
-    REQUIRE(wolfcert_key_generate(&kcfg, &key) == WOLFCERT_OK);
+    REQUIRE(wolfcert_key_from_pem(client_key_der_2048,
+                                  sizeof(client_key_der_2048), NULL, &key)
+            == WOLFCERT_OK);
 
 #define POISON_AND_CALL(what, call)                        \
     do {                                                   \
@@ -1248,7 +1287,7 @@ static int test_issuer_and_subject_issuer_name(void)
 
     REQUIRE(wc_InitRng(&rng) == 0);
     REQUIRE(wc_InitRsaKey(&key, NULL) == 0);
-    REQUIRE(wc_MakeRsaKey(&key, 2048, WC_RSA_EXPONENT, &rng) == 0);
+    REQUIRE(next_rsa_key(&key) == 0);
 
     REQUIRE(make_ca(&ca_der, &ca_len, &ca_key_der, &ca_key_len) == 0);
     REQUIRE(make_signed_cert(ca_der, ca_len, ca_key_der, ca_key_len,
@@ -1649,7 +1688,7 @@ static int test_signer_subject_fallback(void)
 
     REQUIRE(wc_InitRng(&rng) == 0);
     REQUIRE(wc_InitRsaKey(&key, NULL) == 0);
-    REQUIRE(wc_MakeRsaKey(&key, 2048, WC_RSA_EXPONENT, &rng) == 0);
+    REQUIRE(next_rsa_key(&key) == 0);
 
     REQUIRE(make_csr(&key, &rng, "", "", &csr, &csr_len) == 0);
 
@@ -2307,56 +2346,56 @@ int main(void)
 {
     REQUIRE(test_static_mem_init() == 0);
     REQUIRE(wolfcert_init(NULL) == WOLFCERT_OK);
-    if (test_getca_url())
+    if (run_test(test_getca_url))
         return 1;
-    if (test_scep_rejects_est_cfg())
+    if (run_test(test_scep_rejects_est_cfg))
         return 1;
-    if (test_envelop_cipher_oid())
+    if (run_test(test_envelop_cipher_oid))
         return 1;
-    if (test_ca_fingerprint())
+    if (run_test(test_ca_fingerprint))
         return 1;
-    if (test_pki_get_url())
+    if (run_test(test_pki_get_url))
         return 1;
-    if (test_non_success_has_no_envelope())
+    if (run_test(test_non_success_has_no_envelope))
         return 1;
-    if (test_signer_subject_fallback())
+    if (run_test(test_signer_subject_fallback))
         return 1;
-    if (test_signer_subject_matches_csr())
+    if (run_test(test_signer_subject_matches_csr))
         return 1;
-    if (test_signer_key_usage())
+    if (run_test(test_signer_key_usage))
         return 1;
-    if (test_issuer_and_subject_issuer_name())
+    if (run_test(test_issuer_and_subject_issuer_name))
         return 1;
-    if (test_issuer_and_serial())
+    if (run_test(test_issuer_and_serial))
         return 1;
-    if (test_pem_has_cert())
+    if (run_test(test_pem_has_cert))
         return 1;
-    if (test_result_defined_on_early_return())
+    if (run_test(test_result_defined_on_early_return))
         return 1;
-    if (test_zero_length_args_rejected())
+    if (run_test(test_zero_length_args_rejected))
         return 1;
-    if (test_cert_rep_signer_trust())
+    if (run_test(test_cert_rep_signer_trust))
         return 1;
-    if (test_cert_rep_txid_and_type())
+    if (run_test(test_cert_rep_txid_and_type))
         return 1;
-    if (test_long_transaction_id())
+    if (run_test(test_long_transaction_id))
         return 1;
-    if (test_next_ca_response_is_signed())
+    if (run_test(test_next_ca_response_is_signed))
         return 1;
-    if (test_next_ca_response_signer_trust())
+    if (run_test(test_next_ca_response_signer_trust))
         return 1;
-    if (test_signer_is_verified_cert())
+    if (run_test(test_signer_is_verified_cert))
         return 1;
-    if (test_signer_matches_any_bundle_cert())
+    if (run_test(test_signer_matches_any_bundle_cert))
         return 1;
-    if (test_duplicate_signed_attrib())
+    if (run_test(test_duplicate_signed_attrib))
         return 1;
-    if (test_multi_value_signed_attrib())
+    if (run_test(test_multi_value_signed_attrib))
         return 1;
-    if (test_text_attrib_printable())
+    if (run_test(test_text_attrib_printable))
         return 1;
 #ifdef HAVE_ECC
-    if (test_envelop_rejects_ecc_ra())
+    if (run_test(test_envelop_rejects_ecc_ra))
         return 1;
 #endif
     wolfcert_cleanup();

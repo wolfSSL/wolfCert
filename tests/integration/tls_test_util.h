@@ -38,6 +38,7 @@
 #include <netinet/in.h>
 #include <poll.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -246,6 +247,37 @@ fail:
     test_signkey_free(&key);
     wc_FreeRng(&rng);
     return -1;
+}
+
+static inline WolfCertStoreOps** test_ca_store_slot(void)
+{
+    static WolfCertStoreOps* store = NULL;
+
+    return &store;
+}
+
+/* One CA store for every test server in the process, so only the first
+ * server start generates a CA. */
+static inline WolfCertStoreOps* test_ca_store(void)
+{
+    WolfCertStoreOps** store = test_ca_store_slot();
+
+    if (*store == NULL) {
+        *store = wolfcert_store_memory_open(NULL);
+        if (*store == NULL) {
+            fprintf(stderr, "test_ca_store: cannot open the memory store\n");
+            exit(1);
+        }
+    }
+    return *store;
+}
+
+static inline void test_ca_store_close(void)
+{
+    WolfCertStoreOps** store = test_ca_store_slot();
+
+    wolfcert_store_memory_close(*store);
+    *store = NULL;
 }
 
 /* Self-signed TLS server identity (cert + key, PEM) for 127.0.0.1. */

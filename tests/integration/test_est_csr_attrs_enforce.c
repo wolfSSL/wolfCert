@@ -367,6 +367,7 @@ int main(void)
     WolfCertServerCfgSrv cfg = {
         .protocol = WOLFCERT_PROTO_EST,
         .bind_host = "127.0.0.1", .bind_port = 0,
+        .ca_store = test_ca_store(),
         .csr_attributes_der = policy.data,
         .csr_attributes_len = policy.len,
         .est_require_csr_attributes = 1,
@@ -395,6 +396,7 @@ int main(void)
     WolfCertServerCfgSrv cfg2 = {
         .protocol = WOLFCERT_PROTO_EST,
         .bind_host = "127.0.0.1", .bind_port = 0,
+        .ca_store = test_ca_store(),
         .csr_attributes_der = policy2.data,
         .csr_attributes_len = policy2.len,
         .est_require_csr_attributes = 1,
@@ -422,6 +424,7 @@ int main(void)
     WolfCertServerCfgSrv cfg_raw = {
         .protocol = WOLFCERT_PROTO_EST,
         .bind_host = "127.0.0.1", .bind_port = 0,
+        .ca_store = test_ca_store(),
         .csr_attributes_der = policy_raw.data,
         .csr_attributes_len = policy_raw.len,
         .est_require_csr_attributes = 1,
@@ -449,6 +452,7 @@ int main(void)
     WolfCertServerCfgSrv cfg_bare = {
         .protocol = WOLFCERT_PROTO_EST,
         .bind_host = "127.0.0.1", .bind_port = 0,
+        .ca_store = test_ca_store(),
         .http_basic_user = "alice", .http_basic_pass = "secret",
         .tls_cert_pem = tls_cert, .tls_cert_pem_len = tls_cert_len,
         .tls_key_pem  = tls_key,  .tls_key_pem_len  = tls_key_len,
@@ -468,6 +472,7 @@ int main(void)
     if (rc != 0)
         return rc;
 
+    test_ca_store_close();
     wolfcert_cleanup();
     printf("OK\n");
     return 0;

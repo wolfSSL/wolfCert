@@ -28,6 +28,7 @@
 #include <wolfcert/scep.h>
 #include <wolfcert/server.h>
 #include "internal.h"
+#include "tls_test_util.h"
 
 #include <wolfssl/ssl.h>
 #include <wolfssl/wolfcrypt/asn.h>
@@ -351,6 +352,7 @@ int main(void)
     WolfCertServerCfgSrv cfg = {
         .protocol = WOLFCERT_PROTO_SCEP,
         .bind_host = "127.0.0.1", .bind_port = 0,
+        .ca_store = test_ca_store(),
         .scep_enable_get_cert = 1,
     };
     WolfCertServer* s = NULL;
@@ -370,6 +372,7 @@ int main(void)
     WolfCertServerCfgSrv cfg_off = {
         .protocol = WOLFCERT_PROTO_SCEP,
         .bind_host = "127.0.0.1", .bind_port = 0,
+        .ca_store = test_ca_store(),
     };
     WolfCertServer* s_off = NULL;
     REQUIRE(wolfcert_server_start(&cfg_off, &s_off) == WOLFCERT_OK);
@@ -384,6 +387,7 @@ int main(void)
     if (rc != 0)
         return rc;
 
+    test_ca_store_close();
     wolfcert_cleanup();
     printf("OK\n");
     return 0;

@@ -1,7 +1,6 @@
 common:
   tags:
     - wolfcert
-    - slow
   harness: console
   harness_config:
     type: one_line
@@ -9,7 +8,7 @@ common:
       - "WOLFCERT TEST RESULT: 0"
 tests:
   wolfcert.unit.scep_msg:
-    timeout: 900
+    timeout: 180
     platform_allow: qemu_x86
     integration_platforms:
       - qemu_x86

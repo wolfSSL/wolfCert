@@ -31,6 +31,7 @@
 #include <wolfcert/scep.h>
 #include <wolfcert/server.h>
 #include "internal.h"
+#include "tls_test_util.h"
 
 #include <wolfssl/ssl.h>
 #include <wolfssl/wolfcrypt/asn_public.h>
@@ -506,7 +507,8 @@ static int next_ca_disabled_path(void)
 {
     /* GetNextCACert is not advertised and answers WOLFCERT_ERR_NOT_FOUND. */
     WolfCertServerCfgSrv cfg = { .protocol = WOLFCERT_PROTO_SCEP,
-                                 .bind_host = "127.0.0.1", .bind_port = 0 };
+                                 .bind_host = "127.0.0.1", .bind_port = 0,
+                                 .ca_store = test_ca_store() };
     WolfCertServer* s = NULL;
     REQUIRE(wolfcert_server_start(&cfg, &s) == WOLFCERT_OK);
     pthread_t tid;
@@ -546,6 +548,7 @@ int main(void)
     WolfCertServerCfgSrv cfg_pending = {
         .protocol = WOLFCERT_PROTO_SCEP,
         .bind_host = "127.0.0.1", .bind_port = 0,
+        .ca_store = test_ca_store(),
         .scep_require_approval = 1,
     };
     WolfCertServer* s1 = NULL;
@@ -562,6 +565,7 @@ int main(void)
     WolfCertServerCfgSrv cfg_next = {
         .protocol = WOLFCERT_PROTO_SCEP,
         .bind_host = "127.0.0.1", .bind_port = 0,
+        .ca_store = test_ca_store(),
         .scep_enable_next_ca = 1,
     };
     WolfCertServer* s2 = NULL;
@@ -579,6 +583,7 @@ int main(void)
     if (rc != 0)
         return rc;
 
+    test_ca_store_close();
     wolfcert_cleanup();
     printf("OK\n");
     return 0;

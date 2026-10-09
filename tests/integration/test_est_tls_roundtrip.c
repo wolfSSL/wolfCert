@@ -139,6 +139,7 @@ static int test_client_reenroll_keeps_identity(const uint8_t* tls_cert,
         .protocol         = WOLFCERT_PROTO_EST,
         .bind_host        = "127.0.0.1",
         .bind_port        = 0,
+        .ca_store         = test_ca_store(),
         .tls_cert_pem     = tls_cert, .tls_cert_pem_len = tls_cert_len,
         .tls_key_pem      = tls_key,  .tls_key_pem_len  = tls_key_len,
     };
@@ -299,6 +300,7 @@ int main(void)
         .protocol         = WOLFCERT_PROTO_EST,
         .bind_host        = "127.0.0.1",
         .bind_port        = 0,
+        .ca_store         = test_ca_store(),
         .tls_cert_pem     = tls_cert, .tls_cert_pem_len = tls_cert_len,
         .tls_key_pem      = tls_key,  .tls_key_pem_len  = tls_key_len,
     };
@@ -336,6 +338,7 @@ int main(void)
         .protocol         = WOLFCERT_PROTO_EST,
         .bind_host        = "127.0.0.1",
         .bind_port        = 0,
+        .ca_store         = test_ca_store(),
         .tls_cert_pem     = tls_cert, .tls_cert_pem_len = tls_cert_len,
         .tls_key_pem      = tls_key,  .tls_key_pem_len  = tls_key_len,
         .est_allow_anonymous_enroll = 1,
@@ -408,6 +411,7 @@ int main(void)
     wolfcert_key_free(dk);
     free(tls_cert);
     free(tls_key);
+    test_ca_store_close();
     wolfcert_cleanup();
     printf("OK\n");
     return 0;

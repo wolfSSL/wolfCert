@@ -409,6 +409,7 @@ static int test_reenroll_mismatch_not_parked(const uint8_t* tls_cert, size_t tls
         .protocol              = WOLFCERT_PROTO_EST,
         .bind_host             = "127.0.0.1",
         .bind_port             = 0,
+        .ca_store              = test_ca_store(),
         .tls_cert_pem          = tls_cert, .tls_cert_pem_len       = tls_cert_len,
         .tls_key_pem           = tls_key,  .tls_key_pem_len        = tls_key_len,
         .tls_client_ca_pem     = cli_cert, .tls_client_ca_pem_len  = cli_cert_len,
@@ -521,6 +522,7 @@ int main(void)
         .protocol              = WOLFCERT_PROTO_EST,
         .bind_host             = "127.0.0.1",
         .bind_port             = 0,
+        .ca_store              = test_ca_store(),
         .tls_cert_pem          = tls_cert, .tls_cert_pem_len       = tls_cert_len,
         .tls_key_pem           = tls_key,  .tls_key_pem_len        = tls_key_len,
         .tls_client_ca_pem     = cli_cert, .tls_client_ca_pem_len  = cli_cert_len,
@@ -623,6 +625,7 @@ int main(void)
     free(tls_key);
     free(cli_cert);
     free(cli_key);
+    test_ca_store_close();
     wolfcert_cleanup();
     printf("OK\n");
     return 0;

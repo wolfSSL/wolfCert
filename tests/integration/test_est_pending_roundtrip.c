@@ -507,6 +507,7 @@ int main(void)
     WolfCertServerCfgSrv cfg = {
         .protocol               = WOLFCERT_PROTO_EST,
         .bind_host              = "127.0.0.1", .bind_port = 0,
+        .ca_store               = test_ca_store(),
         .est_require_approval   = 1,
         .est_retry_after_sec    = 1,
         .tls_cert_pem           = tls_cert, .tls_cert_pem_len = tls_cert_len,
@@ -524,6 +525,7 @@ int main(void)
 
     free(tls_cert);
     free(tls_key);
+    test_ca_store_close();
     wolfcert_cleanup();
     if (rc != 0)
         return rc;

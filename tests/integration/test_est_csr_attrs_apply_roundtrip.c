@@ -246,6 +246,7 @@ int main(void)
     WolfCertServerCfgSrv cfg = {
         .protocol = WOLFCERT_PROTO_EST,
         .bind_host = "127.0.0.1", .bind_port = 0,
+        .ca_store = test_ca_store(),
         .csr_attributes_der = policy.data,
         .csr_attributes_len = policy.len,
         .tls_cert_pem = tls_cert, .tls_cert_pem_len = tls_cert_len,
@@ -278,6 +279,7 @@ int main(void)
     if (rc != 0)
         return rc;
 
+    test_ca_store_close();
     wolfcert_cleanup();
     printf("OK\n");
     return 0;

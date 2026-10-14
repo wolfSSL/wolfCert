@@ -323,29 +323,69 @@ hosts.
 ### 4.2 CryptoCb offload (TPM / HSM / PKCS#11 / custom)
 
 wolfCert uses wolfSSL's CryptoCb `devId` as an opaque token. The application
-registers the backend; wolfCert threads the devId through every crypto call:
+registers the backend; wolfCert threads the devId into every key it creates:
 
 ```c
 /* Application startup: register the CryptoCb with wolfSSL. */
 wc_CryptoCb_RegisterDevice(MY_DEVID, my_callback, my_ctx);
 
-/* Generate a key that lives behind the CryptoCb. */
+/* Generate a key inside the backend, under an id the backend defines. */
+static const uint8_t id[] = { 0x01, 0x80, 0x00, 0x01 };
 WolfCertKeyCfg cfg = {
-    .type      = WOLFCERT_KEY_ECC,
-    .param     = 256,
-    .dev_id    = MY_DEVID,
-    .key_label = "tpm:/handles/0x01800001",  /* optional */
+    .type       = WOLFCERT_KEY_ECC,
+    .param      = 256,
+    .dev_id     = MY_DEVID,
+    .key_id     = id,
+    .key_id_len = sizeof(id),
 };
 WolfCertKey* key;
 wolfcert_key_generate(&cfg, &key);
 ```
 
-From there, every wolfSSL crypto call on the key — CSR signing, TLS handshake
-client-auth, SCEP pkiMessage signing — routes through `my_callback`. Pass
-`WOLFCERT_DEVID_SOFTWARE` (`-1`) to force software operation. CryptoCb-resident
-keys typically can't be exported in PEM, so `wolfcert_key_to_pem` will fail;
-persist the key by its `key_label` instead and resolve it against your backend
-on the next boot. See `examples/enroll_cryptocb.c` for a full example.
+The `key_id` bytes are opaque to wolfCert. They reach the backend in the
+wolfCrypt key's `id` field, the same way wolfPKCS11, wolfHSM and the hardware
+ports name their keys, and the backend decides what they mean (a PKCS#11
+`CKA_ID`, a TPM handle, a key-store slot). The backend generates the key there
+and returns only its public half.
+
+From there, every private-key operation on the key routes through
+`my_callback`: CSR signing, and TLS client authentication by id or for EST
+`/simplereenroll`. wolfSSL also hands the backend public-key operations on
+that id, such as the check of its own RSA signature in TLS, so the backend
+must serve those too. Pass `WOLFCERT_DEVID_SOFTWARE` (`-1`) to force software
+operation.
+
+A `dev_id` without a `key_id` only offloads the computation. The key itself
+is an ordinary wolfCrypt key in host memory, and `wolfcert_key_to_pem` exports
+it. Only a `key_id` keeps the key in the backend.
+
+For TLS client authentication, `WolfCertServerCfg.client_key_src` says what
+`client_key` holds and where the handshake signs with it:
+
+| `client_key_src` | `client_key` holds | Signed |
+|---|---|---|
+| `WOLFCERT_CLIENT_KEY_BUFFER` (default) | PEM or DER | in software |
+| `WOLFCERT_CLIENT_KEY_ID` | the key id | in `client_key_dev_id` |
+
+EST `/simplereenroll` picks the source from the key being renewed.
+
+A key with a `key_id` never leaves the backend: `wolfcert_key_to_pem` and
+`wolfcert_key_to_der` fail with `WOLFCERT_ERR_UNSUPPORTED`. Persist the id and
+the issued certificate instead. TLS client authentication needs only those
+two: the certificate in `client_cert` and the id in `client_key`, with
+`client_key_src = WOLFCERT_CLIENT_KEY_ID` and the device in
+`client_key_dev_id`. A source other than `_BUFFER` without the certificate
+and key returns `WOLFCERT_ERR_BAD_ARG`. Re-enrollment also needs a key
+handle, because the CSR carries the public key:
+rebuild it with `wolfcert_key_from_id(&cfg, cert, cert_len, &key)`, which takes
+the public half from the certificate since a backend need not be able to
+return it.
+
+RSA, ECC and ML-DSA keys take a `key_id`; Ed25519 and Ed448 do not yet. SCEP
+does not support a `key_id` key: its PKCS#7 signing and decryption take the
+private key as DER, so the SCEP calls return `WOLFCERT_ERR_UNSUPPORTED`. A
+`key_id` needs wolfSSL built with `WOLF_CRYPTO_CB` and `WOLF_PRIVATE_KEY_ID`.
+See `examples/enroll_cryptocb.c` for the registration pattern.
 
 ### 4.3 Keep-alive sessions and non-blocking I/O
 
@@ -575,7 +615,8 @@ wolfcert_set_log_cb(my_log, NULL);
 /* 2. Key generation (stays in hardware) */
 WolfCertKey* key;
 WolfCertKeyCfg kcfg = { .type = WOLFCERT_KEY_ECC, .param = 256,
-                        .dev_id = MY_DEVID };
+                        .dev_id = MY_DEVID,
+                        .key_id = my_key_id, .key_id_len = my_key_id_len };
 wolfcert_key_generate(&kcfg, &key);
 
 /* 3. CSR build */
@@ -602,7 +643,8 @@ wolfcert_est_session_open(&srv, &s);
 run_nb_loop(s);                              /* pattern from section 4.3 */
 wolfcert_est_session_close(s);
 
-/* 5. Persist the certificate; the key stays behind the CryptoCb */
+/* 5. Persist the certificate; the key stays behind the CryptoCb, and
+ * wolfcert_key_from_id rebuilds the handle for re-enrollment */
 flash_write("device.crt", cert.data, cert.len);
 
 /* 6. Shutdown */

@@ -102,7 +102,7 @@ Email **support@wolfssl.com** instead, and please keep the issue private until a
 `README.md` has the build and test steps, `docs/ARCHITECTURE.md` the module layout, and `AGENTS.md` the wolfSSL features wolfCert needs. On top of the rules above, wolfCert asks for:
 
 - **Heap hints on every allocation.** Allocate through `WOLFCERT_XMALLOC`, `WOLFCERT_XREALLOC` and `WOLFCERT_XFREE` from `wolfcert/memory.h` and pass the hint on to wolfSSL. A public API takes an optional `heap`, directly or in its config struct, and falls back to `wolfcert_default_heap()` when it is NULL.
-- **No CryptoCb registration.** wolfCert never calls `wc_CryptoCb_RegisterDevice`; the application registers its backend and passes the `dev_id` in `WolfCertKeyCfg`.
+- **No CryptoCb registration.** wolfCert never calls `wc_CryptoCb_RegisterDevice`; the application registers its backend and passes the `dev_id` in `WolfCertKeyCfg`. A backend-resident key is named by `WolfCertKeyCfg.key_id` (`wc_*_init_id`), never by a label, and is never exported.
 - **A closed set of error codes.** Report every error with `WOLFCERT_ERR`, `WOLFCERT_ERR_WC` or `WOLFCERT_ERR_RC_WC` from `src/internal.h`, and keep `wolfcert_strerror` covering every code in `wolfcert/errors.h`.
 - **Visibility.** Public and internal functions both use the `wolfcert_` prefix. The CMake build hides every symbol by default, so public prototypes in `wolfcert/*.h` carry `WOLFCERT_API`. Mark an internal function that the in-tree tests call `WOLFCERT_TEST_VIS`, which exports it only in a `WOLFCERT_BUILD_TESTING` build.
 - **Append-only public structs.** The v0.1.0 ABI is released, so a new field in a public struct goes at its end.

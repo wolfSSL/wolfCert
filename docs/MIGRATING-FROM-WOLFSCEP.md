@@ -190,7 +190,7 @@ Link against `libwolfcert` and include `<wolfcert/wolfcert.h>`, which pulls in t
 
 - **EST (RFC 7030)** for the same lifecycle over TLS, with ECC, Ed25519, Ed448 and ML-DSA keys, none of which SCEP permits.
 - **Keep-alive sessions with `_nb` calls**, so several operations share one connection and an event loop can drive them through `WOLFCERT_ERR_WANT_READ` and `WOLFCERT_ERR_WANT_WRITE`.
-- **CryptoCb offload.** Register your TPM, HSM or PKCS#11 backend with wolfSSL and pass the resulting `dev_id` in `WolfCertKeyCfg`; the private key never has to be in memory.
+- **CryptoCb offload.** Register your TPM, HSM or PKCS#11 backend with wolfSSL and pass the resulting `dev_id` in `WolfCertKeyCfg`. With the key's `key_id` as well, the private key stays in the backend (`docs/ARCHITECTURE.md` section 4.2). SCEP itself still needs a software key.
 - **Static memory.** Every allocation carries a heap hint, so wolfCert runs on a wolfSSL built `WOLFSSL_NO_MALLOC` with a static pool.
 - **A tested interop matrix**, described in `INTEROP.md`.
 

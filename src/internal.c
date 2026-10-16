@@ -472,16 +472,7 @@ WOLFCERT_TEST_VIS void wolfcert_hex_encode(const uint8_t* in, size_t in_len,
 
 WOLFCERT_TEST_VIS int wolfcert_buffer_is_der(const uint8_t* buf, size_t len)
 {
-    size_t i = 0;
-    if (buf == NULL)
-        return 0;
-
-    while (i < len && (buf[i] == ' ' || buf[i] == '\t' ||
-                       buf[i] == '\r' || buf[i] == '\n')) {
-        ++i;
-    }
-
-    return (i < len && buf[i] == 0x30) ? 1 : 0;
+    return (buf != NULL && len > 0 && buf[0] == 0x30) ? 1 : 0;
 }
 
 int wolfcert_pem_cert_to_der(const uint8_t* pem, size_t pem_len,

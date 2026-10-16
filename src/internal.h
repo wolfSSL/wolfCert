@@ -334,7 +334,6 @@ int wolfcert_csr_meta_sets_identity(const WolfCertCertMeta* meta);
 WOLFCERT_TEST_VIS int wolfcert_find_san(const DecodedCert* dc,
                                         const byte** san, word32* san_len);
 
-/* 1 if the buffer starts with a SEQUENCE tag after whitespace, else 0. */
 WOLFCERT_TEST_VIS int wolfcert_buffer_is_der(const uint8_t* buf, size_t len);
 
 /* Degenerate (certs-only) PKCS#7 helpers. */

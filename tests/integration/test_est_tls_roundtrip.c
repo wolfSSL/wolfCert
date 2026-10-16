@@ -420,6 +420,26 @@ int main(void)
     wolfcert_buffer_free(&ca_pem_der);
     wc_FreeDer(&ta_der);
 
+    /* The anchor as copied from openssl s_client -showcerts, " 0 s:" first. */
+    static const char chain_hdr[] = " 0 s:CN=127.0.0.1\n   i:CN=127.0.0.1\n";
+    size_t ta_chain_len = sizeof(chain_hdr) - 1 + tls_cert_len;
+    uint8_t* ta_chain = (uint8_t*)malloc(ta_chain_len);
+    REQUIRE(ta_chain != NULL);
+    memcpy(ta_chain, chain_hdr, sizeof(chain_hdr) - 1);
+    memcpy(ta_chain + sizeof(chain_hdr) - 1, tls_cert, tls_cert_len);
+    WolfCertServerCfg cli_chain = {
+        .protocol          = WOLFCERT_PROTO_EST,
+        .server_url        = url,
+        .trust_anchors     = ta_chain,
+        .trust_anchors_len = ta_chain_len,
+        .verify_server     = 1,
+    };
+    WolfCertBuffer ca_pem_chain = { 0 };
+    REQUIRE(wolfcert_est_get_cacerts(&cli_chain, &ca_pem_chain) == WOLFCERT_OK);
+    REQUIRE(ca_pem_chain.len > 0);
+    wolfcert_buffer_free(&ca_pem_chain);
+    free(ta_chain);
+
     REQUIRE(test_client_reenroll_keeps_identity(tls_cert, tls_cert_len,
                                                 tls_key, tls_key_len) == 0);
 

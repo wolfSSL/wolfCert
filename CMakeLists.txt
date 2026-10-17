@@ -373,8 +373,8 @@ endif()
 add_library(wolfCert::wolfcert ALIAS wolfcert)
 
 set_target_properties(wolfcert PROPERTIES
-    VERSION   ${PROJECT_VERSION}
-    SOVERSION ${PROJECT_VERSION_MAJOR}
+    VERSION   1.0.0
+    SOVERSION 1
     C_VISIBILITY_PRESET hidden)
 
 target_include_directories(wolfcert

@@ -52,7 +52,7 @@ endif
 endif
 
 libwolfcert_la_LIBADD  = $(WOLFSSL_LIBS)
-libwolfcert_la_LDFLAGS = -version-info 0:0:0 -no-undefined
+libwolfcert_la_LDFLAGS = -version-info 1:0:0 -no-undefined
 
 wolfcertincludedir = $(includedir)/wolfcert
 wolfcertinclude_HEADERS = \

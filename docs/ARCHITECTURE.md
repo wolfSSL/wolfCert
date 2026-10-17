@@ -381,11 +381,13 @@ rebuild it with `wolfcert_key_from_id(&cfg, cert, cert_len, &key)`, which takes
 the public half from the certificate since a backend need not be able to
 return it.
 
-RSA, ECC and ML-DSA keys take a `key_id`; Ed25519 and Ed448 do not yet. SCEP
-does not support a `key_id` key: its PKCS#7 signing and decryption take the
-private key as DER, so the SCEP calls return `WOLFCERT_ERR_UNSUPPORTED`. A
-`key_id` needs wolfSSL built with `WOLF_CRYPTO_CB` and `WOLF_PRIVATE_KEY_ID`.
-See `examples/enroll_cryptocb.c` for the registration pattern.
+RSA, ECC and ML-DSA keys take a `key_id`. Ed25519 and Ed448 keys take one
+with a wolfSSL newer than 5.9.4, which has `wc_ed25519_init_id` and
+`wc_ed448_init_id`. SCEP does not support a `key_id` key: its PKCS#7
+signing and decryption take the private key as DER, so the SCEP calls return
+`WOLFCERT_ERR_UNSUPPORTED`. A `key_id` needs wolfSSL built with
+`WOLF_CRYPTO_CB` and `WOLF_PRIVATE_KEY_ID`. See `examples/enroll_cryptocb.c`
+for the registration pattern.
 
 ### 4.3 Keep-alive sessions and non-blocking I/O
 

@@ -151,6 +151,10 @@ static int key_id_cases(void)
         return 1;
 #endif
 #endif
+#if defined(WOLFCERT_HAVE_ED25519) && defined(ED25519_MAX_ID_LEN)
+    if (key_id_declined(WOLFCERT_KEY_ED25519, 0))
+        return 1;
+#endif
 
     cfg.dev_id = DECLINE_DEVID;
     cfg.key_id_len = 0;
@@ -278,7 +282,7 @@ static int key_id_cases(void)
 #endif
     }
 #endif
-#ifdef WOLFCERT_HAVE_ED25519
+#if defined(WOLFCERT_HAVE_ED25519) && !defined(ED25519_MAX_ID_LEN)
     cfg.type = WOLFCERT_KEY_ED25519;
     cfg.param = 0;
     REQUIRE(wolfcert_key_from_id(&cfg, junk, sizeof(junk), &k) ==

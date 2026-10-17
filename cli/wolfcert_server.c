@@ -83,7 +83,8 @@ static void print_usage(FILE* out)
         "\n"
         "Options:\n"
         "  --proto est|scep         Protocol to serve (required)\n"
-        "  --listen ADDR:PORT       Numeric IPv4 bind address (default 0.0.0.0:8080)\n"
+        "  --listen ADDR:PORT       Numeric IPv4 bind address (default 0.0.0.0:8080);\n"
+        "                           port 0 picks a free one\n"
         "  --basic USER:PASS        Require HTTP Basic auth (EST enroll); both non-empty\n"
         "  --challenge PASS         Require this SCEP challengePassword in the CSR\n"
         "  --tls-cert PEMFILE       Terminate TLS with this server certificate (PEM);\n"
@@ -136,8 +137,9 @@ static int parse_listen(const char* arg, char** host, uint16_t* port)
         return 0;
     }
 
-    long p = strtol(colon + 1, NULL, 10);
-    if (p <= 0 || p > 65535)
+    char* end = NULL;
+    long p = strtol(colon + 1, &end, 10);
+    if (end == colon + 1 || *end != '\0' || p < 0 || p > 65535)
         return -1;
 
     *host = strndup(arg, (size_t)(colon - arg));

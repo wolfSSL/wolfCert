@@ -278,7 +278,7 @@ if [ -x "$SERVER" ]; then
             --proto est --tls-cert "$0" --tls-key "$0" --basic "$b"
     done
     # $0 is no PEM, so start fails in TLS setup, before anything binds.
-    out="$("$SERVER" --proto est --listen 127.0.0.1:18099 --tls-cert "$0" \
+    out="$("$SERVER" --proto est --listen 127.0.0.1:0 --tls-cert "$0" \
             --tls-key "$0" --est-allow-anonymous 2>&1)"
     case "$out" in
         *"start failed"*)
@@ -318,33 +318,43 @@ else
         poll_tries=10
     fi
 
-    # start_scep_server <name> <first port> <server args...>: a busy port is an
-    # environment problem, so try four and poll GetCACert into $tmp/<name>-*.
-    start_scep_server() {
-        local name="$1" port="$2" n i
-        shift 2
-        ready=0
-        for n in 0 1 2 3; do
-            "$SERVER" --proto scep --listen "127.0.0.1:$port" "$@" \
-                >"$tmp/$name-server.log" 2>&1 &
-            started_pid=$!
-            url="http://127.0.0.1:$port/scep"
-            i=0
-            while [ "$i" -lt "$poll_tries" ] &&
-                    kill -0 "$started_pid" 2>/dev/null; do
-                if "$CLI" getcacerts --proto scep --url "$url" \
-                        --out-cert "$tmp/$name-ca.pem" \
-                        >"$tmp/$name-getca.log" 2>&1; then
-                    ready=1
-                    return
-                fi
-                sleep "$poll_delay"
-                i=$((i + 1))
-            done
-            kill "$started_pid" 2>/dev/null
-            wait "$started_pid" 2>/dev/null
-            port=$((port + 100))
+    # start_server <log> <server args...>: start wolfcert-server on a free port
+    # and set started_pid, and port from its "listening on" line.
+    start_server() {
+        local log="$1" i=0
+        shift
+        port=""
+        # The child's own truncation can land after the first read below.
+        : >"$log"
+        "$SERVER" --listen 127.0.0.1:0 "$@" >"$log" 2>&1 &
+        started_pid=$!
+        while [ "$i" -lt "$poll_tries" ] &&
+                kill -0 "$started_pid" 2>/dev/null; do
+            port="$(sed -n 's/.* listening on [0-9.]*:\([0-9]*\)$/\1/p' "$log")"
+            [ -n "$port" ] && return 0
+            sleep "$poll_delay"
+            i=$((i + 1))
         done
+        return 1
+    }
+
+    # start_scep_server <name> <server args...>: GetCACert into $tmp/<name>-*.
+    start_scep_server() {
+        local name="$1"
+        shift
+        ready=0
+        url=""
+        if start_server "$tmp/$name-server.log" --proto scep "$@"; then
+            url="http://127.0.0.1:$port/scep"
+            if "$CLI" getcacerts --proto scep --url "$url" \
+                    --out-cert "$tmp/$name-ca.pem" \
+                    >"$tmp/$name-getca.log" 2>&1; then
+                ready=1
+                return
+            fi
+        fi
+        kill "$started_pid" 2>/dev/null
+        wait "$started_pid" 2>/dev/null
     }
 
     # cert_fp <log> <index>: the pin getcacerts printed for that certificate.
@@ -352,7 +362,7 @@ else
         sed -n "s/.*certificate $2 is \(sha256:[0-9A-Fa-f:]*\).*/\1/p" "$1"
     }
 
-    start_scep_server pin 18088 --scep-enable-next-ca
+    start_scep_server pin --scep-enable-next-ca
     srv_pid=$started_pid
     PIN_URL="$url"
 
@@ -451,33 +461,20 @@ else
                 --subject "CN=localhost" --san-ip 127.0.0.1 \
                 --ca-fingerprint "$fp" --out-key "$tmp/tls.key" \
                 --out-cert "$tmp/tls.crt" >"$tmp/tls-enroll.log" 2>&1; then
-            port=18092
-            for n in 0 1 2 3; do
-                "$SERVER" --proto est --listen "127.0.0.1:$port" \
-                    --tls-cert "$tmp/tls.crt" --tls-key "$tmp/tls.key" \
-                    --tls-client-ca "$tmp/pin-ca.pem" \
-                    >"$tmp/est-server.log" 2>&1 &
-                est_pid=$!
-                est_url="https://127.0.0.1:$port/.well-known/est"
-                i=0
-                while [ "$i" -lt "$poll_tries" ] &&
-                        kill -0 "$est_pid" 2>/dev/null; do
-                    if "$CLI" getcacerts --proto est --url "$est_url" \
-                            --trust "$tmp/pin-ca.pem" \
-                            --client-cert "$tmp/ok.crt" \
-                            --client-key "$tmp/ok.key" \
-                            --out-cert "$tmp/est-ca.pem" \
-                            >"$tmp/est-getca.log" 2>&1; then
-                        est_ready=1
-                        break 2
-                    fi
-                    sleep "$poll_delay"
-                    i=$((i + 1))
-                done
-                kill "$est_pid" 2>/dev/null
-                wait "$est_pid" 2>/dev/null
-                port=$((port + 100))
-            done
+            start_server "$tmp/est-server.log" --proto est \
+                --tls-cert "$tmp/tls.crt" --tls-key "$tmp/tls.key" \
+                --tls-client-ca "$tmp/pin-ca.pem"
+            est_pid=$started_pid
+            est_url="https://127.0.0.1:$port/.well-known/est"
+            if [ -n "$port" ] &&
+                    "$CLI" getcacerts --proto est --url "$est_url" \
+                        --trust "$tmp/pin-ca.pem" \
+                        --client-cert "$tmp/ok.crt" \
+                        --client-key "$tmp/ok.key" \
+                        --out-cert "$tmp/est-ca.pem" \
+                        >"$tmp/est-getca.log" 2>&1; then
+                est_ready=1
+            fi
         fi
         if [ "$est_ready" -ne 1 ]; then
             skip_group "EST reenroll --cert forms (no mTLS server would start)"
@@ -521,7 +518,7 @@ else
     # Against a split CA/RA server that defers issuance, the RA counts only once
     # --ra-fingerprint names it; pinning the RA alone ignores the CA.
     poll="--poll-attempts 5 --poll-interval-ms 100"
-    start_scep_server ra 18087 --scep-split-ra --scep-require-approval \
+    start_scep_server ra --scep-split-ra --scep-require-approval \
         --scep-enable-next-ca --scep-enable-get-cert
     ra_pid=$started_pid
     RA_URL="$url"
@@ -666,7 +663,7 @@ else
         case "$layout" in
             ras|tie|expired) split="--scep-split-ra" ;;
         esac
-        start_scep_server bundle 18091 $split --scep-ca-bundle "$layout"
+        start_scep_server bundle $split --scep-ca-bundle "$layout"
         bundle_pid=$started_pid
         BUNDLE_URL="$url"
 
@@ -799,7 +796,7 @@ else
     # A non-200 GetCACaps warns and carries on; a dropped one stops enroll and
     # getcert with exit 2. AES is forced; NO_DES3 builds lack the 3DES default.
     for caps in 404 close; do
-        start_scep_server caps 18086 --scep-enable-get-cert \
+        start_scep_server caps --scep-enable-get-cert \
             --scep-caps-status "$caps"
         caps_pid=$started_pid
         CAPS_URL="$url"
@@ -920,7 +917,7 @@ else
     done
 
     # A hostname --listen is refused, and the reason reaches stderr.
-    "$SERVER" --proto scep --listen localhost:18090 >"$tmp/listen.log" 2>&1 &
+    "$SERVER" --proto scep --listen localhost:0 >"$tmp/listen.log" 2>&1 &
     listen_pid=$!
     i=0
     while [ "$i" -lt "$poll_tries" ] && kill -0 "$listen_pid" 2>/dev/null; do
@@ -941,25 +938,12 @@ else
 
     # Secrets passed on the server command line must not stay visible to ps.
     listening=0
-    for port in 18089 18189 18289 18389; do
-        "$SERVER" --proto scep --listen "127.0.0.1:$port" \
+    if start_server "$tmp/argv.log" --proto scep \
             --basic argvuser:argv-basic-secret \
-            --challenge argv-challenge-secret >"$tmp/argv.log" 2>&1 &
-        argv_pid=$!
-        i=0
-        while [ "$i" -lt "$poll_tries" ] && kill -0 "$argv_pid" 2>/dev/null; do
-            if grep -q "listening" "$tmp/argv.log"; then
-                listening=1
-                break
-            fi
-            sleep "$poll_delay"
-            i=$((i + 1))
-        done
-        if [ "$listening" -eq 1 ]; then
-            break
-        fi
-        kill "$argv_pid" 2>/dev/null
-    done
+            --challenge argv-challenge-secret; then
+        listening=1
+    fi
+    argv_pid=$started_pid
 
     if [ "$listening" -ne 1 ]; then
         skip_group "server argv scrubbing (no test server would start)"

@@ -660,8 +660,9 @@ time `#error`s. See [`EMBEDDED.md`](EMBEDDED.md#configuring-wolfcert-without-its
 
 **Required wolfSSL features** (build hard-fails with a "rebuild wolfSSL with
 --enable-X" diagnostic if missing): `HAVE_PKCS7`, `WOLFSSL_CERT_GEN`,
-`WOLFSSL_CERT_REQ`, `WOLFSSL_CERT_EXT`, `WOLFSSL_KEY_GEN`, `WOLF_CRYPTO_CB`,
-`WOLFSSL_BASE64_ENCODE`, `WOLFSSL_ALT_NAMES`, `WOLFSSL_CERT_NAME_ALL`. A
+`WOLFSSL_CERT_REQ`, `WOLFSSL_CERT_EXT`, `WOLFSSL_KEY_GEN`,
+`WOLFSSL_BASE64_ENCODE`, `WOLFSSL_ALT_NAMES`, `WOLFSSL_CERT_NAME_ALL`.
+`WOLF_CRYPTO_CB` is optional; without it keys run in software. A
 `NO_RSA` build hard-fails unless SCEP is disabled, and so does one without
 AES-128-CBC encrypt and decrypt (`NO_AES_128`, `NO_AES_CBC` or
 `NO_AES_DECRYPT`), which RFC 8894 makes mandatory. CMake and autoconf also

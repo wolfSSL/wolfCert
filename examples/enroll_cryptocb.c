@@ -33,6 +33,9 @@
 
 #include <wolfssl/wolfcrypt/cryptocb.h>
 #include <wolfssl/wolfcrypt/error-crypt.h>
+#ifndef WOLF_CRYPTO_CB
+#  error "examples/enroll_cryptocb.c needs wolfSSL built with --enable-cryptocb"
+#endif
 
 #include <stdio.h>
 #include <string.h>

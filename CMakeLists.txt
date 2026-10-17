@@ -84,7 +84,7 @@ if(NOT wolfssl_FOUND)
             "wolfSSL >= 5.9.4 not found via CMake config or pkg-config. "
             "wolfCert requires wolfSSL 5.9.4 or newer, built with: HAVE_PKCS7, "
             "WOLFSSL_CERT_GEN, WOLFSSL_CERT_REQ, WOLFSSL_CERT_EXT, "
-            "WOLFSSL_KEY_GEN, HAVE_ECC, WOLF_CRYPTO_CB, WOLFSSL_BASE64_ENCODE, "
+            "WOLFSSL_KEY_GEN, HAVE_ECC, WOLFSSL_BASE64_ENCODE, "
             "WOLFSSL_ALT_NAMES, WOLFSSL_CERT_NAME_ALL; a shared wolfSSL also "
             "needs WOLFSSL_PUBLIC_ASN.")
     endif()
@@ -119,7 +119,7 @@ if(NOT _have_wolfssl_floor)
     message(FATAL_ERROR "wolfCert requires wolfSSL 5.9.4 or newer.")
 endif()
 foreach(sym IN ITEMS HAVE_PKCS7 WOLFSSL_CERT_GEN WOLFSSL_CERT_REQ WOLFSSL_CERT_EXT
-                     WOLFSSL_KEY_GEN WOLF_CRYPTO_CB WOLFSSL_BASE64_ENCODE
+                     WOLFSSL_KEY_GEN WOLFSSL_BASE64_ENCODE
                      WOLFSSL_ALT_NAMES WOLFSSL_CERT_NAME_ALL)
     unset(_have_${sym} CACHE)
     check_c_source_compiles("${_wc_wolfssl_prologue}
@@ -133,11 +133,18 @@ foreach(sym IN ITEMS HAVE_PKCS7 WOLFSSL_CERT_GEN WOLFSSL_CERT_REQ WOLFSSL_CERT_E
             "wolfSSL was built without ${sym}. Rebuild with the appropriate "
             "wolfSSL configure flag. For all the symbols wolfCert requires: "
             "./configure --enable-pkcs7 --enable-certgen --enable-certreq "
-            "--enable-certext --enable-keygen --enable-ecc --enable-cryptocb "
+            "--enable-certext --enable-keygen --enable-ecc "
             "--enable-base64encode "
             "CPPFLAGS=\"-DWOLFSSL_ALT_NAMES -DWOLFSSL_CERT_NAME_ALL\"")
     endif()
 endforeach()
+unset(_have_WOLF_CRYPTO_CB CACHE)
+check_c_source_compiles("${_wc_wolfssl_prologue}
+    #ifndef WOLF_CRYPTO_CB
+    #error missing
+    #endif
+    int main(void) { return 0; }
+" _have_WOLF_CRYPTO_CB)
 
 # Link the WOLFSSL_ASN_API helpers wolfCert calls, without wolfSSL's headers.
 if(TARGET PkgConfig::WOLFSSL)

@@ -34,7 +34,7 @@ jobs:
             os: ubuntu-latest
             build: cmake
             wolfssl: full
-            cmake_extra: -DWOLFCERT_WERROR=ON
+            cmake_extra: -DWOLFCERT_WERROR=ON -DWOLFCERT_ENABLE_EXAMPLES=ON
           - name: cmake-full-opensslextra
             os: ubuntu-latest
             build: cmake
@@ -94,6 +94,11 @@ jobs:
             os: ubuntu-latest
             build: cmake
             wolfssl: rsa-min
+          - name: cmake-no-cryptocb
+            os: ubuntu-latest
+            build: cmake
+            wolfssl: no-cryptocb
+            cmake_extra: -DWOLFCERT_WERROR=ON -DWOLFCERT_ENABLE_EXAMPLES=ON
           - name: cmake-no-des3
             os: ubuntu-latest
             build: cmake

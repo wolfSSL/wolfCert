@@ -37,8 +37,8 @@ Config names include `full` (all algorithms), `full-tsan`, `full-opensslextra`
 setups stay covered), `full-all` (`full` plus `--enable-all`, which brings
 `OPENSSL_ALL` and its compatible defaults), `est-only-nonrsa` (NO_RSA),
 `rsa-min`, `ecc-only-est`, `no-des3`, `tls13-only`, `mldsa-{44,65,87}off`,
-`static-mem`, `no-malloc`, and the `neg-*` configs used by the negative-config
-gate.
+`static-mem`, `no-malloc`, `no-cryptocb` (no `WOLF_CRYPTO_CB`), and the `neg-*`
+configs used by the negative-config gate.
 
 ## Reproducing a CI job locally
 

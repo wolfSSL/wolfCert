@@ -28,7 +28,7 @@ file. Changes to wolfCert itself follow `CONTRIBUTING.md`.
 Most integration failures are a wolfSSL built without what wolfCert needs.
 wolfCert requires **wolfSSL >= 5.9.4** and **hard-fails at configure time**
 if the wolfSSL it finds lacks any of `HAVE_PKCS7`, `WOLFSSL_CERT_GEN`,
-`WOLFSSL_CERT_REQ`, `WOLFSSL_CERT_EXT`, `WOLFSSL_KEY_GEN`, `WOLF_CRYPTO_CB`,
+`WOLFSSL_CERT_REQ`, `WOLFSSL_CERT_EXT`, `WOLFSSL_KEY_GEN`,
 `WOLFSSL_BASE64_ENCODE`, `WOLFSSL_ALT_NAMES` or `WOLFSSL_CERT_NAME_ALL`, was
 built with `NO_AES` / `NO_SHA256`, or provides neither TLS 1.2 nor TLS 1.3.
 
@@ -41,6 +41,8 @@ built with `NO_AES` / `NO_SHA256`, or provides neither TLS 1.2 nor TLS 1.3.
   `OPENSSL_EXTRA`, `OPENSSL_EXTRA_X509_SMALL` or `WOLFSSL_TEST_CERT`. A static
   libwolfssl links them regardless. The OpenSSL compatibility layer itself is
   not required.
+- **Hardware keys** need `WOLF_CRYPTO_CB` (`--enable-cryptocb`). Without it
+  wolfCert builds, but keys always run in software.
 - **ML-DSA** additionally needs `WOLFSSL_MLDSA_CHECK_KEY`, which
   `--enable-mldsa` gives by default; it is lost with
   `WOLFSSL_DILITHIUM_NO_CHECK_KEY` or `WOLFSSL_MLDSA_VERIFY_ONLY`.

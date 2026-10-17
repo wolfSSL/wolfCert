@@ -81,9 +81,6 @@
 #ifndef WOLFSSL_KEY_GEN
 #error "wolfSSL is missing WOLFSSL_KEY_GEN; rebuild wolfSSL with --enable-keygen."
 #endif
-#ifndef WOLF_CRYPTO_CB
-#error "wolfSSL is missing WOLF_CRYPTO_CB; rebuild wolfSSL with --enable-cryptocb."
-#endif
 #ifndef WOLFSSL_BASE64_ENCODE
 #error "wolfSSL is missing WOLFSSL_BASE64_ENCODE; rebuild wolfSSL with --enable-base64encode."
 #endif

@@ -132,9 +132,8 @@ PKG_CHECK_MODULES([WOLFSSL], [wolfssl >= 5.9.4],
     [AC_MSG_ERROR([wolfssl >= 5.9.4 not found via pkg-config. wolfCert
       requires a wolfSSL build with HAVE_PKCS7, WOLFSSL_CERT_GEN,
       WOLFSSL_CERT_REQ, WOLFSSL_CERT_EXT, WOLFSSL_KEY_GEN, HAVE_ECC,
-      WOLF_CRYPTO_CB, WOLFSSL_BASE64_ENCODE, WOLFSSL_ALT_NAMES,
-      WOLFSSL_CERT_NAME_ALL; a shared wolfSSL also needs
-      WOLFSSL_PUBLIC_ASN.])])
+      WOLFSSL_BASE64_ENCODE, WOLFSSL_ALT_NAMES, WOLFSSL_CERT_NAME_ALL;
+      a shared wolfSSL also needs WOLFSSL_PUBLIC_ASN.])])
 AM_CONDITIONAL([HAVE_WOLFSSL], [test "x$have_wolfssl" = "xyes"])
 
 # Probe wolfSSL's feature set the way wolfcert/check_config.h resolves it, so
@@ -176,10 +175,10 @@ AC_DEFUN([WOLFCERT_PLAT],
 save_CPPFLAGS="$CPPFLAGS"
 CPPFLAGS="$CPPFLAGS $WOLFSSL_CFLAGS"
 AC_CHECK_DECLS([HAVE_PKCS7, WOLFSSL_CERT_GEN, WOLFSSL_CERT_REQ, WOLFSSL_CERT_EXT,
-                WOLFSSL_KEY_GEN, WOLF_CRYPTO_CB, WOLFSSL_BASE64_ENCODE,
+                WOLFSSL_KEY_GEN, WOLFSSL_BASE64_ENCODE,
                 WOLFSSL_ALT_NAMES, WOLFSSL_CERT_NAME_ALL],
     [], [AC_MSG_ERROR([wolfSSL is missing a required feature (see above).
-      Rebuild wolfSSL with --enable-pkcs7 --enable-ecc --enable-cryptocb
+      Rebuild wolfSSL with --enable-pkcs7 --enable-ecc
       --enable-certgen --enable-certreq --enable-certext --enable-keygen
       --enable-base64encode CPPFLAGS="-DWOLFSSL_ALT_NAMES
       -DWOLFSSL_CERT_NAME_ALL".])],

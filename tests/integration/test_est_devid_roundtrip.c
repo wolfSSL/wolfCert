@@ -63,7 +63,15 @@ int main(void)
 #define MOCK_DEVID 0x6d6b
 #define MOCK_SLOTS 4
 
-enum { MOCK_ECC = 1, MOCK_RSA, MOCK_MLDSA };
+enum { MOCK_ECC = 1, MOCK_RSA, MOCK_MLDSA, MOCK_ED25519, MOCK_ED448 };
+
+/* wolfSSL after 5.9.4 can name Ed25519 and Ed448 keys by id. */
+#if defined(WOLFCERT_HAVE_ED25519) && defined(ED25519_MAX_ID_LEN)
+#define MOCK_HAVE_ED25519
+#endif
+#if defined(WOLFCERT_HAVE_ED448) && defined(ED448_MAX_ID_LEN)
+#define MOCK_HAVE_ED448
+#endif
 
 typedef struct {
     byte id[WOLFCERT_KEY_ID_MAX_LEN];
@@ -77,6 +85,12 @@ typedef struct {
 #endif
 #ifdef WOLFCERT_HAVE_MLDSA
     MlDsaKey mldsa;
+#endif
+#ifdef MOCK_HAVE_ED25519
+    ed25519_key ed25519;
+#endif
+#ifdef MOCK_HAVE_ED448
+    ed448_key ed448;
 #endif
 } MockSlot;
 
@@ -256,10 +270,111 @@ static int mock_cb(int devId, wc_CryptoInfo* info, void* ctx)
         return rc;
     }
 #endif
+#ifdef MOCK_HAVE_ED25519
+    case WC_PK_TYPE_ED25519_KEYGEN: {
+        ed25519_key* key = info->pk.ed25519kg.key;
+        byte pub[ED25519_PUB_KEY_SIZE];
+        word32 pub_len = sizeof(pub);
+        MockSlot* s;
+        int rc;
+
+        if (key->idLen == 0)
+            return CRYPTOCB_UNAVAILABLE;
+        s = mock_new(key->id, key->idLen, MOCK_ED25519);
+        if (s == NULL)
+            return BAD_STATE_E;
+        rc = wc_ed25519_init_ex(&s->ed25519, NULL, INVALID_DEVID);
+        if (rc == 0)
+            rc = wc_ed25519_make_key(info->pk.ed25519kg.rng,
+                                     info->pk.ed25519kg.size, &s->ed25519);
+        if (rc == 0)
+            rc = wc_ed25519_export_public(&s->ed25519, pub, &pub_len);
+        if (rc == 0)
+            rc = wc_ed25519_import_public(pub, pub_len, key);
+        if (rc == 0)
+            mock_keygens++;
+        return rc;
+    }
+    case WC_PK_TYPE_ED25519_SIGN: {
+        ed25519_key* key = info->pk.ed25519sign.key;
+        MockSlot* s = mock_find(key->id, key->idLen);
+        int rc;
+
+        mock_sign_requests++;
+        if (s == NULL || s->type != MOCK_ED25519)
+            return CRYPTOCB_UNAVAILABLE;
+        rc = wc_ed25519_sign_msg_ex(info->pk.ed25519sign.in,
+                                    info->pk.ed25519sign.inLen,
+                                    info->pk.ed25519sign.out,
+                                    info->pk.ed25519sign.outLen, &s->ed25519,
+                                    info->pk.ed25519sign.type,
+                                    info->pk.ed25519sign.context,
+                                    info->pk.ed25519sign.contextLen);
+        if (rc == 0)
+            mock_private_ops++;
+        return rc;
+    }
+#endif
+#ifdef MOCK_HAVE_ED448
+    case WC_PK_TYPE_ED448: {
+        ed448_key* key = info->pk.ed448sign.key;
+        MockSlot* s = mock_find(key->id, key->idLen);
+        int rc;
+
+        mock_sign_requests++;
+        if (s == NULL || s->type != MOCK_ED448)
+            return CRYPTOCB_UNAVAILABLE;
+        rc = wc_ed448_sign_msg_ex(info->pk.ed448sign.in,
+                                  info->pk.ed448sign.inLen,
+                                  info->pk.ed448sign.out,
+                                  info->pk.ed448sign.outLen, &s->ed448,
+                                  info->pk.ed448sign.type,
+                                  info->pk.ed448sign.context,
+                                  info->pk.ed448sign.contextLen);
+        if (rc == 0)
+            mock_private_ops++;
+        return rc;
+    }
+#endif
     default:
         return CRYPTOCB_UNAVAILABLE;
     }
 }
+
+#ifdef MOCK_HAVE_ED448
+/* Provisions the store's key out of band, since not every wolfSSL with Ed448
+ * key ids passes Ed448 keygen to a CryptoCb. */
+static int mock_provision_ed448(const byte* id, int id_len, byte* cert,
+                                int* cert_len)
+{
+    MockSlot* s = mock_new(id, id_len, MOCK_ED448);
+    Cert c;
+    WC_RNG rng;
+    int n;
+
+    if (s == NULL || wc_InitRng(&rng) != 0)
+        return -1;
+    n = wc_ed448_init_ex(&s->ed448, NULL, INVALID_DEVID);
+    if (n == 0)
+        n = wc_ed448_make_key(&rng, ED448_KEY_SIZE, &s->ed448);
+    if (n == 0)
+        n = wc_InitCert(&c);
+    if (n == 0) {
+        strncpy(c.subject.commonName, "ed448-provisioned", CTC_NAME_SIZE - 1);
+        c.sigType = CTC_ED448;
+        n = wc_MakeCert_ex(&c, cert, (word32)*cert_len, ED448_TYPE, &s->ed448,
+                           &rng);
+    }
+    if (n > 0)
+        n = wc_SignCert_ex(c.bodySz, c.sigType, cert, (word32)*cert_len,
+                           ED448_TYPE, &s->ed448, &rng);
+    wc_FreeRng(&rng);
+    if (n <= 0)
+        return -1;
+    *cert_len = n;
+    return 0;
+}
+#endif
 
 static void mock_reset(void)
 {
@@ -275,6 +390,14 @@ static void mock_reset(void)
 #ifdef WOLFCERT_HAVE_MLDSA
         if (mock_slots[i].id_len > 0 && mock_slots[i].type == MOCK_MLDSA)
             wc_MlDsaKey_Free(&mock_slots[i].mldsa);
+#endif
+#ifdef MOCK_HAVE_ED25519
+        if (mock_slots[i].id_len > 0 && mock_slots[i].type == MOCK_ED25519)
+            wc_ed25519_free(&mock_slots[i].ed25519);
+#endif
+#ifdef MOCK_HAVE_ED448
+        if (mock_slots[i].id_len > 0 && mock_slots[i].type == MOCK_ED448)
+            wc_ed448_free(&mock_slots[i].ed448);
 #endif
     }
     memset(mock_slots, 0, sizeof(mock_slots));
@@ -307,7 +430,7 @@ static int test_cfg_errors(void)
     cfg.key_id_len = 4;
     REQUIRE(wolfcert_key_generate(&cfg, &k) == WOLFCERT_ERR_BAD_ARG);
 
-#ifdef WOLFCERT_HAVE_ED25519
+#if defined(WOLFCERT_HAVE_ED25519) && !defined(MOCK_HAVE_ED25519)
     cfg.type       = WOLFCERT_KEY_ED25519;
     cfg.key_id     = id;
     cfg.key_id_len = sizeof(id) - 1;
@@ -357,6 +480,20 @@ static int run_key_type(const char* url, WolfCertKeyType type, int param,
     mock_keygens = 0;
     mock_private_ops = 0;
 
+#ifdef MOCK_HAVE_ED448
+    if (type == WOLFCERT_KEY_ED448) {
+        static byte prov[1024];
+        int prov_len = sizeof(prov);
+
+        REQUIRE(wolfcert_key_generate(&kcfg, &key) ==
+                WOLFCERT_ERR_UNSUPPORTED);
+        REQUIRE(mock_provision_ed448(id, sizeof(id) - 1, prov, &prov_len) == 0);
+        REQUIRE(wolfcert_key_from_id(&kcfg, prov, (size_t)prov_len, &key) ==
+                WOLFCERT_OK);
+        mock_keygens++;
+    }
+    else
+#endif
     REQUIRE(wolfcert_key_generate(&kcfg, &key) == WOLFCERT_OK);
     REQUIRE(mock_keygens == 1);
     REQUIRE(wolfcert_key_id(key, &got_id, &got_len) == WOLFCERT_OK);
@@ -719,8 +856,18 @@ int main(void)
 #endif
 #ifndef WOLFSSL_NO_ML_DSA_87
     REQUIRE(run_key_type(url, WOLFCERT_KEY_MLDSA87, 0, tls_cert, tls_cert_len,
-                         boot_cert, boot_cert_len, boot_key, boot_key_len) == 0);
+                         boot_cert, boot_cert_len, boot_key,
+                         boot_key_len) == 0);
 #endif
+#endif
+#ifdef MOCK_HAVE_ED25519
+    REQUIRE(run_key_type(url, WOLFCERT_KEY_ED25519, 0, tls_cert, tls_cert_len,
+                         boot_cert, boot_cert_len, boot_key,
+                         boot_key_len) == 0);
+#endif
+#ifdef MOCK_HAVE_ED448
+    REQUIRE(run_key_type(url, WOLFCERT_KEY_ED448, 0, tls_cert, tls_cert_len,
+                         boot_cert, boot_cert_len, boot_key, boot_key_len) == 0);
 #endif
     REQUIRE(test_client_key_src(url, tls_cert, tls_cert_len, boot_cert,
                                 boot_cert_len, boot_key, boot_key_len) == 0);

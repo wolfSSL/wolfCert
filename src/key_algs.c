@@ -351,20 +351,33 @@ static void ecc_free(struct WolfCertKey* k)
 #endif /* WOLFCERT_HAVE_ECC */
 
 #ifdef WOLFCERT_HAVE_ED25519
+/* wolfSSL after 5.9.4 has wc_ed25519_init_id and the TLS support for it. */
+#if defined(WOLFCERT_USE_KEY_ID) && defined(ED25519_MAX_ID_LEN)
+#define WOLFCERT_ED25519_KEY_ID
+#endif
+
 static int ed25519_alloc_init(struct WolfCertKey* k)
 {
+#ifndef WOLFCERT_ED25519_KEY_ID
     if (k->id_len > 0)
         return WOLFCERT_ERR(WOLFCERT_ERR_UNSUPPORTED, "keygen",
-                            "wolfSSL has no key_id init for Ed25519");
+                            "this wolfSSL has no key_id init for Ed25519");
+#endif
 
     ed25519_key* ek = (ed25519_key*)WOLFCERT_XMALLOC(sizeof(*ek), k->heap);
     if (ek == NULL)
         return WOLFCERT_ERR_MEMORY;
 
-    int rc = wc_ed25519_init_ex(ek, k->heap, k->dev_id);
+    int rc;
+#ifdef WOLFCERT_ED25519_KEY_ID
+    if (k->id_len > 0)
+        rc = wc_ed25519_init_id(ek, k->id, (int)k->id_len, k->heap, k->dev_id);
+    else
+#endif
+        rc = wc_ed25519_init_ex(ek, k->heap, k->dev_id);
     if (rc != 0) {
         WOLFCERT_XFREE(ek, k->heap);
-        return WOLFCERT_ERR_WC(rc, "keygen", "ed25519_init_ex");
+        return WOLFCERT_ERR_WC(rc, "keygen", "ed25519_init");
     }
 
     k->impl = ek;
@@ -391,6 +404,21 @@ static int ed25519_priv_to_der(const struct WolfCertKey* k, uint8_t* buf, word32
     /* PKCS#8 v1 PrivateKeyInfo, since OpenSSL rejects KeyToDer's v2 form. */
     return wc_Ed25519PrivateKeyToDer((ed25519_key*)k->impl, buf, cap);
 }
+
+#ifdef WOLFCERT_ED25519_KEY_ID
+static int ed25519_pub_decode(struct WolfCertKey* k, const uint8_t* der,
+                              word32 len)
+{
+    word32 idx = 0;
+    return wc_Ed25519PublicKeyDecode(der, &idx, (ed25519_key*)k->impl, len) == 0
+           ? WOLFCERT_OK : WOLFCERT_ERR_PARSE;
+}
+
+static int ed25519_host_priv(const struct WolfCertKey* k)
+{
+    return ((ed25519_key*)k->impl)->privKeySet;
+}
+#endif
 
 static int ed25519_pub_check(struct WolfCertKey* k, const uint8_t* pub,
                              word32 pub_len)
@@ -423,20 +451,32 @@ static void ed25519_free(struct WolfCertKey* k)
 #endif
 
 #ifdef WOLFCERT_HAVE_ED448
+#if defined(WOLFCERT_USE_KEY_ID) && defined(ED448_MAX_ID_LEN)
+#define WOLFCERT_ED448_KEY_ID
+#endif
+
 static int ed448_alloc_init(struct WolfCertKey* k)
 {
+#ifndef WOLFCERT_ED448_KEY_ID
     if (k->id_len > 0)
         return WOLFCERT_ERR(WOLFCERT_ERR_UNSUPPORTED, "keygen",
-                            "wolfSSL has no key_id init for Ed448");
+                            "this wolfSSL has no key_id init for Ed448");
+#endif
 
     ed448_key* ek = (ed448_key*)WOLFCERT_XMALLOC(sizeof(*ek), k->heap);
     if (ek == NULL)
         return WOLFCERT_ERR_MEMORY;
 
-    int rc = wc_ed448_init_ex(ek, k->heap, k->dev_id);
+    int rc;
+#ifdef WOLFCERT_ED448_KEY_ID
+    if (k->id_len > 0)
+        rc = wc_ed448_init_id(ek, k->id, (int)k->id_len, k->heap, k->dev_id);
+    else
+#endif
+        rc = wc_ed448_init_ex(ek, k->heap, k->dev_id);
     if (rc != 0) {
         WOLFCERT_XFREE(ek, k->heap);
-        return WOLFCERT_ERR_WC(rc, "keygen", "ed448_init_ex");
+        return WOLFCERT_ERR_WC(rc, "keygen", "ed448_init");
     }
 
     k->impl = ek;
@@ -462,6 +502,21 @@ static int ed448_priv_to_der(const struct WolfCertKey* k, uint8_t* buf, word32 c
 {
     return wc_Ed448PrivateKeyToDer((ed448_key*)k->impl, buf, cap);
 }
+
+#ifdef WOLFCERT_ED448_KEY_ID
+static int ed448_pub_decode(struct WolfCertKey* k, const uint8_t* der,
+                            word32 len)
+{
+    word32 idx = 0;
+    return wc_Ed448PublicKeyDecode(der, &idx, (ed448_key*)k->impl, len) == 0
+           ? WOLFCERT_OK : WOLFCERT_ERR_PARSE;
+}
+
+static int ed448_host_priv(const struct WolfCertKey* k)
+{
+    return ((ed448_key*)k->impl)->privKeySet;
+}
+#endif
 
 static int ed448_pub_check(struct WolfCertKey* k, const uint8_t* pub,
                            word32 pub_len)
@@ -650,6 +705,10 @@ static const WolfCertKeyAlg ALG_ED25519 = {
     .priv_decode     = ed25519_priv_decode,
     .priv_to_der     = ed25519_priv_to_der,
     .pub_check       = ed25519_pub_check,
+#ifdef WOLFCERT_ED25519_KEY_ID
+    .pub_decode      = ed25519_pub_decode,
+    .host_priv       = ed25519_host_priv,
+#endif
     .free_           = ed25519_free,
 };
 #endif
@@ -667,6 +726,10 @@ static const WolfCertKeyAlg ALG_ED448 = {
     .priv_decode     = ed448_priv_decode,
     .priv_to_der     = ed448_priv_to_der,
     .pub_check       = ed448_pub_check,
+#ifdef WOLFCERT_ED448_KEY_ID
+    .pub_decode      = ed448_pub_decode,
+    .host_priv       = ed448_host_priv,
+#endif
     .free_           = ed448_free,
 };
 #endif

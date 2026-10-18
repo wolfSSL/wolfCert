@@ -747,6 +747,43 @@ static int reenroll_identity_check(WolfCertServer* s,
 #endif
 }
 
+#ifdef KEEP_PEER_CERT
+/* 1 when this server's CA issued the TLS client certificate, 0 when another
+ * CA did, an error when there is none to check, as after a resumption. */
+static int peer_issued_here(WolfCertServer* s)
+{
+    WOLFSSL_X509* peer = NULL;
+    const unsigned char* der = NULL;
+    int der_len = 0;
+    int rc;
+
+    if (s->issued_cm == NULL || s->tls_current == NULL)
+        return 0;
+    peer = wolfSSL_get_peer_certificate(s->tls_current);
+    if (peer != NULL)
+        der = wolfSSL_X509_get_der(peer, &der_len);
+    if (der == NULL || der_len <= 0) {
+        rc = WOLFCERT_ERR(WOLFCERT_ERR_TLS, "est",
+            "enroll: cannot read the client certificate");
+    }
+    else {
+        rc = wolfSSL_CertManagerVerifyBuffer(s->issued_cm, der, der_len,
+                                             WOLFSSL_FILETYPE_ASN1);
+        if (rc == WOLFSSL_SUCCESS)
+            rc = 1;
+        else if (rc == ASN_NO_SIGNER_E || rc == ASN_SIG_CONFIRM_E ||
+                 rc == ASN_SELF_SIGNED_E || rc == ASN_SIG_OID_E)
+            rc = 0;
+        else
+            rc = WOLFCERT_ERR(WOLFCERT_ERR_TLS, "est",
+                "enroll: cannot check the client certificate (%d)", rc);
+    }
+    if (peer != NULL)
+        wolfSSL_FreeX509(peer);
+    return rc;
+}
+#endif
+
 static int handler_enroll(WolfCertServer* s, int fd, const EstRequest* req,
                           int reenroll)
 {
@@ -766,6 +803,29 @@ static int handler_enroll(WolfCertServer* s, int fd, const EstRequest* req,
         return WOLFCERT_ERR(WOLFCERT_ERR_AUTH, "est",
             "enroll: no Basic credentials or TLS client on this connection");
     }
+
+    if (!reenroll && s->renew_only) {
+        send_error(s, fd, 403, "Forbidden",
+                   "this server only renews certificates\n");
+        return WOLFCERT_ERR(WOLFCERT_ERR_AUTH, "est",
+            "enroll: the server only renews certificates");
+    }
+
+#ifdef KEEP_PEER_CERT
+    int here = (reenroll || s->cfg_basic_user != NULL ||
+                s->cfg.est_allow_anonymous_enroll) ? 0 : peer_issued_here(s);
+    if (here == 1) {
+        send_error(s, fd, 403, "Forbidden",
+                   "a certificate issued here can only renew\n");
+        return WOLFCERT_ERR(WOLFCERT_ERR_AUTH, "est",
+            "enroll: client certificate was issued here, not by the client CA");
+    }
+    if (here != 0) {
+        send_error(s, fd, 500, "Server Error",
+                   "cannot check the client certificate\n");
+        return here;
+    }
+#endif
 
     if (req->body == NULL || req->body_len == 0) {
         send_error(s, fd, 400, "Bad Request", "request body is empty\n");

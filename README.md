@@ -99,7 +99,11 @@ Start the bundled test server (issues from an auto-generated local CA):
 # listen address; SCEP authenticates at the pkiMessage layer instead.
 # EST also needs --basic USER:PASS, --tls-client-ca PEM, or
 # --est-allow-anonymous to issue to any client; /simplereenroll
-# also needs --tls-client-ca and the KEEP_PEER_CERT build above.
+# also needs --tls-client-ca or --tls-trust-issued (accept certificates
+# this CA issued; --ca-dir DIR keeps the CA across restarts) and the
+# KEEP_PEER_CERT build above. --tls-trust-issued with a --ca-dir that
+# already holds the CA, and no other option, gives a server that only
+# renews.
 ./wolfcert-server --proto est  --listen 127.0.0.1:8443 \
     --tls-cert server.crt --tls-key server.key --est-allow-anonymous
 ./wolfcert-server --proto scep --listen 127.0.0.1:8088

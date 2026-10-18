@@ -1479,6 +1479,7 @@ static int bundle_root(WolfCertServer* s, uint8_t** root, size_t* root_len)
         WOLFCERT_XFREE(s->ca.cert_der, s->ca.heap);
         s->ca.cert_der     = ca;
         s->ca.cert_der_len = ca_len;
+        s->ca.skid_copies  = wolfcert_ca_skid_copies(&s->ca);
     }
 
     wolfcert_key_free(key);

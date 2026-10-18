@@ -569,6 +569,406 @@ static int test_reenroll_under_approval(const uint8_t* tls_cert, size_t tls_cert
     return 0;
 }
 
+/* tls_client_trust_issued: anonymous enroll still works, the issued cert
+ * renews over mTLS, and a cert from another CA is refused. */
+static int test_reenroll_trust_issued(const uint8_t* tls_cert, size_t tls_cert_len,
+                                      const uint8_t* tls_key, size_t tls_key_len,
+                                      const uint8_t* cli_cert, size_t cli_cert_len,
+                                      const uint8_t* cli_key, size_t cli_key_len)
+{
+    WolfCertKeyCfg kcfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
+                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+    WolfCertCertMeta meta = { .subject_dn = "CN=trust-issued" };
+    WolfCertServerCfgSrv cfg = {
+        .protocol                   = WOLFCERT_PROTO_EST,
+        .bind_host                  = "127.0.0.1",
+        .bind_port                  = 0,
+        TEST_CA_CFG,
+        .tls_cert_pem = tls_cert, .tls_cert_pem_len = tls_cert_len,
+        .tls_key_pem  = tls_key,  .tls_key_pem_len  = tls_key_len,
+        .est_allow_anonymous_enroll = 1,
+        .tls_client_trust_issued    = 1,
+    };
+    WolfCertServer* srv = NULL;
+    WolfCertKey* k1 = NULL;
+    WolfCertKey* k2 = NULL;
+    WolfCertKey* foreign = NULL;
+    WolfCertBuffer ca_pem = { 0 };
+    WolfCertBuffer csr = { 0 };
+    WolfCertEstResult issued = { 0 };
+    WolfCertEstResult renewed = { 0 };
+    WolfCertEstResult refused = { 0 };
+    static const char anon_req[] =
+        "POST /.well-known/est/simplereenroll HTTP/1.1\r\n"
+        "Host: 127.0.0.1\r\nContent-Type: application/pkcs10\r\n"
+        "Content-Length: 4\r\nConnection: close\r\n\r\nAAAA";
+    TestTlsConn conn;
+    char resp[1024];
+    size_t resp_len = 0;
+    pthread_t tid;
+    char url[128];
+    int rc;
+
+    REQUIRE(wolfcert_server_start(&cfg, &srv) == WOLFCERT_OK);
+    REQUIRE(pthread_create(&tid, NULL, server_thread, srv) == 0);
+    snprintf(url, sizeof(url), "https://127.0.0.1:%u/.well-known/est",
+             wolfcert_server_port(srv));
+
+    WolfCertServerCfg cli = {
+        .protocol          = WOLFCERT_PROTO_EST,
+        .server_url        = url,
+        .trust_anchors     = tls_cert,
+        .trust_anchors_len = tls_cert_len,
+        .verify_server     = 1,
+    };
+    REQUIRE(wolfcert_est_get_cacerts(&cli, WOLFCERT_ENCODING_PEM, &ca_pem) == WOLFCERT_OK);
+
+    REQUIRE(wolfcert_key_generate(&kcfg, &k1) == WOLFCERT_OK);
+    REQUIRE(wolfcert_csr_build(k1, &meta, &csr) == WOLFCERT_OK);
+    REQUIRE(wolfcert_est_simple_enroll(&cli, csr.data, csr.len, &issued) ==
+            WOLFCERT_OK);
+    wolfcert_buffer_free(&csr);
+
+    REQUIRE(wolfcert_key_generate(&kcfg, &k2) == WOLFCERT_OK);
+    REQUIRE(wolfcert_csr_build(k2, &meta, &csr) == WOLFCERT_OK);
+    rc = wolfcert_est_simple_reenroll(&cli, issued.cert_pem.data, issued.cert_pem.len, k1,
+                                      csr.data, csr.len, &renewed);
+    wolfcert_buffer_free(&csr);
+    REQUIRE(rc == WOLFCERT_OK);
+    REQUIRE(memmem(renewed.cert_pem.data, renewed.cert_pem.len, "BEGIN CERTIFICATE", 17) != NULL);
+
+    REQUIRE(wolfcert_key_from_pem(cli_key, cli_key_len, NULL, &foreign) ==
+            WOLFCERT_OK);
+    meta.subject_dn = "CN=factory-bootstrap";
+    REQUIRE(wolfcert_csr_build(foreign, &meta, &csr) == WOLFCERT_OK);
+    rc = wolfcert_est_simple_reenroll(&cli, cli_cert, cli_cert_len, foreign,
+                                      csr.data, csr.len, &refused);
+    /* The handshake refuses it, so no HTTP answer comes. */
+    REQUIRE(rc != WOLFCERT_OK && rc != WOLFCERT_ERR_HTTP &&
+            rc != WOLFCERT_ERR_AUTH);
+    REQUIRE(refused.cert_pem.data == NULL);
+
+    /* Without a client certificate there is nothing to renew. */
+    REQUIRE(test_tls_connect(&conn, wolfcert_server_port(srv), tls_cert,
+                             tls_cert_len) == 0);
+    REQUIRE(test_tls_write(&conn, anon_req, sizeof(anon_req) - 1) == 0);
+    while (resp_len < sizeof(resp) - 1) {
+        int n = test_tls_read(&conn, resp + resp_len,
+                              sizeof(resp) - 1 - resp_len);
+        if (n <= 0)
+            break;
+        resp_len += (size_t)n;
+    }
+    test_tls_close(&conn);
+    resp[resp_len] = '\0';
+    REQUIRE(strncmp(resp, "HTTP/1.1 403", 12) == 0);
+
+    wolfcert_server_stop(srv);
+    pthread_join(tid, NULL);
+    wolfcert_server_free(srv);
+    srv = NULL;
+    wolfcert_buffer_free(&csr);
+
+#ifdef WOLFCERT_HAVE_SCEP
+    cfg.protocol = WOLFCERT_PROTO_SCEP;
+    REQUIRE(wolfcert_server_start(&cfg, &srv) == WOLFCERT_ERR_BAD_ARG);
+    REQUIRE(srv == NULL);
+    cfg.protocol = WOLFCERT_PROTO_EST;
+#endif
+
+    /* With no other authenticator the server only renews, from a kept CA. */
+    cfg.est_allow_anonymous_enroll = 0;
+    cfg.ca_cert     = NULL;
+    cfg.ca_cert_len = 0;
+    cfg.ca_key      = NULL;
+    cfg.ca_key_len  = 0;
+    REQUIRE(wolfcert_server_start(&cfg, &srv) == WOLFCERT_ERR_BAD_ARG);
+    REQUIRE(srv == NULL);
+    test_ca_set(&cfg);
+    REQUIRE(wolfcert_server_start(&cfg, &srv) == WOLFCERT_OK);
+    REQUIRE(pthread_create(&tid, NULL, server_thread, srv) == 0);
+    snprintf(url, sizeof(url), "https://127.0.0.1:%u/.well-known/est",
+             wolfcert_server_port(srv));
+    meta.subject_dn = "CN=trust-issued";
+    REQUIRE(wolfcert_csr_build(k2, &meta, &csr) == WOLFCERT_OK);
+    wolfcert_clear_error();
+    rc = wolfcert_est_simple_enroll(&cli, csr.data, csr.len, &refused);
+    REQUIRE(rc == WOLFCERT_ERR_AUTH);
+    REQUIRE(strstr(wolfcert_last_error_message(), "HTTP 403") != NULL);
+    REQUIRE(refused.cert_pem.data == NULL);
+    wolfcert_est_result_free(&issued);
+    rc = wolfcert_est_simple_reenroll(&cli, renewed.cert_pem.data, renewed.cert_pem.len, k2,
+                                      csr.data, csr.len, &issued);
+    REQUIRE(rc == WOLFCERT_OK);
+    REQUIRE(memmem(issued.cert_pem.data, issued.cert_pem.len, "BEGIN CERTIFICATE", 17) != NULL);
+
+    wolfcert_server_stop(srv);
+    pthread_join(tid, NULL);
+    wolfcert_server_free(srv);
+    wolfcert_buffer_free(&csr);
+    wolfcert_est_result_free(&renewed);
+    wolfcert_est_result_free(&issued);
+    wolfcert_buffer_free(&ca_pem);
+    wolfcert_key_free(foreign);
+    wolfcert_key_free(k2);
+    wolfcert_key_free(k1);
+    return 0;
+}
+/* Without ECC the test server offers no TLS 1.2 suite: it loads no DH. */
+#if !defined(WOLFSSL_NO_TLS12) && defined(HAVE_ECC)
+/* A TLS 1.2 session resumed from one authenticated by cert/key carries no
+ * peer certificate; write req on it and return the response's status line. */
+static int resumed_status(uint16_t port, const uint8_t* ca, size_t ca_len,
+                          const WolfCertBuffer* cert, const WolfCertBuffer* key,
+                          const char* req, char* status, size_t status_sz)
+{
+    TestTlsConn c;
+    WOLFSSL_SESSION* sess = NULL;
+    char resp[512];
+    int n;
+
+    REQUIRE(test_tls_setup(&c, port, ca, ca_len) == 0);
+    REQUIRE(wolfSSL_SetVersion(c.ssl, WOLFSSL_TLSV1_2) == WOLFSSL_SUCCESS);
+    REQUIRE(wolfSSL_use_certificate_buffer(c.ssl, cert->data, (long)cert->len,
+                                           WOLFSSL_FILETYPE_PEM) ==
+            WOLFSSL_SUCCESS);
+    REQUIRE(wolfSSL_use_PrivateKey_buffer(c.ssl, key->data, (long)key->len,
+                                          WOLFSSL_FILETYPE_PEM) ==
+            WOLFSSL_SUCCESS);
+    REQUIRE(wolfSSL_connect(c.ssl) == WOLFSSL_SUCCESS);
+    sess = wolfSSL_get1_session(c.ssl);
+    test_tls_close(&c);
+    REQUIRE(sess != NULL);
+
+    REQUIRE(test_tls_setup(&c, port, ca, ca_len) == 0);
+    REQUIRE(wolfSSL_SetVersion(c.ssl, WOLFSSL_TLSV1_2) == WOLFSSL_SUCCESS);
+    REQUIRE(wolfSSL_set_session(c.ssl, sess) == WOLFSSL_SUCCESS);
+    REQUIRE(wolfSSL_connect(c.ssl) == WOLFSSL_SUCCESS);
+    wolfSSL_SESSION_free(sess);
+    REQUIRE(wolfSSL_session_reused(c.ssl) == 1);
+    REQUIRE(test_tls_write(&c, req, strlen(req)) == 0);
+    n = test_tls_read(&c, resp, sizeof(resp) - 1);
+    test_tls_close(&c);
+    REQUIRE(n > 0);
+    resp[n] = '\0';
+    snprintf(status, status_sz, "%.*s", (int)strcspn(resp, "\r"), resp);
+    return 0;
+}
+#endif
+
+/* tls_client_trust_issued next to a client CA that is another wolfCert CA,
+ * with the same subject: a certificate from either CA verifies, and one this
+ * server issued renews but does not enroll. */
+static int test_trust_issued_with_client_ca(const uint8_t* tls_cert,
+                                            size_t tls_cert_len,
+                                            const uint8_t* tls_key,
+                                            size_t tls_key_len)
+{
+    WolfCertKeyCfg kcfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
+                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+    WolfCertCertMeta meta = { .subject_dn = "CN=bootstrap" };
+    WolfCertServerCfgSrv cfg = {
+        .protocol                   = WOLFCERT_PROTO_EST,
+        .bind_host                  = "127.0.0.1",
+        .bind_port                  = 0,
+        .tls_cert_pem = tls_cert, .tls_cert_pem_len = tls_cert_len,
+        .tls_key_pem  = tls_key,  .tls_key_pem_len  = tls_key_len,
+        .est_allow_anonymous_enroll = 1,
+    };
+    WolfCertServer* srv = NULL;
+    WolfCertKey* kb = NULL;
+    WolfCertKey* k1 = NULL;
+    WolfCertKey* k2 = NULL;
+    WolfCertBuffer other_ca = { 0 };
+    WolfCertBuffer none = { 0 };
+    WolfCertEstResult boot = { 0 };
+    WolfCertEstResult issued = { 0 };
+    WolfCertEstResult renewed = { 0 };
+    WolfCertEstResult refused = { 0 };
+    WolfCertBuffer csr = { 0 };
+    WolfCertBuffer boot_key = { 0 };
+    WolfCertBuffer k1_pem = { 0 };
+    char status[64];
+    pthread_t tid;
+    char url[128];
+    int rc;
+
+    /* A second CA, as another wolfcert-server would generate it. */
+    REQUIRE(wolfcert_server_start(&cfg, &srv) == WOLFCERT_OK);
+    REQUIRE(pthread_create(&tid, NULL, server_thread, srv) == 0);
+    snprintf(url, sizeof(url), "https://127.0.0.1:%u/.well-known/est",
+             wolfcert_server_port(srv));
+    WolfCertServerCfg cli = {
+        .protocol          = WOLFCERT_PROTO_EST,
+        .server_url        = url,
+        .trust_anchors     = tls_cert,
+        .trust_anchors_len = tls_cert_len,
+        .verify_server     = 1,
+    };
+    REQUIRE(wolfcert_est_get_cacerts(&cli, WOLFCERT_ENCODING_PEM,
+                                     &other_ca) == WOLFCERT_OK);
+    REQUIRE(wolfcert_key_generate(&kcfg, &kb) == WOLFCERT_OK);
+    REQUIRE(wolfcert_csr_build(kb, &meta, &csr) == WOLFCERT_OK);
+    REQUIRE(wolfcert_est_simple_enroll(&cli, csr.data, csr.len, &boot) ==
+            WOLFCERT_OK);
+    wolfcert_buffer_free(&csr);
+    REQUIRE(wolfcert_key_to_pem(kb, &boot_key) == WOLFCERT_OK);
+    wolfcert_server_stop(srv);
+    pthread_join(tid, NULL);
+    wolfcert_server_free(srv);
+    srv = NULL;
+
+    test_ca_set(&cfg);
+    cfg.est_allow_anonymous_enroll = 0;
+    cfg.tls_client_ca_pem          = other_ca.data;
+    cfg.tls_client_ca_pem_len      = other_ca.len;
+    cfg.tls_client_trust_issued    = 1;
+    REQUIRE(wolfcert_server_start(&cfg, &srv) == WOLFCERT_OK);
+    REQUIRE(pthread_create(&tid, NULL, server_thread, srv) == 0);
+    snprintf(url, sizeof(url), "https://127.0.0.1:%u/.well-known/est",
+             wolfcert_server_port(srv));
+
+    /* The client CA still demands a certificate, so no HTTP answer comes. */
+    rc = wolfcert_est_get_cacerts(&cli, WOLFCERT_ENCODING_PEM, &none);
+    REQUIRE(rc != WOLFCERT_OK && rc != WOLFCERT_ERR_HTTP &&
+            rc != WOLFCERT_ERR_AUTH);
+
+    cli.client_cert     = boot.cert_pem.data;
+    cli.client_cert_len = boot.cert_pem.len;
+    cli.client_key      = boot_key.data;
+    cli.client_key_len  = boot_key.len;
+    meta.subject_dn = "CN=issued-here";
+    REQUIRE(wolfcert_key_generate(&kcfg, &k1) == WOLFCERT_OK);
+    REQUIRE(wolfcert_csr_build(k1, &meta, &csr) == WOLFCERT_OK);
+    REQUIRE(wolfcert_est_simple_enroll(&cli, csr.data, csr.len, &issued) ==
+            WOLFCERT_OK);
+
+    /* A certificate this server issued does not authenticate an enroll. */
+    REQUIRE(wolfcert_key_to_pem(k1, &k1_pem) == WOLFCERT_OK);
+    cli.client_cert     = issued.cert_pem.data;
+    cli.client_cert_len = issued.cert_pem.len;
+    cli.client_key      = k1_pem.data;
+    cli.client_key_len  = k1_pem.len;
+    wolfcert_clear_error();
+    rc = wolfcert_est_simple_enroll(&cli, csr.data, csr.len, &refused);
+    wolfcert_buffer_free(&csr);
+    REQUIRE(rc == WOLFCERT_ERR_AUTH);
+    REQUIRE(strstr(wolfcert_last_error_message(), "HTTP 403") != NULL);
+    REQUIRE(refused.cert_pem.data == NULL);
+
+    REQUIRE(wolfcert_key_generate(&kcfg, &k2) == WOLFCERT_OK);
+    REQUIRE(wolfcert_csr_build(k2, &meta, &csr) == WOLFCERT_OK);
+    rc = wolfcert_est_simple_reenroll(&cli, issued.cert_pem.data, issued.cert_pem.len, k1,
+                                      csr.data, csr.len, &renewed);
+    REQUIRE(rc == WOLFCERT_OK);
+    REQUIRE(memmem(renewed.cert_pem.data, renewed.cert_pem.len, "BEGIN CERTIFICATE", 17) != NULL);
+
+#if !defined(WOLFSSL_NO_TLS12) && defined(HAVE_ECC)
+    /* A resumed session cannot enroll: 403 when SESSION_CERTS keeps its
+     * certificate, 500 when there is none to check. */
+    REQUIRE(resumed_status(wolfcert_server_port(srv), tls_cert, tls_cert_len,
+                           &issued.cert_pem, &k1_pem,
+                           "POST /.well-known/est/simpleenroll HTTP/1.1\r\n"
+                           "Host: 127.0.0.1\r\n"
+                           "Content-Type: application/pkcs10\r\n"
+                           "Content-Length: 4\r\nConnection: close\r\n"
+                           "\r\nAAAA", status, sizeof(status)) == 0);
+    REQUIRE(strcmp(status, "HTTP/1.1 500 Server Error") == 0 ||
+            strncmp(status, "HTTP/1.1 403", 12) == 0);
+#endif
+
+    /* With Basic, a certificate issued here no longer blocks an enroll. */
+    WolfCertEstResult with_basic = { 0 };
+    wolfcert_server_stop(srv);
+    pthread_join(tid, NULL);
+    wolfcert_server_free(srv);
+    srv = NULL;
+    cfg.http_basic_user = "alice";
+    cfg.http_basic_pass = "secret";
+    REQUIRE(wolfcert_server_start(&cfg, &srv) == WOLFCERT_OK);
+    REQUIRE(pthread_create(&tid, NULL, server_thread, srv) == 0);
+    snprintf(url, sizeof(url), "https://127.0.0.1:%u/.well-known/est",
+             wolfcert_server_port(srv));
+    cli.proto_opts.est.username = "alice";
+    cli.proto_opts.est.password = "secret";
+    rc = wolfcert_est_simple_enroll(&cli, csr.data, csr.len, &with_basic);
+    REQUIRE(rc == WOLFCERT_OK);
+    REQUIRE(with_basic.status == WOLFCERT_EST_STATUS_SUCCESS);
+    wolfcert_est_result_free(&with_basic);
+
+    wolfcert_server_stop(srv);
+    pthread_join(tid, NULL);
+    wolfcert_server_free(srv);
+    wolfcert_buffer_free(&csr);
+    wolfcert_est_result_free(&renewed);
+    wolfcert_est_result_free(&issued);
+    wolfcert_est_result_free(&boot);
+    wolfcert_buffer_free(&other_ca);
+    wolfcert_buffer_free(&k1_pem);
+    wolfcert_buffer_free(&boot_key);
+    wolfcert_key_free(k2);
+    wolfcert_key_free(k1);
+    wolfcert_key_free(kb);
+    return 0;
+}
+
+/* A pinned self-signed client certificate still enrolls next to
+ * tls_client_trust_issued. */
+static int test_trust_issued_pinned_self_signed(const uint8_t* tls_cert,
+    size_t tls_cert_len, const uint8_t* tls_key, size_t tls_key_len,
+    const uint8_t* cli_cert, size_t cli_cert_len, const uint8_t* cli_key,
+    size_t cli_key_len)
+{
+    WolfCertKeyCfg kcfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
+                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+    WolfCertCertMeta meta = { .subject_dn = "CN=pinned" };
+    WolfCertServerCfgSrv cfg = {
+        .protocol                = WOLFCERT_PROTO_EST,
+        .bind_host               = "127.0.0.1",
+        .bind_port               = 0,
+        TEST_CA_CFG,
+        .tls_cert_pem = tls_cert, .tls_cert_pem_len = tls_cert_len,
+        .tls_key_pem  = tls_key,  .tls_key_pem_len  = tls_key_len,
+        .tls_client_ca_pem       = cli_cert,
+        .tls_client_ca_pem_len   = cli_cert_len,
+        .tls_client_trust_issued = 1,
+    };
+    WolfCertServer* srv = NULL;
+    WolfCertKey* k = NULL;
+    WolfCertBuffer csr = { 0 };
+    WolfCertEstResult issued = { 0 };
+    pthread_t tid;
+    char url[128];
+    int rc;
+
+    REQUIRE(wolfcert_server_start(&cfg, &srv) == WOLFCERT_OK);
+    REQUIRE(pthread_create(&tid, NULL, server_thread, srv) == 0);
+    snprintf(url, sizeof(url), "https://127.0.0.1:%u/.well-known/est",
+             wolfcert_server_port(srv));
+    WolfCertServerCfg cli = {
+        .protocol          = WOLFCERT_PROTO_EST,
+        .server_url        = url,
+        .trust_anchors     = tls_cert,
+        .trust_anchors_len = tls_cert_len,
+        .verify_server     = 1,
+        .client_cert       = cli_cert,
+        .client_cert_len   = cli_cert_len,
+        .client_key        = cli_key,
+        .client_key_len    = cli_key_len,
+    };
+    REQUIRE(wolfcert_key_generate(&kcfg, &k) == WOLFCERT_OK);
+    REQUIRE(wolfcert_csr_build(k, &meta, &csr) == WOLFCERT_OK);
+    rc = wolfcert_est_simple_enroll(&cli, csr.data, csr.len, &issued);
+
+    wolfcert_server_stop(srv);
+    pthread_join(tid, NULL);
+    wolfcert_server_free(srv);
+    REQUIRE(rc == WOLFCERT_OK);
+    wolfcert_est_result_free(&issued);
+    wolfcert_buffer_free(&csr);
+    wolfcert_key_free(k);
+    return 0;
+}
 #endif /* KEEP_PEER_CERT */
 
 #ifndef KEEP_PEER_CERT
@@ -605,6 +1005,26 @@ static int test_reenroll_needs_peer_cert(const char* url,
     REQUIRE(rc == WOLFCERT_ERR_HTTP);
     REQUIRE(strstr(wolfcert_last_error_message(), "HTTP 500") != NULL);
     REQUIRE(issued.cert_pem.data == NULL);
+    return 0;
+}
+
+/* tls_client_trust_issued cannot work without the peer certificate. */
+static int test_trust_issued_needs_peer_cert(const uint8_t* tls_cert,
+                                             size_t tls_cert_len,
+                                             const uint8_t* tls_key,
+                                             size_t tls_key_len)
+{
+    WolfCertServerCfgSrv cfg = {
+        .protocol                = WOLFCERT_PROTO_EST,
+        .bind_host               = "127.0.0.1",
+        .tls_cert_pem = tls_cert, .tls_cert_pem_len = tls_cert_len,
+        .tls_key_pem  = tls_key,  .tls_key_pem_len  = tls_key_len,
+        .tls_client_trust_issued = 1,
+    };
+    WolfCertServer* srv = NULL;
+
+    REQUIRE(wolfcert_server_start(&cfg, &srv) == WOLFCERT_ERR_UNSUPPORTED);
+    REQUIRE(srv == NULL);
     return 0;
 }
 #endif
@@ -725,6 +1145,8 @@ int main(void)
     REQUIRE(test_reenroll_needs_peer_cert(url, tls_cert, tls_cert_len,
                                           cli_cert, cli_cert_len,
                                           cli_key, cli_key_len) == 0);
+    REQUIRE(test_trust_issued_needs_peer_cert(tls_cert, tls_cert_len,
+                                              tls_key, tls_key_len) == 0);
     printf("skip reenroll cases: wolfSSL built without KEEP_PEER_CERT\n");
 #endif
 
@@ -741,6 +1163,16 @@ int main(void)
                                          tls_key, tls_key_len,
                                          cli_cert, cli_cert_len,
                                          cli_key, cli_key_len) == 0);
+    REQUIRE(test_reenroll_trust_issued(tls_cert, tls_cert_len,
+                                       tls_key, tls_key_len,
+                                       cli_cert, cli_cert_len,
+                                       cli_key, cli_key_len) == 0);
+    REQUIRE(test_trust_issued_with_client_ca(tls_cert, tls_cert_len,
+                                             tls_key, tls_key_len) == 0);
+    REQUIRE(test_trust_issued_pinned_self_signed(tls_cert, tls_cert_len,
+                                                 tls_key, tls_key_len,
+                                                 cli_cert, cli_cert_len,
+                                                 cli_key, cli_key_len) == 0);
 #endif
 
     free(tls_cert);

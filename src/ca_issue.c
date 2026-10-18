@@ -61,6 +61,19 @@ static void ca_sync_from_shim(WolfCertCa* ca, const WolfCertKey* shim)
     ca->impl = shim->impl;
 }
 
+/* Non-zero when wolfSSL copies the CA's subject key id unhashed to an AKID */
+int wolfcert_ca_skid_copies(const WolfCertCa* ca)
+{
+    DecodedCert dc;
+    int ok;
+
+    wc_InitDecodedCert(&dc, ca->cert_der, (word32)ca->cert_der_len, ca->heap);
+    ok = wc_ParseCert(&dc, CERT_TYPE, NO_VERIFY, NULL) == 0 &&
+         dc.extSubjKeyIdSet && dc.extSubjKeyIdSz == KEYID_SIZE;
+    wc_FreeDecodedCert(&dc);
+    return ok;
+}
+
 static int gen_self_signed_cert(WolfCertCa* ca)
 {
     const WolfCertKeyAlg* alg = wolfcert_key_alg(ca->type);
@@ -94,6 +107,14 @@ static int gen_self_signed_cert(WolfCertCa* ca)
     if (ku != 0) {
         wc_CertFree(cert);
         return WOLFCERT_ERR_WC(ku, "ca", "SetKeyUsage");
+    }
+
+    /* Every generated CA has the same subject; the key id tells them apart. */
+    int kid = wc_SetSubjectKeyIdFromPublicKey_ex(cert, alg->wc_keytype_enum,
+                                                 ca->impl);
+    if (kid != 0) {
+        wc_CertFree(cert);
+        return WOLFCERT_ERR_WC(kid, "ca", "SetSubjectKeyId");
     }
 
     WC_RNG rng;
@@ -131,6 +152,7 @@ static int gen_self_signed_cert(WolfCertCa* ca)
 
     ca->cert_der     = der;
     ca->cert_der_len = (size_t)sz;
+    ca->skid_copies  = wolfcert_ca_skid_copies(ca);
     return WOLFCERT_OK;
 }
 
@@ -339,6 +361,7 @@ int wolfcert_ca_load(WolfCertCa* ca, const uint8_t* cert, size_t cert_len,
         ca->cert_der_len = cert_buf.len;
         ca->key_der      = key_buf.data;
         ca->key_der_len  = key_buf.len;
+        ca->skid_copies  = wolfcert_ca_skid_copies(ca);
         k->impl       = NULL;
         cert_buf.data = NULL;
         key_buf.data  = NULL;
@@ -827,6 +850,13 @@ int wolfcert_ca_issue(WolfCertCa* ca,
         if (rc == WOLFCERT_OK &&
                 wc_SetIssuerBuffer(nc, ca->cert_der, (int)ca->cert_der_len) != 0)
             rc = WOLFCERT_ERR_CRYPTO;
+    }
+
+    if (rc == 0 && ca->skid_copies) {
+        int akid = wc_SetAuthKeyIdFromCert(nc, ca->cert_der,
+                                           (int)ca->cert_der_len);
+        if (akid != 0)
+            rc = WOLFCERT_ERR_WC(akid, "ca", "SetAuthKeyIdFromCert");
     }
 
     if (rc == 0) {

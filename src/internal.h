@@ -115,6 +115,7 @@ typedef struct {
     uint8_t* key_der;
     size_t   key_der_len;
     void*    heap;
+    int      skid_copies;  /* SKID is KEYID_SIZE, so issued AKIDs copy it */
 } WolfCertCa;
 
 int  wolfcert_ca_generate(WolfCertCa* ca, WolfCertKeyType type, int param, void* heap);
@@ -126,6 +127,7 @@ WOLFCERT_TEST_VIS int  wolfcert_ca_load(WolfCertCa* ca,
 /* Copy out the CA certificate and, unless out_key is NULL, its key. */
 int  wolfcert_ca_export(const WolfCertCa* ca, WolfCertEncoding enc,
                         WolfCertBuffer* out_cert, WolfCertBuffer* out_key);
+int  wolfcert_ca_skid_copies(const WolfCertCa* ca);
 WOLFCERT_TEST_VIS void wolfcert_ca_free(WolfCertCa* ca);
 
 /* Rebuild an issued certificate's subject from a decoded CSR. */
@@ -156,6 +158,9 @@ struct WolfCertServer {
     void*                   priv;        /* protocol-specific state */
     WOLFSSL_CTX*            tls_ctx;
     WOLFSSL*                tls_current; /* owned by the accept loop */
+    /* Only ca.cert_der; set when tls_client_trust_issued meets a client CA. */
+    WOLFSSL_CERT_MANAGER*   issued_cm;
+    int                     renew_only;  /* tls_client_trust_issued alone */
     int                     keep_alive;  /* handlers clear it to close */
     /* Set when the accept loop armed SO_RCVTIMEO/SO_SNDTIMEO; would-block
      * retries in wolfcert_io_{recv,send} are allowed only then. */

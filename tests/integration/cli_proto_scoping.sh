@@ -277,6 +277,39 @@ if [ -x "$SERVER" ]; then
         expect_server_reject "--basic $b" "non-empty USER:PASS" \
             --proto est --tls-cert "$0" --tls-key "$0" --basic "$b"
     done
+    expect_server_reject "--tls-trust-issued under scep" "only for EST" \
+        --proto scep --tls-trust-issued
+    # A wolfSSL without KEEP_PEER_CERT refuses --tls-trust-issued first.
+    trust_issued_ok=1
+    want_alone="needs ca_cert and ca_key"
+    want_empty="needs ca_cert and ca_key"
+    case "$("$SERVER" --proto est --listen 127.0.0.1:0 --tls-cert "$0" \
+            --tls-key "$0" --tls-trust-issued --est-allow-anonymous 2>&1)" in
+        *KEEP_PEER_CERT*)
+            trust_issued_ok=0
+            want_alone="KEEP_PEER_CERT"
+            want_empty="KEEP_PEER_CERT"
+            ;;
+        *"out of memory"*)
+            trust_issued_ok=0
+            want_empty=""
+            ;;
+    esac
+    expect_server_reject "--tls-trust-issued alone without --ca-dir" \
+        "$want_alone" --proto est --tls-cert "$0" --tls-key "$0" \
+        --tls-trust-issued
+    expect_server_reject "missing --ca-dir" "No such file or directory" \
+        --proto est --tls-cert "$0" --tls-key "$0" --est-allow-anonymous \
+        --ca-dir "$0.missing"
+    expect_server_reject "--ca-dir naming a file" "is not a directory" \
+        --proto est --tls-cert "$0" --tls-key "$0" --est-allow-anonymous \
+        --ca-dir "$0"
+    opendir="$(mktemp -d -t wolfcert-cadir.XXXXXX)"
+    chmod 0777 "$opendir"
+    expect_server_reject "--ca-dir writable by others" "not writable by others" \
+        --proto est --tls-cert "$0" --tls-key "$0" --est-allow-anonymous \
+        --ca-dir "$opendir"
+    rmdir "$opendir"
     # $0 is no PEM, so start fails in TLS setup, before anything binds.
     out="$("$SERVER" --proto est --listen 127.0.0.1:0 --tls-cert "$0" \
             --tls-key "$0" --est-allow-anonymous 2>&1)"
@@ -289,6 +322,24 @@ if [ -x "$SERVER" ]; then
             fails=$((fails + 1))
             ;;
     esac
+    cadir="$(mktemp -d -t wolfcert-cadir.XXXXXX)"
+    if [ -n "$want_empty" ]; then
+        expect_server_reject "--tls-trust-issued alone with an empty --ca-dir" \
+            "$want_empty" --proto est --listen 127.0.0.1:0 \
+            --tls-cert "$0" --tls-key "$0" --tls-trust-issued --ca-dir "$cadir"
+    else
+        echo "skip --tls-trust-issued with an empty --ca-dir (no allocator)"
+    fi
+    printf 'x' > "$cadir/ca.cert.der"
+    expect_server_reject "--ca-dir holding the certificate alone" \
+        "ca.key.der is missing" --proto est --listen 127.0.0.1:0 \
+        --tls-cert "$0" --tls-key "$0" --est-allow-anonymous --ca-dir "$cadir"
+    printf 'x' > "$cadir/ca.key.der"
+    chmod 0644 "$cadir/ca.key.der"
+    expect_server_reject "--ca-dir with a CA key others can read" \
+        "not accessible by others" --proto est --listen 127.0.0.1:0 \
+        --tls-cert "$0" --tls-key "$0" --est-allow-anonymous --ca-dir "$cadir"
+    rm -rf "$cadir"
 fi
 if [ ! -x "$SERVER" ]; then
     skip_group "--ca-fingerprint pinning (wolfcert-server not built)"
@@ -496,6 +547,78 @@ else
         fi
         kill "$est_pid" 2>/dev/null
         est_pid=""
+
+        # --ca-dir keeps the CA across a restart; only --tls-trust-issued
+        # lets the certificates it issued renew.
+        cadir="$tmp/est-ca-dir"
+        mkdir -m 0700 "$cadir"
+        cadir_ok=0
+        started_pid=""
+        if [ -f "$tmp/tls.crt" ] &&
+                start_server "$tmp/cadir-1.log" --proto est \
+                    --tls-cert "$tmp/tls.crt" --tls-key "$tmp/tls.key" \
+                    --est-allow-anonymous --ca-dir "$cadir"; then
+            cadir_url="https://127.0.0.1:$port/.well-known/est"
+            if "$CLI" getcacerts --proto est --url "$cadir_url" \
+                    --trust "$tmp/pin-ca.pem" --out-cert "$tmp/cadir-ca1.pem" \
+                    >"$tmp/cadir.log" 2>&1 &&
+                    "$CLI" enroll --proto est --url "$cadir_url" \
+                    --trust "$tmp/pin-ca.pem" --key-type rsa:2048 \
+                    --subject "CN=ca-dir" \
+                    --out-key "$tmp/cadir.key" --out-cert "$tmp/cadir.crt" \
+                    >>"$tmp/cadir.log" 2>&1; then
+                cadir_ok=1
+                case "$(ls -l "$cadir/ca.key.der")" in
+                    -rw-------*) echo "ok   --ca-dir keeps the CA key 0600" ;;
+                    *)
+                        echo "FAIL: --ca-dir CA key mode"
+                        fails=$((fails + 1))
+                        ;;
+                esac
+                if "$CLI" reenroll --proto est --url "$cadir_url" \
+                        --trust "$tmp/pin-ca.pem" --cert "$tmp/cadir.crt" \
+                        --key "$tmp/cadir.key" \
+                        --out-cert "$tmp/cadir-untrusted.crt" \
+                        >>"$tmp/cadir.log" 2>&1; then
+                    echo "FAIL: reenroll without --tls-trust-issued succeeded"
+                    fails=$((fails + 1))
+                else
+                    echo "ok   reenroll needs --tls-trust-issued"
+                fi
+            fi
+        fi
+        kill "$started_pid" 2>/dev/null
+        wait "$started_pid" 2>/dev/null
+        started_pid=""
+        if [ "$trust_issued_ok" -eq 0 ]; then
+            echo "skip --ca-dir renewal (wolfSSL lacks KEEP_PEER_CERT)"
+        elif [ "$cadir_ok" -eq 1 ] &&
+                start_server "$tmp/cadir-2.log" --proto est \
+                    --tls-cert "$tmp/tls.crt" --tls-key "$tmp/tls.key" \
+                    --est-allow-anonymous --ca-dir "$cadir" \
+                    --tls-trust-issued; then
+            cadir_url="https://127.0.0.1:$port/.well-known/est"
+            if "$CLI" getcacerts --proto est --url "$cadir_url" \
+                    --trust "$tmp/pin-ca.pem" --out-cert "$tmp/cadir-ca2.pem" \
+                    >>"$tmp/cadir.log" 2>&1 &&
+                    cmp -s "$tmp/cadir-ca1.pem" "$tmp/cadir-ca2.pem" &&
+                    "$CLI" reenroll --proto est --url "$cadir_url" \
+                    --trust "$tmp/pin-ca.pem" --cert "$tmp/cadir.crt" \
+                    --key "$tmp/cadir.key" --out-cert "$tmp/cadir-renewed.crt" \
+                    >>"$tmp/cadir.log" 2>&1 &&
+                    grep -q "BEGIN CERTIFICATE" "$tmp/cadir-renewed.crt"; then
+                echo "ok   --ca-dir keeps the CA and renews its certificates"
+            else
+                echo "FAIL: --ca-dir after a restart"
+                cat "$tmp/cadir.log" "$tmp/cadir-2.log"
+                fails=$((fails + 1))
+            fi
+            kill "$started_pid" 2>/dev/null
+            started_pid=""
+        else
+            skip_group "--ca-dir (no EST server with --ca-dir would start)"
+            cat "$tmp/cadir.log" "$tmp/cadir-1.log" 2>/dev/null
+        fi
 
         # getnextca resolves the current CA through the same pin.
         expect_reject "getnextca with a mismatched --ca-fingerprint" \

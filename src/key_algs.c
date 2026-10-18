@@ -135,6 +135,14 @@ static int rsa_host_priv(const struct WolfCertKey* k)
     return !mp_iszero(&((RsaKey*)k->impl)->d);
 }
 
+#ifdef WOLFCERT_USE_KEY_ID
+static const uint8_t* rsa_impl_id(const struct WolfCertKey* k, int* len)
+{
+    *len = ((RsaKey*)k->impl)->idLen;
+    return ((RsaKey*)k->impl)->id;
+}
+#endif
+
 static int rsa_pub_check(struct WolfCertKey* k, const uint8_t* pub,
                          word32 pub_len)
 {
@@ -274,6 +282,14 @@ static int ecc_host_priv(const struct WolfCertKey* k)
 {
     return !mp_iszero(wc_ecc_key_get_priv((ecc_key*)k->impl));
 }
+
+#ifdef WOLFCERT_USE_KEY_ID
+static const uint8_t* ecc_impl_id(const struct WolfCertKey* k, int* len)
+{
+    *len = ((ecc_key*)k->impl)->idLen;
+    return ((ecc_key*)k->impl)->id;
+}
+#endif
 
 /* Uncompressed X9.63 point: the 0x04 marker plus two coordinates. */
 #define ECC_X963_CAP (1 + 2 * MAX_ECC_BYTES)
@@ -418,6 +434,12 @@ static int ed25519_host_priv(const struct WolfCertKey* k)
 {
     return ((ed25519_key*)k->impl)->privKeySet;
 }
+
+static const uint8_t* ed25519_impl_id(const struct WolfCertKey* k, int* len)
+{
+    *len = ((ed25519_key*)k->impl)->idLen;
+    return ((ed25519_key*)k->impl)->id;
+}
 #endif
 
 static int ed25519_pub_check(struct WolfCertKey* k, const uint8_t* pub,
@@ -515,6 +537,12 @@ static int ed448_pub_decode(struct WolfCertKey* k, const uint8_t* der,
 static int ed448_host_priv(const struct WolfCertKey* k)
 {
     return ((ed448_key*)k->impl)->privKeySet;
+}
+
+static const uint8_t* ed448_impl_id(const struct WolfCertKey* k, int* len)
+{
+    *len = ((ed448_key*)k->impl)->idLen;
+    return ((ed448_key*)k->impl)->id;
 }
 #endif
 
@@ -632,6 +660,14 @@ static int mldsa_host_priv(const struct WolfCertKey* k)
     return ((MlDsaKey*)k->impl)->prvKeySet;
 }
 
+#ifdef WOLFCERT_USE_KEY_ID
+static const uint8_t* mldsa_impl_id(const struct WolfCertKey* k, int* len)
+{
+    *len = ((MlDsaKey*)k->impl)->idLen;
+    return ((MlDsaKey*)k->impl)->id;
+}
+#endif
+
 /* Adopts the certificate's public half, which a PKCS#8 v1 key lacks. */
 static int mldsa_pub_check(struct WolfCertKey* k, const uint8_t* pub,
                            word32 pub_len)
@@ -669,6 +705,9 @@ static const WolfCertKeyAlg ALG_RSA = {
     .pub_check       = rsa_pub_check,
     .pub_decode      = rsa_pub_decode,
     .host_priv       = rsa_host_priv,
+#ifdef WOLFCERT_USE_KEY_ID
+    .impl_id         = rsa_impl_id,
+#endif
     .free_           = rsa_free,
 };
 #endif
@@ -688,6 +727,9 @@ static const WolfCertKeyAlg ALG_ECC = {
     .pub_check       = ecc_pub_check,
     .pub_decode      = ecc_pub_decode,
     .host_priv       = ecc_host_priv,
+#ifdef WOLFCERT_USE_KEY_ID
+    .impl_id         = ecc_impl_id,
+#endif
     .free_           = ecc_free,
 };
 #endif
@@ -708,6 +750,7 @@ static const WolfCertKeyAlg ALG_ED25519 = {
 #ifdef WOLFCERT_ED25519_KEY_ID
     .pub_decode      = ed25519_pub_decode,
     .host_priv       = ed25519_host_priv,
+    .impl_id         = ed25519_impl_id,
 #endif
     .free_           = ed25519_free,
 };
@@ -729,6 +772,7 @@ static const WolfCertKeyAlg ALG_ED448 = {
 #ifdef WOLFCERT_ED448_KEY_ID
     .pub_decode      = ed448_pub_decode,
     .host_priv       = ed448_host_priv,
+    .impl_id         = ed448_impl_id,
 #endif
     .free_           = ed448_free,
 };
@@ -750,6 +794,9 @@ static const WolfCertKeyAlg ALG_MLDSA44 = {
     .pub_check       = mldsa_pub_check,
     .pub_decode      = mldsa_pub_decode,
     .host_priv       = mldsa_host_priv,
+#ifdef WOLFCERT_USE_KEY_ID
+    .impl_id         = mldsa_impl_id,
+#endif
     .free_           = mldsa_free,
 };
 #endif
@@ -769,6 +816,9 @@ static const WolfCertKeyAlg ALG_MLDSA65 = {
     .pub_check       = mldsa_pub_check,
     .pub_decode      = mldsa_pub_decode,
     .host_priv       = mldsa_host_priv,
+#ifdef WOLFCERT_USE_KEY_ID
+    .impl_id         = mldsa_impl_id,
+#endif
     .free_           = mldsa_free,
 };
 #endif
@@ -788,6 +838,9 @@ static const WolfCertKeyAlg ALG_MLDSA87 = {
     .pub_check       = mldsa_pub_check,
     .pub_decode      = mldsa_pub_decode,
     .host_priv       = mldsa_host_priv,
+#ifdef WOLFCERT_USE_KEY_ID
+    .impl_id         = mldsa_impl_id,
+#endif
     .free_           = mldsa_free,
 };
 #endif

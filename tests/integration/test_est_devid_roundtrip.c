@@ -773,6 +773,89 @@ static int test_client_key_src(const char* url,
     return 0;
 }
 
+/* A failed enroll or rekey still hands back a key made under a key_id. */
+static int test_failure_keeps_key(const char* url, const uint8_t* tls_cert,
+                                  size_t tls_cert_len)
+{
+    static const uint8_t id[] = "wolfcert/orphan-key";
+    static const uint8_t junk[] = { 0x30, 0x03, 0x02, 0x01, 0x00 };
+    const WolfCertCertMeta meta = { .subject_dn = "CN=devid-orphan" };
+    const WolfCertCertMeta renew = { 0 };
+    WolfCertKeyCfg kcfg = { .type = TEST_ENROLL_KEY_TYPE,
+                            .param = TEST_ENROLL_KEY_PARAM,
+                            .dev_id = MOCK_DEVID,
+                            .key_id = id, .key_id_len = sizeof(id) - 1 };
+    WolfCertKeyCfg scfg = { .type = TEST_ENROLL_KEY_TYPE,
+                            .param = TEST_ENROLL_KEY_PARAM,
+                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+    WolfCertServerCfg cli = {
+        .protocol          = WOLFCERT_PROTO_EST,
+        .server_url        = url,
+        .trust_anchors     = tls_cert,
+        .trust_anchors_len = tls_cert_len,
+        .verify_server     = 1,
+    };
+    WolfCertKey* key = NULL;
+    WolfCertKey* cur = NULL;
+    WolfCertBuffer cert = { 0 };
+    const uint8_t* got_id = NULL;
+    size_t got_len = 0;
+
+    mock_reset();
+    REQUIRE(wolfcert_client_enroll(NULL, &cli, &kcfg, &meta, &key, &cert) !=
+            WOLFCERT_OK);
+    REQUIRE(key != NULL);
+    REQUIRE(wolfcert_key_id(key, &got_id, &got_len) == WOLFCERT_OK);
+    REQUIRE(got_len == sizeof(id) - 1 && memcmp(got_id, id, got_len) == 0);
+    wolfcert_key_free(key);
+    key = NULL;
+
+    mock_reset();
+    REQUIRE(wolfcert_key_generate(&scfg, &cur) == WOLFCERT_OK);
+    REQUIRE(wolfcert_client_reenroll(NULL, &cli, junk, sizeof(junk), cur,
+                                     &kcfg, &renew, &key, &cert) ==
+            WOLFCERT_ERR_PARSE);
+    REQUIRE(key != NULL);
+    wolfcert_key_free(key);
+    key = NULL;
+
+    REQUIRE(wolfcert_client_enroll(NULL, &cli, &scfg, &meta, &key, &cert) !=
+            WOLFCERT_OK);
+    REQUIRE(key == NULL);
+
+    /* An early failure also leaves out_key defined. */
+    key = cur;
+    scfg.param = 123;
+    REQUIRE(wolfcert_client_enroll(NULL, &cli, &scfg, &meta, &key, &cert) !=
+            WOLFCERT_OK);
+    REQUIRE(key == NULL);
+    key = cur;
+    REQUIRE(wolfcert_client_reenroll(NULL, &cli, junk, sizeof(junk), cur,
+                                     NULL, &meta, &key, &cert) ==
+            WOLFCERT_ERR_BAD_ARG);
+    REQUIRE(key == NULL);
+    scfg.param = TEST_ENROLL_KEY_PARAM;
+    REQUIRE(wolfcert_client_reenroll(NULL, &cli, junk, sizeof(junk), cur,
+                                     &scfg, &renew, &key, &cert) ==
+            WOLFCERT_ERR_PARSE);
+    REQUIRE(key == NULL);
+    REQUIRE(cert.data == NULL);
+
+    /* A protocol the client calls cannot enroll creates no key. */
+    cli.protocol = WOLFCERT_PROTO_SCEP;
+    int gens = mock_keygens;
+    REQUIRE(wolfcert_client_enroll(NULL, &cli, &kcfg, &meta, &key, &cert) ==
+            WOLFCERT_ERR_UNSUPPORTED);
+    REQUIRE(wolfcert_client_reenroll(NULL, &cli, junk, sizeof(junk), cur,
+                                     &kcfg, &renew, &key, &cert) ==
+            WOLFCERT_ERR_UNSUPPORTED);
+    REQUIRE(key == NULL);
+    REQUIRE(mock_keygens == gens);
+    wolfcert_key_free(cur);
+    mock_reset();
+    return 0;
+}
+
 int main(void)
 {
     uint8_t* tls_cert = NULL; size_t tls_cert_len = 0;
@@ -871,6 +954,7 @@ int main(void)
 #endif
     REQUIRE(test_client_key_src(url, tls_cert, tls_cert_len, boot_cert,
                                 boot_cert_len, boot_key, boot_key_len) == 0);
+    REQUIRE(test_failure_keeps_key(url, tls_cert, tls_cert_len) == 0);
 
     wolfcert_server_stop(srv);
     pthread_join(tid, NULL);

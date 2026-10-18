@@ -30,7 +30,11 @@ typedef struct WolfCertKey WolfCertKey;
 
 /* Generate a key per cfg. cfg->dev_id != -1 routes its operations through
  * that CryptoCb device; with cfg->key_id the key also stays in the device and
- * the handle only references it. Allocated from cfg->heap or the default. */
+ * the handle only references it, under the id wolfcert_key_id returns, which
+ * the device may have changed. Allocated from cfg->heap or the default.
+ * *out_key is NULL after a failure, except WOLFCERT_ERR_CRYPTO when the device
+ * left an unusable id: *out_key then holds the key under the requested id so
+ * the caller can delete it there. */
 WOLFCERT_API int wolfcert_key_generate(const WolfCertKeyCfg* cfg, WolfCertKey** out_key);
 
 /* Reference a key a CryptoCb device holds under cfg->key_id, its public half

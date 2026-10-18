@@ -346,7 +346,8 @@ The `key_id` bytes are opaque to wolfCert. They reach the backend in the
 wolfCrypt key's `id` field, the same way wolfPKCS11, wolfHSM and the hardware
 ports name their keys, and the backend decides what they mean (a PKCS#11
 `CKA_ID`, a TPM handle, a key-store slot). The backend generates the key there
-and returns only its public half.
+and returns only its public half. It may also rename the key, as a TPM does
+when it picks a transient handle, and `wolfcert_key_id` returns the new id.
 
 From there, every private-key operation on the key routes through
 `my_callback`: CSR signing, and TLS client authentication by id or for EST
@@ -380,6 +381,10 @@ handle, because the CSR carries the public key:
 rebuild it with `wolfcert_key_from_id(&cfg, cert, cert_len, &key)`, which takes
 the public half from the certificate since a backend need not be able to
 return it.
+
+`wolfcert_client_enroll` and `wolfcert_client_reenroll` hand back a key they
+generated under a `key_id` even when they fail, so the caller can delete it
+in the backend.
 
 RSA, ECC and ML-DSA keys take a `key_id`. Ed25519 and Ed448 keys take one
 with a wolfSSL newer than 5.9.4, which has `wc_ed25519_init_id` and

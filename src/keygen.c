@@ -76,6 +76,7 @@ int wolfcert_key_generate(const WolfCertKeyCfg* cfg, WolfCertKey** out_key)
 {
     if (cfg == NULL || out_key == NULL)
         return WOLFCERT_ERR_BAD_ARG;
+    *out_key = NULL;
 
     const WolfCertKeyAlg* alg = wolfcert_key_alg(cfg->type);
     if (alg == NULL)
@@ -121,6 +122,22 @@ int wolfcert_key_generate(const WolfCertKeyCfg* cfg, WolfCertKey** out_key)
         return WOLFCERT_ERR(WOLFCERT_ERR_UNSUPPORTED, "keygen",
                             "CryptoCb device %d did not generate the key",
                             cfg->dev_id);
+    }
+
+    /* The device may rename the key, as a TPM does for a transient one. */
+    if (k->id_len > 0 && alg->impl_id != NULL) {
+        int id_len = 0;
+        const uint8_t* id = alg->impl_id(k, &id_len);
+
+        /* The device holds the key, so hand it out under the requested id. */
+        if (id_len <= 0 || id_len > WOLFCERT_KEY_ID_MAX_LEN) {
+            *out_key = k;
+            return WOLFCERT_ERR(WOLFCERT_ERR_CRYPTO, "keygen",
+                                "CryptoCb device %d left a bad key id",
+                                cfg->dev_id);
+        }
+        memcpy(k->id, id, (size_t)id_len);
+        k->id_len = (size_t)id_len;
     }
 
     *out_key = k;

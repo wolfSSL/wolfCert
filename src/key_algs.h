@@ -57,6 +57,9 @@ typedef struct WolfCertKeyAlg {
     /* Non-zero if the private half sits in host memory. NULL if the type
      * cannot take a key_id. */
     int  (*host_priv) (const struct WolfCertKey* key);
+    /* The key id in key->impl, which make may have changed. NULL if the type
+     * cannot take a key_id. */
+    const uint8_t* (*impl_id)(const struct WolfCertKey* key, int* len);
     void (*free_)     (struct WolfCertKey* key);
 } WolfCertKeyAlg;
 

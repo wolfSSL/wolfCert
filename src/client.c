@@ -136,6 +136,29 @@ int wolfcert_client_fetch_meta(WolfCertClient* client, const WolfCertServerCfg* 
     return WOLFCERT_ERR_UNSUPPORTED;
 }
 
+/* Only EST enrolls here; SCEP needs the RA cert, which this API lacks. */
+static int client_proto_check(const WolfCertServerCfg* srv)
+{
+#ifdef WOLFCERT_HAVE_EST
+    if (srv->protocol == WOLFCERT_PROTO_EST)
+        return WOLFCERT_OK;
+#endif
+    return WOLFCERT_ERR(WOLFCERT_ERR_UNSUPPORTED, "client",
+                        "protocol %d cannot enroll through wolfcert_client",
+                        (int)srv->protocol);
+}
+
+/* On failure, a key with a key_id still goes to the caller to delete. */
+static int hand_back(WolfCertKey* key, int rc, WolfCertKey** out_key)
+{
+    if (rc != WOLFCERT_OK && key != NULL && key->id_len == 0) {
+        wolfcert_key_free(key);
+        key = NULL;
+    }
+    *out_key = key;
+    return rc;
+}
+
 int wolfcert_client_enroll(WolfCertClient* client, const WolfCertServerCfg* srv,
                            const WolfCertKeyCfg* key_cfg,
                            const WolfCertCertMeta* meta,
@@ -145,6 +168,11 @@ int wolfcert_client_enroll(WolfCertClient* client, const WolfCertServerCfg* srv,
     if (srv == NULL || key_cfg == NULL || meta == NULL ||
             out_key == NULL || out_cert_pem == NULL)
         return WOLFCERT_ERR_BAD_ARG;
+    *out_key = NULL;
+
+    int rc = client_proto_check(srv);
+    if (rc != WOLFCERT_OK)
+        return rc;
 
     /* Shallow copies; csr_attrs_apply writes only scalar fields. */
     WolfCertKeyCfg   eff_key  = *key_cfg;
@@ -153,51 +181,33 @@ int wolfcert_client_enroll(WolfCertClient* client, const WolfCertServerCfg* srv,
 #ifdef WOLFCERT_HAVE_EST
     /* proto_opts is a union; test the protocol before reading its EST arm. */
     if (srv->protocol == WOLFCERT_PROTO_EST && srv->proto_opts.est.auto_csrattrs) {
-        int rc = wolfcert_client_auto_csrattrs(srv, &eff_key, &eff_meta);
+        rc = wolfcert_client_auto_csrattrs(srv, &eff_key, &eff_meta);
         if (rc != WOLFCERT_OK)
             return rc;
     }
 #endif
 
     WolfCertKey* key = NULL;
-    int rc = wolfcert_key_generate(&eff_key, &key);
+    rc = wolfcert_key_generate(&eff_key, &key);
     if (rc != WOLFCERT_OK)
-        return rc;
+        return hand_back(key, rc, out_key);
 
     WolfCertBuffer csr = { 0 };
     rc = wolfcert_csr_build(key, &eff_meta, &csr);
-    if (rc != WOLFCERT_OK) {
-        wolfcert_key_free(key);
-        return rc;
-    }
+    if (rc != WOLFCERT_OK)
+        return hand_back(key, rc, out_key);
 
 #ifdef WOLFCERT_HAVE_EST
-    if (srv->protocol == WOLFCERT_PROTO_EST) {
-        WolfCertEstResult r;
+    WolfCertEstResult r;
 
-        rc = wolfcert_est_simple_enroll(srv, csr.data, csr.len, &r);
-        rc = wolfcert_client_take_cert(rc, &r, out_cert_pem);
-    }
-    else
+    rc = wolfcert_est_simple_enroll(srv, csr.data, csr.len, &r);
+    rc = wolfcert_client_take_cert(rc, &r, out_cert_pem);
+#else
+    rc = WOLFCERT_ERR_UNSUPPORTED;
 #endif
-#ifdef WOLFCERT_HAVE_SCEP
-    if (srv->protocol == WOLFCERT_PROTO_SCEP) {
-        rc = WOLFCERT_ERR_UNSUPPORTED;
-        /* SCEP enrollment needs the RA cert, which this API does not take. */
-    }
-    else
-#endif
-    {
-        rc = WOLFCERT_ERR_UNSUPPORTED;
-    }
 
     wolfcert_buffer_free(&csr);
-    if (rc != WOLFCERT_OK) {
-        wolfcert_key_free(key);
-        return rc;
-    }
-    *out_key = key;
-    return WOLFCERT_OK;
+    return hand_back(key, rc, out_key);
 }
 
 int wolfcert_client_reenroll(WolfCertClient* client, const WolfCertServerCfg* srv,
@@ -211,48 +221,39 @@ int wolfcert_client_reenroll(WolfCertClient* client, const WolfCertServerCfg* sr
     if (srv == NULL || current_cert == NULL || current_key == NULL ||
         meta == NULL || out_key == NULL || out_cert_pem == NULL)
         return WOLFCERT_ERR_BAD_ARG;
+    *out_key = NULL;
     if (wolfcert_csr_meta_sets_identity(meta))
         return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "client",
             "a renewal keeps the certificate's subject and SAN");
 
+    int rc = client_proto_check(srv);
+    if (rc != WOLFCERT_OK)
+        return rc;
+
     WolfCertKey* nk = NULL;
-    int rc;
     if (new_key_cfg != NULL) {
         rc = wolfcert_key_generate(new_key_cfg, &nk);
         if (rc != WOLFCERT_OK)
-            return rc;
+            return hand_back(nk, rc, out_key);
     }
     const WolfCertKey* signing_key = nk ? nk : current_key;
 
     WolfCertBuffer csr = { 0 };
     rc = wolfcert_csr_build_ex(signing_key, meta, current_cert,
                                current_cert_len, &csr);
-    if (rc != WOLFCERT_OK) {
-        if (nk)
-            wolfcert_key_free(nk);
-        return rc;
-    }
+    if (rc != WOLFCERT_OK)
+        return hand_back(nk, rc, out_key);
 
 #ifdef WOLFCERT_HAVE_EST
-    if (srv->protocol == WOLFCERT_PROTO_EST) {
-        WolfCertEstResult r;
+    WolfCertEstResult r;
 
-        rc = wolfcert_est_simple_reenroll(srv, current_cert, current_cert_len,
-                                          current_key, csr.data, csr.len, &r);
-        rc = wolfcert_client_take_cert(rc, &r, out_cert_pem);
-    }
-    else
+    rc = wolfcert_est_simple_reenroll(srv, current_cert, current_cert_len,
+                                      current_key, csr.data, csr.len, &r);
+    rc = wolfcert_client_take_cert(rc, &r, out_cert_pem);
+#else
+    rc = WOLFCERT_ERR_UNSUPPORTED;
 #endif
-    {
-        rc = WOLFCERT_ERR_UNSUPPORTED;
-    }
 
     wolfcert_buffer_free(&csr);
-    if (rc != WOLFCERT_OK) {
-        if (nk)
-            wolfcert_key_free(nk);
-        return rc;
-    }
-    *out_key = nk ? nk : NULL;
-    return WOLFCERT_OK;
+    return hand_back(nk, rc, out_key);
 }

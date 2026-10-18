@@ -113,12 +113,88 @@ static int key_id_declined(WolfCertKeyType type, int param)
     return 0;
 }
 
+#ifdef WOLFCERT_HAVE_ECC
+#define RENAME_DEVID 0x726e
+static const uint8_t renamed_id[] = { 0x52, 0x45, 0x4e };
+
+/* Keeps only the public point of a software key and renames the key, or
+ * clears its id when ctx is set. */
+static int rename_cb(int devId, wc_CryptoInfo* info, void* ctx)
+{
+    ecc_key tmp;
+    byte pub[1 + 2 * MAX_ECC_BYTES];
+    word32 pub_len = sizeof(pub);
+    int rc;
+
+    (void)devId;
+    if (info->algo_type != WC_ALGO_TYPE_PK ||
+        info->pk.type != WC_PK_TYPE_EC_KEYGEN)
+        return CRYPTOCB_UNAVAILABLE;
+
+    rc = wc_ecc_init_ex(&tmp, NULL, INVALID_DEVID);
+    if (rc != 0)
+        return rc;
+    rc = wc_ecc_make_key_ex(info->pk.eckg.rng, info->pk.eckg.size, &tmp,
+                            info->pk.eckg.curveId);
+    if (rc == 0)
+        rc = wc_ecc_export_x963(&tmp, pub, &pub_len);
+    if (rc == 0)
+        rc = wc_ecc_import_x963_ex(pub, pub_len, info->pk.eckg.key,
+                                   info->pk.eckg.curveId);
+    wc_ecc_free(&tmp);
+    if (rc == 0 && ctx != NULL)
+        info->pk.eckg.key->idLen = 0;
+    else if (rc == 0) {
+        memcpy(info->pk.eckg.key->id, renamed_id, sizeof(renamed_id));
+        info->pk.eckg.key->idLen = (int)sizeof(renamed_id);
+    }
+    return rc;
+}
+
+/* The id a device gives the key it generates replaces the requested one. */
+static int key_id_renamed(void)
+{
+    static const uint8_t id[] = { 0x01, 0x02 };
+    WolfCertKeyCfg cfg = { .type = WOLFCERT_KEY_ECC, .param = 256,
+                           .dev_id = RENAME_DEVID,
+                           .key_id = id, .key_id_len = sizeof(id) };
+    WolfCertKey* k = NULL;
+    const uint8_t* got = NULL;
+    size_t got_len = 0;
+
+    REQUIRE(wc_CryptoCb_RegisterDevice(RENAME_DEVID, rename_cb, NULL) == 0);
+    REQUIRE(wolfcert_key_generate(&cfg, &k) == WOLFCERT_OK);
+    REQUIRE(wolfcert_key_id(k, &got, &got_len) == WOLFCERT_OK);
+    REQUIRE(got_len == sizeof(renamed_id));
+    REQUIRE(memcmp(got, renamed_id, sizeof(renamed_id)) == 0);
+    wolfcert_key_free(k);
+    wc_CryptoCb_UnRegisterDevice(RENAME_DEVID);
+
+    /* A device that leaves no id still hands out the key, under the
+     * requested id. */
+    k = NULL;
+    REQUIRE(wc_CryptoCb_RegisterDevice(RENAME_DEVID, rename_cb,
+                                       (void*)id) == 0);
+    REQUIRE(wolfcert_key_generate(&cfg, &k) == WOLFCERT_ERR_CRYPTO);
+    REQUIRE(k != NULL);
+    REQUIRE(wolfcert_key_id(k, &got, &got_len) == WOLFCERT_OK);
+    REQUIRE(got_len == sizeof(id) && memcmp(got, id, sizeof(id)) == 0);
+    wolfcert_key_free(k);
+    wc_CryptoCb_UnRegisterDevice(RENAME_DEVID);
+    return 0;
+}
+#endif
+
 static int key_id_cases(void)
 {
     static const uint8_t id[] = { 0x01, 0x02 };
     static const uint8_t junk[] = { 0x30, 0x03, 0x02, 0x01, 0x00 };
     WolfCertKey* k = NULL;
 
+#ifdef WOLFCERT_HAVE_ECC
+    if (key_id_renamed())
+        return 1;
+#endif
     REQUIRE(wc_CryptoCb_RegisterDevice(DECLINE_DEVID, decline_cb, NULL) == 0);
     WolfCertKeyCfg cfg = { .type = TEST_KEY_TYPE, .param = TEST_KEY_PARAM,
                            .dev_id = INVALID_DEVID,
@@ -126,8 +202,10 @@ static int key_id_cases(void)
     REQUIRE(wolfcert_key_generate(&cfg, &k) == WOLFCERT_ERR_BAD_ARG);
     cfg.dev_id = DECLINE_DEVID;
     cfg.key_id_len = 0;
+    k = (WolfCertKey*)&cfg;
     REQUIRE(wolfcert_key_generate(&cfg, &k) == WOLFCERT_ERR_BAD_ARG);
     REQUIRE(strstr(wolfcert_last_error_message(), "key_id_len") != NULL);
+    REQUIRE(k == NULL);
     cfg.dev_id = INVALID_DEVID;
     cfg.key_id_len = sizeof(id);
 

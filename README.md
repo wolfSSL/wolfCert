@@ -183,7 +183,11 @@ trusted. The signature digest floors at SHA-256 and needs no such
 override.
 
 To call the library directly, see `examples/enroll_est.c`,
-`examples/enroll_scep.c`, and `examples/enroll_cryptocb.c`.
+`examples/enroll_scep.c`, `examples/enroll_cryptocb.c` and
+`examples/enroll_tpm.c`. CMake builds the TPM example as
+`example_enroll_tpm` when it finds a wolfTPM with its CryptoCb (pass
+`-Dwolftpm_DIR=<prefix>/lib/cmake/wolftpm`). See
+[wolfTPM](https://github.com/wolfSSL/wolfTPM).
 
 ### Integrating with a wolfSSL static-memory pool
 

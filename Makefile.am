@@ -263,6 +263,7 @@ EXTRA_DIST = \
     wolfcert/options.h.in \
     examples/user_settings.h.example \
     examples/CMakeLists.txt \
+    examples/enroll_tpm.c \
     examples/certs/README.md \
     examples/certs/gen-certs.sh \
     examples/certs/gen-server-cert.sh \

@@ -394,6 +394,17 @@ signing and decryption take the private key as DER, so the SCEP calls return
 `WOLF_CRYPTO_CB` and `WOLF_PRIVATE_KEY_ID`. See `examples/enroll_cryptocb.c`
 for the registration pattern.
 
+`examples/enroll_tpm.c` enrolls and re-enrolls over EST with an ECC, RSA or
+ML-DSA key in a TPM. It needs a wolfTPM whose CryptoCb reads a 4-byte
+`key_id` as a persistent or transient handle. A key generated under a
+persistent handle is stored there. Under `0x80000000`
+(`WOLFTPM2_KEYID_TRANSIENT`) the TPM loads it at a transient handle it picks;
+a TPM reset drops that key, and so does `/dev/tpmrm0` when the process exits.
+An older wolfTPM generates the key in software, which `wolfcert_key_generate`
+refuses. ML-DSA needs a TPM with the v1.85 commands, such as wolfTPM's fwTPM.
+For a test CA that renews the certificates it issued, start the EST server
+from README.md with `--ca-dir DIR --tls-trust-issued` added.
+
 ### 4.3 Keep-alive sessions and non-blocking I/O
 
 A session keeps one connection for several requests. Open one when a flow
@@ -738,4 +749,5 @@ one key algorithm must be present.
 - `wolfcert/*.h` — the authoritative API reference; each public function and
   field states its contract, alone or in a group comment.
 - `examples/enroll_est.c`, `examples/enroll_scep.c`,
-  `examples/enroll_cryptocb.c` — runnable minimal integrations.
+  `examples/enroll_cryptocb.c`, `examples/enroll_tpm.c` - runnable minimal
+  integrations.

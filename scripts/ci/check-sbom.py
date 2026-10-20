@@ -14,6 +14,8 @@ import os
 import re
 import sys
 
+import yaml
+
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
     __file__))))
 LICENSE = "GPL-3.0-or-later"
@@ -36,6 +38,14 @@ def wolfcert_version():
     with open(os.path.join(ROOT, "wolfcert", "version.h")) as f:
         m = re.search(r'WOLFCERT_VERSION_STRING\s+"([^"]+)"', f.read())
     return m.group(1)
+
+
+def module_yml_purls():
+    with open(os.path.join(ROOT, "zephyr", "module.yml")) as f:
+        doc = yaml.safe_load(f)
+    refs = (doc.get("security") or {}).get("external-references") or []
+    return [r for r in refs if isinstance(r, str)
+            and r.lower().startswith("pkg:github/wolfssl/wolfcert@")]
 
 
 def options_defines(path):
@@ -89,6 +99,9 @@ def check(args):
     purl = f"pkg:github/wolfssl/wolfcert@v{version}"
     if m.get("purl") != purl:
         fail(f"CDX purl {m.get('purl')!r}, expected {purl!r}")
+    zephyr_purls = module_yml_purls()
+    if zephyr_purls != [purl]:
+        fail(f"zephyr/module.yml PURLs {zephyr_purls}, expected [{purl!r}]")
     licenses = identity(cdx)["licenses"]
     if licenses != [LICENSE]:
         fail(f"CDX licenses {licenses}, expected [{LICENSE!r}]")

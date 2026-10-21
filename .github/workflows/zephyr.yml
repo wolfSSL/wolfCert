@@ -159,7 +159,8 @@ jobs:
           "$SRC/tools/sbom/validate_sbom.py" --name-prefix wolfcert \
             --require-dep-version wolfssl wolfcert-*.cdx.json wolfcert-*.spdx.json
           "$HOME/zephyr-venv/bin/pyspdxtools" --infile wolfcert-*.spdx.json
-          "$SRC/scripts/ci/check-sbom.py" wolfcert-*.cdx.json wolfcert-*.spdx.json \
+          "$HOME/zephyr-venv/bin/python" "$SRC/scripts/ci/check-sbom.py" \
+            wolfcert-*.cdx.json wolfcert-*.spdx.json \
             --sources --wolfssl-version "$v" \
             --options-h "$OUT/zephyr/include/generated/wolfcert_gen/wolfcert/options.h"
 

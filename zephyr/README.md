@@ -83,7 +83,8 @@ a stack overflow here is reported as something else entirely.
 
 `west build -t wolfcert-sbom` writes a CycloneDX and an SPDX SBOM to
 `build/modules/wolfcert/`, listing the wolfCert sources the application
-compiles. See `docs/SBOM.md`.
+compiles. `west spdx` lists wolfCert too, by the PURL in `zephyr/module.yml`.
+See `docs/SBOM.md`.
 
 ## Networking on qemu_x86
 

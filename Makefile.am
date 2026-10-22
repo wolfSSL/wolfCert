@@ -235,6 +235,7 @@ EXTRA_DIST = \
     CLAUDE.md           \
     CONTRIBUTING.md     \
     LICENSE             \
+    LICENSING           \
     docs/ARCHITECTURE.md \
     docs/CI.md          \
     docs/EMBEDDED.md    \
@@ -260,8 +261,7 @@ include zephyr/include.am
 # SBOM generation, vendored from wolfssl-compliance-tooling
 CLEANFILES =
 SBOM_PKGNAME          = wolfcert
-SBOM_LICENSE_FILE     = $(srcdir)/LICENSE
-SBOM_LICENSE_OVERRIDE = GPL-3.0-or-later
+SBOM_LICENSE_FILE     = $(srcdir)/LICENSING
 SBOM_DEP_WOLFSSL      = yes
 SBOM_WOLFSSL_VERSION  = $(WOLFCERT_WOLFSSL_VERSION)
 if WOLFCERT_USER_SETTINGS

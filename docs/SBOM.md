@@ -21,7 +21,7 @@ The SBOM records:
 - the SHA-256 of `libwolfcert` as `make install` or `cmake --install` lays it out, taken from a private install into `_sbom_staging/`;
 - the feature set from `wolfcert/options.h`, or from `user_settings.h` as described below, as `wolfssl:build:WOLFCERT_*` properties;
 - wolfSSL as a dependency, with the version of the wolfSSL headers the build compiled against. If the build cannot read it, the SBOM target fails; set it with `make sbom SBOM_WOLFSSL_VERSION=...` or `-DWOLFCERT_SBOM_WOLFSSL_VERSION=...`. The CMake value stays in the cache, so clear it after updating wolfSSL;
-- the license, `GPL-3.0-or-later`. A commercial licensee can record another SPDX expression with `make sbom SBOM_LICENSE_OVERRIDE=...` or `-DWOLFCERT_SBOM_LICENSE=...`. A `LicenseRef-*` identifier also needs a file with the license text, passed as `SBOM_LICENSE_TEXT=<file>` or `-DWOLFCERT_SBOM_LICENSE_TEXT=<file>`.
+- the license, read from `LICENSING`: `GPL-3.0-or-later`. A commercial licensee can record another SPDX expression with `make sbom SBOM_LICENSE_OVERRIDE=...` or `-DWOLFCERT_SBOM_LICENSE=...`. A `LicenseRef-*` identifier also needs a file with the license text, passed as `SBOM_LICENSE_TEXT=<file>` or `-DWOLFCERT_SBOM_LICENSE_TEXT=<file>`.
 
 `SOURCE_DATE_EPOCH` sets the creation timestamp. In a git checkout `make sbom` defaults it to the time of the last commit, so two runs over the same build give identical files. The CMake target uses the current time unless it is set.
 
@@ -45,7 +45,7 @@ python3 scripts/sbom-user-settings.py sbom-options.h \
 python3 tools/sbom/sbom-driver.py --name wolfcert \
     --version-file wolfcert/version.h --version-macro WOLFCERT_VERSION_STRING \
     --srcs-file srcs.txt --options-h sbom-options.h \
-    --license-file LICENSE --license-override GPL-3.0-or-later \
+    --license-file LICENSING \
     --dep-wolfssl yes --dep-version wolfssl=<wolfSSL version> \
     --cdx-out wolfcert.cdx.json --spdx-out wolfcert.spdx.json
 ```

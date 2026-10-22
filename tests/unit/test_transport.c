@@ -1,5 +1,4 @@
-/* wolfCert - client-side certificate lifecycle management
- *
+/*
  * Copyright (C) 2026 wolfSSL Inc.
  *
  * This file is part of wolfCert.
@@ -15,8 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
+ * along with wolfCert.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 /* A caller-supplied WolfCertTransport drives the HTTP path with no socket. */

@@ -475,8 +475,8 @@ install(FILES "${CMAKE_CURRENT_BINARY_DIR}/wolfcert.pc"
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
 
 # SBOM: the wolfcert-sbom target, also named sbom when wolfCert is top level.
-set(WOLFCERT_SBOM_LICENSE "GPL-3.0-or-later" CACHE STRING
-    "SPDX license expression recorded in the SBOM")
+set(WOLFCERT_SBOM_LICENSE "" CACHE STRING
+    "SPDX license expression recorded in the SBOM (default: from LICENSING)")
 set(WOLFCERT_SBOM_LICENSE_TEXT "" CACHE FILEPATH
     "License text for a LicenseRef-* in WOLFCERT_SBOM_LICENSE")
 set(WOLFCERT_SBOM_WOLFSSL_VERSION "" CACHE STRING
@@ -599,12 +599,15 @@ else()
         VERSION ${PROJECT_VERSION}
         LIB "${_wc_sbom_lib}"
         OPTIONS_H "${_wc_sbom_opts}"
-        LICENSE_OVERRIDE "${WOLFCERT_SBOM_LICENSE}"
+        LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/LICENSING"
         DEP_WOLFSSL yes
         DEP_VERSION "wolfssl=${_wc_wolfssl_version}"
         CDX_OUT "${_wc_sbom_out}.cdx.json"
         SPDX_OUT "${_wc_sbom_out}.spdx.json"
         TARGET_NAME wolfcert-sbom-gen)
+    if(WOLFCERT_SBOM_LICENSE)
+        list(APPEND _wc_sbom_args LICENSE_OVERRIDE "${WOLFCERT_SBOM_LICENSE}")
+    endif()
     if(WOLFCERT_SBOM_LICENSE_TEXT)
         list(APPEND _wc_sbom_args LICENSE_TEXT "${WOLFCERT_SBOM_LICENSE_TEXT}")
     endif()

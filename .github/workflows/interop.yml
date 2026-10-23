@@ -143,3 +143,15 @@ jobs:
           bash tests/interop/est_stepca.sh; rc=$?
           [ "$rc" -eq 77 ] && { echo "::notice::step-ca skipped (dep missing)"; exit 0; }
           exit "$rc"
+
+  wolftpm-fwtpm:
+    name: wolfTPM fwTPM (wolfTPM master)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/tpm-interop
+        with:
+          wolfssl-ref: ${{ env.WOLFSSL_REF }}
+          wolftpm-ref: master
+          save: "true"   # the only job on config wolftpm; pr.yml restores it

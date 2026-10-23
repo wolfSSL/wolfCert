@@ -289,3 +289,15 @@ jobs:
         run: |
           scripts/ci/assert-configure-fails.sh \
             --wolfssl-base "${{ github.workspace }}/.wolfssl-install"
+
+  tpm-interop:
+    name: wolfTPM fwTPM interop (pinned wolfTPM)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/tpm-interop
+        with:
+          wolfssl-ref: ${{ env.WOLFSSL_REF }}
+          # Merge of wolfTPM #638 (key ids); no release has it before v4.3.0.
+          wolftpm-ref: fe01b8ee096c862897c7efb4aa963c312e2bcc46

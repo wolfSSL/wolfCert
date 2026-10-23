@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: tpm-interop
+description: >
+  Build wolfSSL (config `wolftpm`, cached), wolfTPM with its fwTPM at
+  `wolftpm-ref`, and wolfCert with the examples, then run
+  tests/interop/tpm_wolftpm.sh.
+
+inputs:
+  wolfssl-ref:
+    description: "wolfSSL git ref to build"
+    required: false
+    default: master
+  wolftpm-ref:
+    description: "wolfTPM git ref to build (branch, tag or SHA)"
+    required: true
+  save:
+    description: "Save the wolfSSL cache after a miss"
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Install build dependencies
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential autoconf automake libtool \
+          cmake pkg-config python3
+
+    - name: Build/restore wolfSSL (wolftpm)
+      uses: ./.github/actions/build-wolfssl
+      with:
+        config: wolftpm
+        ref: ${{ inputs.wolfssl-ref }}
+        save: ${{ inputs.save }}
+
+    - name: Build wolfTPM and its fwTPM
+      shell: bash
+      run: |
+        set -euo pipefail
+        scripts/ci/build-wolftpm.sh --wolfssl "$WOLFSSL_PREFIX" \
+          --ref "${{ inputs.wolftpm-ref }}" \
+          --prefix "$RUNNER_TEMP/wolftpm" --src "$RUNNER_TEMP/wolftpm-src"
+        echo "WOLFTPM_PREFIX=$RUNNER_TEMP/wolftpm" >> "$GITHUB_ENV"
+
+    - name: Build wolfCert with the TPM example
+      shell: bash
+      run: |
+        set -euo pipefail
+        cmake -S . -B build \
+          -DWITH_WOLFSSL="$WOLFSSL_PREFIX" \
+          -DWOLFCERT_ENABLE_EXAMPLES=ON -DWOLFCERT_WERROR=ON \
+          -Dwolftpm_DIR="$WOLFTPM_PREFIX/lib/cmake/wolftpm"
+        cmake --build build -j "$(nproc)"
+        test -x build/examples/example_enroll_tpm
+
+    - name: Run tpm_wolftpm.sh
+      shell: bash
+      run: |
+        set -euo pipefail
+        export LD_LIBRARY_PATH="$WOLFSSL_PREFIX/lib:$WOLFTPM_PREFIX/lib:${LD_LIBRARY_PATH:-}"
+        FWTPM_SERVER="$WOLFTPM_PREFIX/bin/fwtpm_server" \
+          WOLFCERT_BUILD="$PWD/build" bash tests/interop/tpm_wolftpm.sh

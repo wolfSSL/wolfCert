@@ -35,6 +35,16 @@ west build -b <board> <app> -t wolfcert-sbom
 
 This writes `wolfcert-<version>.cdx.json` and `wolfcert-<version>.spdx.json` to `build/modules/wolfcert/`. wolfCert is linked into the application image, so there is no library to hash: the SBOM lists the wolfCert sources the build compiles and a hash over them. The feature set comes from the `options.h` the module generates from Kconfig, and the wolfSSL version from the wolfSSL module's `wolfssl/version.h`. The `WOLFCERT_SBOM_*` variables of the CMake build work here too, passed after `--`.
 
+Zephyr's own `west spdx` covers wolfCert too. It needs `CONFIG_BUILD_OUTPUT_META=y` and `west spdx --init` before the build:
+
+```sh
+west spdx --init -d build
+west build -d build -b <board> <app> -- -DCONFIG_BUILD_OUTPUT_META=y
+west spdx -d build
+```
+
+`modules-deps.spdx` then lists a `wolfcert-deps` package with the PURL `pkg:github/wolfssl/wolfcert@v<version>` from `zephyr/module.yml`, and with no CPE. That package has no `PackageVersion`, so a scanner reads the version from the PURL.
+
 ## Builds without autoconf or CMake
 
 An IDE or RTOS project that compiles the wolfCert sources itself can produce the SBOM by hand. Run these in the wolfCert directory, with the compiler and flags the project uses:

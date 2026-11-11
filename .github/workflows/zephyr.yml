@@ -23,14 +23,17 @@ permissions:
 
 env:
   WOLFSSL_REF: master
-  ZEPHYR_REF: v4.4.2
   ZEPHYR_SDK: 1.0.1
 
 jobs:
   qemu-x86:
-    name: qemu_x86
+    name: qemu_x86 (${{ matrix.zephyr-ref }})
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        zephyr-ref: [ v4.4.2, v4.5.0 ]
     steps:
       - uses: actions/checkout@v4
 
@@ -45,7 +48,7 @@ jobs:
       - name: Zephyr workspace
         uses: ./.github/actions/zephyr-workspace
         with:
-          zephyr-ref: ${{ env.ZEPHYR_REF }}
+          zephyr-ref: ${{ matrix.zephyr-ref }}
           wolfssl-ref: ${{ env.WOLFSSL_REF }}
           sdk-version: ${{ env.ZEPHYR_SDK }}
           toolchain: x86_64-zephyr-elf
@@ -105,7 +108,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v6
         with:
-          name: zephyr-twister-logs
+          name: zephyr-twister-logs-${{ matrix.zephyr-ref }}
           path: |
             ~/twister-unit/**/handler.log
             ~/twister-unit/**/build.log
@@ -115,16 +118,20 @@ jobs:
           retention-days: 5
 
   mcxn:
-    name: mcxn
+    name: mcxn (${{ matrix.zephyr-ref }})
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        zephyr-ref: [ v4.4.2, v4.5.0 ]
     steps:
       - uses: actions/checkout@v4
 
       - name: Zephyr workspace
         uses: ./.github/actions/zephyr-workspace
         with:
-          zephyr-ref: ${{ env.ZEPHYR_REF }}
+          zephyr-ref: ${{ matrix.zephyr-ref }}
           wolfssl-ref: ${{ env.WOLFSSL_REF }}
           sdk-version: ${{ env.ZEPHYR_SDK }}
           toolchain: arm-zephyr-eabi
@@ -167,6 +174,6 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v6
         with:
-          name: zephyr-mcxn-build-logs
+          name: zephyr-mcxn-build-logs-${{ matrix.zephyr-ref }}
           path: ~/twister-mcxn/**/build.log
           retention-days: 5

@@ -11,8 +11,10 @@ builds it; the on-target tests enrol against `wolfcert-server` on the host.
 
 ## Requirements
 
-- Zephyr and its matching SDK; tested with Zephyr **v4.4.2** and SDK 1.0.1.
-- wolfSSL **v5.9.4** or newer.
+- Zephyr and its matching SDK; tested with Zephyr **v4.4.2** and **v4.5.0**,
+  both with SDK 1.0.1.
+- wolfSSL **v5.9.4** or newer. Zephyr 4.5 needs a later wolfSSL (`master`
+  until the next release), since v5.9.4 does not build there.
 
 ## Adding wolfCert to a west workspace
 

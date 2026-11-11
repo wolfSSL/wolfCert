@@ -75,10 +75,10 @@ int main(int argc, char** argv)
     /* 1) Generate an Ed25519 key, or P-256 when wolfSSL lacks Ed25519. */
 #ifdef WOLFCERT_HAVE_ED25519
     WolfCertKeyCfg kcfg = { .type = WOLFCERT_KEY_ED25519, .param = 0,
-                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                            .dev_id = INVALID_DEVID };
 #else
     WolfCertKeyCfg kcfg = { .type = WOLFCERT_KEY_ECC, .param = 256,
-                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                            .dev_id = INVALID_DEVID };
 #endif
     WolfCertKey* key = NULL;
     if (wolfcert_key_generate(&kcfg, &key) != WOLFCERT_OK)

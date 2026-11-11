@@ -353,8 +353,7 @@ From there, every private-key operation on the key routes through
 `my_callback`: CSR signing, and TLS client authentication by id or for EST
 `/simplereenroll`. wolfSSL also hands the backend public-key operations on
 that id, such as the check of its own RSA signature in TLS, so the backend
-must serve those too. Pass `WOLFCERT_DEVID_SOFTWARE` (`-1`) to force software
-operation.
+must serve those too. Pass `INVALID_DEVID` to force software operation.
 
 A `dev_id` without a `key_id` only offloads the computation. The key itself
 is an ordinary wolfCrypt key in host memory, and `wolfcert_key_to_pem` exports

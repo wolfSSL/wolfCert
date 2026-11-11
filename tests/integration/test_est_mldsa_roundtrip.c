@@ -63,7 +63,7 @@ static void* server_thread(void* arg)
 static int enroll_mldsa(const WolfCertServerCfg* client_cfg, WolfCertKeyType kt,
                         const char* label, const WolfCertBuffer* ca_pem)
 {
-    WolfCertKeyCfg kcfg = { .type = kt, .dev_id = WOLFCERT_DEVID_SOFTWARE };
+    WolfCertKeyCfg kcfg = { .type = kt, .dev_id = INVALID_DEVID };
     WolfCertKey* dk = NULL;
     REQUIRE(wolfcert_key_generate(&kcfg, &dk) == WOLFCERT_OK);
 

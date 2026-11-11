@@ -172,7 +172,7 @@ static int rdn_is(const char* p, int len, const char* want)
 static int enroll_check_subject_rdns(const WolfCertServerCfg* client_cfg)
 {
     WolfCertKeyCfg kcfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
-                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                            .dev_id = INVALID_DEVID };
     WolfCertKey* dk = NULL;
     REQUIRE(wolfcert_key_generate(&kcfg, &dk) == WOLFCERT_OK);
 
@@ -324,7 +324,7 @@ int main(void)
     /* A flipped signature bit keeps the CSR parseable and the credentials are
      * valid, so only the proof-of-possession check can reject it. */
     WolfCertKeyCfg pop_kcfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
-                                .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                                .dev_id = INVALID_DEVID };
     WolfCertKey* pop_dk = NULL;
     REQUIRE(wolfcert_key_generate(&pop_kcfg, &pop_dk) == WOLFCERT_OK);
     WolfCertCertMeta pop_meta = { .subject_dn = "CN=pop-tamper" };
@@ -342,7 +342,7 @@ int main(void)
     wolfcert_key_free(pop_dk);
 
     WolfCertKeyCfg kcfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
-                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                            .dev_id = INVALID_DEVID };
     WolfCertKey* dk = NULL;
     REQUIRE(wolfcert_key_generate(&kcfg, &dk) == WOLFCERT_OK);
     WolfCertCertMeta meta = { .subject_dn = "CN=auth-fail" };
@@ -384,7 +384,7 @@ int main(void)
                                                    .password = "hunter" } };
 
     WolfCertKeyCfg akcfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
-                             .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                             .dev_id = INVALID_DEVID };
     WolfCertKey* adk = NULL;
     REQUIRE(wolfcert_key_generate(&akcfg, &adk) == WOLFCERT_OK);
     WolfCertCertMeta ameta = { .subject_dn = "CN=auth-exact" };

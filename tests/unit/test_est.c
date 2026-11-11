@@ -291,7 +291,7 @@ static int test_est_require_server_auth(void)
     WolfCertEstResult res = { 0 };
     WolfCertEstSession* sess = NULL;
     WolfCertKeyCfg kcfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
-                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                            .dev_id = INVALID_DEVID };
     WolfCertKey* rk = NULL;
 
     /* Each call gets ERR_TLS, even simple_enroll with a placeholder CSR. */
@@ -372,7 +372,7 @@ static int test_est_rejects_scep_cfg(void)
     WolfCertEstResult res = { 0 };
     WolfCertEstSession* sess = NULL;
     WolfCertKeyCfg kcfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
-                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                            .dev_id = INVALID_DEVID };
     WolfCertKey* rk = NULL;
 
     REQUIRE(wolfcert_est_get_cacerts(&srv, WOLFCERT_ENCODING_PEM,
@@ -449,10 +449,10 @@ static int test_est_result_defined_on_early_return(void)
     WolfCertKey*      key = NULL;
 #ifdef WOLFCERT_HAVE_RSA
     WolfCertKeyCfg    kcfg = { .type = WOLFCERT_KEY_RSA, .param = 2048,
-                               .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                               .dev_id = INVALID_DEVID };
 #else
     WolfCertKeyCfg    kcfg = { .type = WOLFCERT_KEY_ECC, .param = 256,
-                               .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                               .dev_id = INVALID_DEVID };
 #endif
 
     REQUIRE(wolfcert_key_generate(&kcfg, &key) == WOLFCERT_OK);
@@ -709,7 +709,7 @@ int main(void)
     wolfcert_buffer_free(&ca_pem);
 
     WolfCertKeyCfg kcfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
-                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                            .dev_id = INVALID_DEVID };
     WolfCertKey* dk = NULL;
     REQUIRE(wolfcert_key_generate(&kcfg, &dk) == WOLFCERT_OK);
     WolfCertCertMeta meta = { .subject_dn = "CN=device-99" };

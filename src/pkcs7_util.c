@@ -83,7 +83,7 @@ static int pkcs7_certs_extract(const uint8_t* p7_der, size_t p7_der_len,
     if (p7_der == NULL || p7_der_len == 0 || out == NULL)
         return WOLFCERT_ERR_BAD_ARG;
 
-    PKCS7* p7 = wc_PKCS7_New(heap, WOLFCERT_DEVID_SOFTWARE);
+    PKCS7* p7 = wc_PKCS7_New(heap, INVALID_DEVID);
     if (p7 == NULL)
         return WOLFCERT_ERR_MEMORY;
 
@@ -155,7 +155,7 @@ WOLFCERT_TEST_VIS int wolfcert_pkcs7_build_certs_only(const uint8_t* const* cert
 
     /* wc_PKCS7_InitWithCert() would set publicKeyOID, which makes the encoder
      * demand a content hash for ECDSA and RSA-PSS certs. */
-    PKCS7* p7 = wc_PKCS7_New(heap, WOLFCERT_DEVID_SOFTWARE);
+    PKCS7* p7 = wc_PKCS7_New(heap, INVALID_DEVID);
     if (p7 == NULL)
         return WOLFCERT_ERR_MEMORY;
 

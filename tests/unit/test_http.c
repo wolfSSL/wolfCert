@@ -1232,7 +1232,7 @@ static int test_client_key_checks(void)
     REQUIRE(wolfcert_http_session_open(&scfg, &s) == WOLFCERT_ERR_BAD_ARG);
     scfg.client_cert       = cert;
     scfg.client_cert_len   = sizeof(cert);
-    scfg.client_key_dev_id = WOLFCERT_DEVID_SOFTWARE;
+    scfg.client_key_dev_id = INVALID_DEVID;
     REQUIRE(wolfcert_http_session_open(&scfg, &s) == WOLFCERT_ERR_BAD_ARG);
     scfg.client_key_dev_id = 7;
     scfg.client_cert_len   = 0;

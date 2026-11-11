@@ -198,7 +198,7 @@ static int bootstrap(const WolfCertServerCfg* cli, const char* cn,
     }
 
     WolfCertKeyCfg kcfg = { .type = WOLFCERT_KEY_RSA, .param = 2048,
-                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                            .dev_id = INVALID_DEVID };
     if (wolfcert_key_generate(&kcfg, key) != WOLFCERT_OK) {
         wc_FreeDer(ca_der);
         wolfcert_buffer_free(ca_pem);
@@ -255,7 +255,7 @@ static int async_enroll_path(WolfCertServer* s)
     WolfCertScepResult r = { 0 };
     WolfCertScepSession* bsess = NULL;
     WolfCertKeyCfg kcfg2 = { .type = WOLFCERT_KEY_RSA, .param = 2048,
-                             .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                             .dev_id = INVALID_DEVID };
     WolfCertKey* dk2 = NULL;
     WolfCertCertMeta meta2 = { .subject_dn = "CN=sync-scep-1" };
     WolfCertBuffer csr2 = { 0 };
@@ -733,7 +733,7 @@ static int non_rsa_reject_path(WolfCertServer* s)
     WolfCertKey* dk = NULL;
     WolfCertBuffer csr = { 0 };
     WolfCertKeyCfg ecfg = { .type = WOLFCERT_KEY_ED25519, .param = 0,
-                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                            .dev_id = INVALID_DEVID };
     WolfCertKey* ek = NULL;
     WolfCertScepSession* sess = NULL;
     WolfCertScepResult r = { 0 };
@@ -791,7 +791,7 @@ static int blocking_renewal_poll_path(WolfCertServer* s)
     WolfCertScepResult r3 = { 0 };
     WolfCertScepResult r4 = { 0 };
     WolfCertKeyCfg nkcfg = { .type = WOLFCERT_KEY_RSA, .param = 2048,
-                             .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                             .dev_id = INVALID_DEVID };
     WolfCertCertMeta nmeta = { .subject_dn = "CN=sync-renew-poll" };
     WolfCertKey* nk = NULL;
     WolfCertBuffer ncsr = { 0 };

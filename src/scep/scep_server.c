@@ -600,7 +600,7 @@ static int send_cert_rep(WolfCertServer* s, int fd,
     }
 
     WC_RNG rng;
-    if (wc_InitRng_ex(&rng, s->heap, WOLFCERT_DEVID_SOFTWARE) != 0) {
+    if (wc_InitRng_ex(&rng, s->heap, INVALID_DEVID) != 0) {
         wolfcert_buffer_free(&resp_env);
         send_text(s, fd, 500, "Server Error", "text/plain", "");
         return WOLFCERT_ERR_CRYPTO;
@@ -1318,7 +1318,7 @@ static int handle_request(WolfCertServer* s, int fd)
 static int make_split_ra(WolfCertServer* s, ScepPriv* p)
 {
     WolfCertKeyCfg kcfg = { .type = WOLFCERT_KEY_RSA, .param = 2048,
-                            .dev_id = WOLFCERT_DEVID_SOFTWARE,
+                            .dev_id = INVALID_DEVID,
                             .heap = s->heap };
     WolfCertCertMeta meta = { .subject_dn = "CN=wolfCert Test RA,O=wolfCert" };
     WolfCertKey* key = NULL;
@@ -1397,7 +1397,7 @@ static int bundle_cert(WolfCertServer* s, int key_type, void* pub,
         issuer     = s->ca.cert_der;
         issuer_len = s->ca.cert_der_len;
     }
-    if (wc_InitCert_ex(c, s->heap, WOLFCERT_DEVID_SOFTWARE) != 0)
+    if (wc_InitCert_ex(c, s->heap, INVALID_DEVID) != 0)
         rc = WOLFCERT_ERR_CRYPTO;
     if (rc == WOLFCERT_OK) {
         c->sigType    = CTC_SHA256wRSA;
@@ -1427,7 +1427,7 @@ static int bundle_cert(WolfCertServer* s, int key_type, void* pub,
             rc = WOLFCERT_ERR_MEMORY;
     }
     if (rc == WOLFCERT_OK) {
-        if (wc_InitRng_ex(&rng, s->heap, WOLFCERT_DEVID_SOFTWARE) != 0)
+        if (wc_InitRng_ex(&rng, s->heap, INVALID_DEVID) != 0)
             rc = WOLFCERT_ERR_CRYPTO;
         else
             rng_ok = 1;
@@ -1458,7 +1458,7 @@ static int bundle_cert(WolfCertServer* s, int key_type, void* pub,
 static int bundle_root(WolfCertServer* s, uint8_t** root, size_t* root_len)
 {
     WolfCertKeyCfg kcfg = { .type = WOLFCERT_KEY_RSA, .param = 2048,
-                            .dev_id = WOLFCERT_DEVID_SOFTWARE,
+                            .dev_id = INVALID_DEVID,
                             .heap = s->heap };
     WolfCertKey* key = NULL;
     uint8_t* ca = NULL;
@@ -1492,7 +1492,7 @@ WOLFCERT_TEST_VIS int wolfcert_scep_server_set_bundle_fault(WolfCertServer* s,
     ScepPriv* p = (ScepPriv*)s->priv;
     RsaKey* ca_key = (RsaKey*)s->ca.impl;
     WolfCertKeyCfg ecc = { .type = WOLFCERT_KEY_ECC, .param = 256,
-                           .dev_id = WOLFCERT_DEVID_SOFTWARE,
+                           .dev_id = INVALID_DEVID,
                            .heap = s->heap };
     WolfCertKey* ecc_key = NULL;
     uint8_t* der[4] = { NULL, NULL, NULL, NULL };

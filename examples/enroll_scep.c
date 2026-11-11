@@ -112,7 +112,7 @@ int main(int argc, char** argv)
 
     /* 3) Generate RSA key + CSR. */
     WolfCertKeyCfg kcfg = { .type = WOLFCERT_KEY_RSA, .param = 2048,
-                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                            .dev_id = INVALID_DEVID };
     WolfCertKey* key = NULL;
     if (wolfcert_key_generate(&kcfg, &key) != WOLFCERT_OK)
         return 2;

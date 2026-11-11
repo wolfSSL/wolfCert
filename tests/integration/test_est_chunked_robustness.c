@@ -422,7 +422,7 @@ static int build_split_enroll(char** head, size_t* head_len, char** tail)
 {
     WolfCertKeyCfg kcfg = { .type = TEST_ENROLL_KEY_TYPE,
                             .param = TEST_ENROLL_KEY_PARAM,
-                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                            .dev_id = INVALID_DEVID };
     WolfCertCertMeta meta = { .subject_dn = "CN=keepalive-test" };
     WolfCertKey* key = NULL;
     WolfCertBuffer csr = { 0 };

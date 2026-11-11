@@ -44,7 +44,7 @@
 static int build_and_reparse(WolfCertKeyType kt, int param)
 {
     WolfCertKeyCfg cfg = { .type = kt, .param = param,
-                           .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                           .dev_id = INVALID_DEVID };
     WolfCertKey* key = NULL;
     REQUIRE(wolfcert_key_generate(&cfg, &key) == WOLFCERT_OK);
 
@@ -112,7 +112,7 @@ static int ecc_sig_follows_curve(void)
     for (size_t i = 0; i < sizeof(want) / sizeof(want[0]); i++) {
         WolfCertKeyCfg cfg = { .type = WOLFCERT_KEY_ECC,
                                .param = want[i].param,
-                               .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                               .dev_id = INVALID_DEVID };
         WolfCertKey* key = NULL;
         WolfCertBuffer der = { 0 };
         DecodedCert dc;
@@ -152,7 +152,7 @@ static int ecc_sig_follows_preferred_hash(void)
 #endif
     };
     WolfCertKeyCfg cfg = { .type = WOLFCERT_KEY_ECC, .param = 256,
-                           .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                           .dev_id = INVALID_DEVID };
     WolfCertKey* key = NULL;
     int ret = 0;
 
@@ -189,7 +189,7 @@ static int ecc_sig_follows_preferred_hash(void)
 static int build_with_extras(void)
 {
     WolfCertKeyCfg cfg = { .type = WOLFCERT_KEY_ECC, .param = 256,
-                           .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                           .dev_id = INVALID_DEVID };
     WolfCertKey* key = NULL;
     REQUIRE(wolfcert_key_generate(&cfg, &key) == WOLFCERT_OK);
 
@@ -273,7 +273,7 @@ static int subject_copy_rejects_oversized_rdn(void)
 static int csr_build_rejects_oversized_rdn(void)
 {
     WolfCertKeyCfg cfg = { .type = WOLFCERT_KEY_ECC, .param = 256,
-                           .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                           .dev_id = INVALID_DEVID };
     WolfCertKey* key = NULL;
     WolfCertCertMeta meta = { 0 };
     WolfCertBuffer der = { 0 };
@@ -314,7 +314,7 @@ static int csr_build_rejects_unprintable_rdn(void)
         "CN=dev,emailAddress=j\xc3\xbcrgen@example.de"
     };
     WolfCertKeyCfg cfg = { .type = WOLFCERT_KEY_ECC, .param = 256,
-                           .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                           .dev_id = INVALID_DEVID };
     WolfCertKey* key = NULL;
     WolfCertCertMeta meta = { 0 };
     WolfCertBuffer der = { 0 };
@@ -377,7 +377,7 @@ static int renewal_keeps_empty_subject(int san_crit)
     static const byte san[] = { 0x30, 0x0d, 0x82, 0x0b, 'd', 'e', 'v', '.',
                                 'e', 'x', 'a', 'm', 'p', 'l', 'e' };
     WolfCertKeyCfg cfg = { .type = WOLFCERT_KEY_ECC, .param = 256,
-                           .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                           .dev_id = INVALID_DEVID };
     WolfCertKey* key = NULL;
     WolfCertCertMeta meta = { 0 };
     WolfCertBuffer csr = { 0 };
@@ -464,7 +464,7 @@ static const byte crit_ext_cert[] = {
 static int renewal_reads_past_unknown_critical_ext(void)
 {
     WolfCertKeyCfg cfg = { .type = WOLFCERT_KEY_ECC, .param = 256,
-                           .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                           .dev_id = INVALID_DEVID };
     WolfCertKey* key = NULL;
     WolfCertCertMeta meta = { 0 };
     WolfCertBuffer csr = { 0 };
@@ -533,7 +533,7 @@ static const byte bmp_subject_cert[] = {
 static int renewal_refuses_bmpstring_subject(void)
 {
     WolfCertKeyCfg cfg = { .type = WOLFCERT_KEY_ECC, .param = 256,
-                           .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                           .dev_id = INVALID_DEVID };
     WolfCertKey* key = NULL;
     WolfCertCertMeta meta = { 0 };
     WolfCertBuffer csr = { 0 };
@@ -552,7 +552,7 @@ static int renewal_refuses_bmpstring_subject(void)
 static int renewal_drops_callback_san(void)
 {
     WolfCertKeyCfg cfg = { .type = WOLFCERT_KEY_ECC, .param = 256,
-                           .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                           .dev_id = INVALID_DEVID };
     WolfCertKey* key = NULL;
     WolfCertCertMeta meta = { 0 };
     WolfCertBuffer csr = { 0 };
@@ -590,7 +590,7 @@ static int renewal_drops_callback_san(void)
 static int renewal_walks_extensions_without_san(void)
 {
     WolfCertKeyCfg cfg = { .type = WOLFCERT_KEY_ECC, .param = 256,
-                           .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                           .dev_id = INVALID_DEVID };
     WolfCertKey* key = NULL;
     WolfCertCertMeta meta = { 0 };
     WolfCertBuffer csr = { 0 };
@@ -626,7 +626,7 @@ static int renewal_walks_extensions_without_san(void)
 static int renewal_rejects_non_certificate(void)
 {
     WolfCertKeyCfg cfg = { .type = WOLFCERT_KEY_ECC, .param = 256,
-                           .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                           .dev_id = INVALID_DEVID };
     WolfCertKey* key = NULL;
     WolfCertCertMeta meta = { 0 };
     WolfCertBuffer key_pem = { 0 };
@@ -649,7 +649,7 @@ static int renewal_rejects_meta_identity(void)
 {
     static const char* const one[] = { "x" };
     WolfCertKeyCfg cfg = { .type = WOLFCERT_KEY_ECC, .param = 256,
-                           .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                           .dev_id = INVALID_DEVID };
     WolfCertKey* key = NULL;
     WolfCertCertMeta meta;
     WolfCertBuffer csr = { 0 };
@@ -710,7 +710,7 @@ static int count_csr_sans(const WolfCertBuffer* csr)
 static int csr_carries_large_san(void)
 {
     WolfCertKeyCfg cfg = { .type = WOLFCERT_KEY_ECC, .param = 256,
-                           .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                           .dev_id = INVALID_DEVID };
     char names[LARGE_SAN_COUNT][40];
     const char* dns[LARGE_SAN_COUNT];
     WolfCertKey* key = NULL;
@@ -919,7 +919,7 @@ static int renewal_size_limits(void)
     const word32 name_max = (word32)sizeof(((Cert*)NULL)->sbjRaw) - 1;
     const word32 san_max = (word32)sizeof(((Cert*)NULL)->altNames);
     WolfCertKeyCfg cfg = { .type = WOLFCERT_KEY_ECC, .param = 256,
-                           .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                           .dev_id = INVALID_DEVID };
     WolfCertKey* key = NULL;
     WolfCertCertMeta meta = { 0 };
     WolfCertBuffer csr = { 0 };

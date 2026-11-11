@@ -142,7 +142,7 @@ static int auto_apply_pins_everything(WolfCertServer* s)
     WolfCertClient* cli = NULL;
     REQUIRE(wolfcert_client_new(&cli) == WOLFCERT_OK);
 
-    WolfCertKeyCfg key_cfg = { .dev_id = WOLFCERT_DEVID_SOFTWARE };
+    WolfCertKeyCfg key_cfg = { .dev_id = INVALID_DEVID };
     WolfCertCertMeta meta = {
         .subject_dn = "CN=csrattrs-auto-1",
         .challenge_password = "hunter2",
@@ -193,7 +193,7 @@ static int explicit_caller_wins(WolfCertServer* s)
 
     WolfCertKeyCfg key_cfg = {
         .type = WOLFCERT_KEY_RSA, .param = 2048,
-        .dev_id = WOLFCERT_DEVID_SOFTWARE,
+        .dev_id = INVALID_DEVID,
     };
     WolfCertCertMeta meta = {
         .subject_dn = "CN=csrattrs-auto-2",

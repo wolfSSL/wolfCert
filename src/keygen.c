@@ -210,7 +210,7 @@ int wolfcert_key_from_pem(const uint8_t* data, size_t data_len,
     const WolfCertKeyAlg* const* list = wolfcert_key_algs_all();
     for (; *list != NULL; ++list) {
         const WolfCertKeyAlg* a = *list;
-        WolfCertKey* k = alloc_shell(a->type, WOLFCERT_DEVID_SOFTWARE, NULL, 0,
+        WolfCertKey* k = alloc_shell(a->type, INVALID_DEVID, NULL, 0,
                                      heap);
         if (k == NULL) {
             if (der != NULL)
@@ -471,7 +471,7 @@ WolfCertKeyType wolfcert_key_type(const WolfCertKey* k)
 
 int wolfcert_key_dev_id(const WolfCertKey* k)
 {
-    return k ? k->dev_id : 0;
+    return k ? k->dev_id : INVALID_DEVID;
 }
 
 int wolfcert_key_id(const WolfCertKey* k, const uint8_t** id, size_t* id_len)

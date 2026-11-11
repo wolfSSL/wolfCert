@@ -29,6 +29,9 @@
 #include <wolfssl/ssl.h>
 #include <wolfssl/wolfcrypt/asn.h>          /* SHA256h */
 #include <wolfssl/wolfcrypt/asn_public.h>
+#ifdef WOLF_CRYPTO_CB
+#include <wolfssl/wolfcrypt/cryptocb.h>
+#endif
 #include <wolfssl/wolfcrypt/pkcs7.h>
 #include <wolfssl/wolfcrypt/random.h>
 #include <wolfssl/wolfcrypt/rsa.h>
@@ -369,6 +372,80 @@ static int check_rsa4096(const WolfCertServerCfg* cli,
     return rc;
 }
 
+#ifdef WOLF_CRYPTO_CB
+#define ACCEL_DEVID 0x6163
+
+static int accel_priv;
+static int accel_pub;
+
+/* Counts RSA operations and leaves them to software. */
+static int accel_cb(int devId, wc_CryptoInfo* info, void* ctx)
+{
+    (void)devId;
+    (void)ctx;
+
+    if (info->algo_type == WC_ALGO_TYPE_PK && info->pk.type == WC_PK_TYPE_RSA) {
+        if (info->pk.rsa.type == RSA_PRIVATE_ENCRYPT ||
+                info->pk.rsa.type == RSA_PRIVATE_DECRYPT)
+            accel_priv++;
+        else
+            accel_pub++;
+    }
+    return CRYPTOCB_UNAVAILABLE;
+}
+
+/* A PKCSReq with a default devId signs, decrypts, encrypts and verifies on
+ * it, while the built-in server stays in software. */
+static int check_default_dev_id(const WolfCertServerCfg* cli,
+                                const WolfCertScepCaps* caps,
+                                const uint8_t* ca_der_buf, size_t ca_der_len)
+{
+    WolfCertKeyCfg     kcfg = { .type = WOLFCERT_KEY_RSA, .param = 2048,
+                                .dev_id = INVALID_DEVID };
+    WolfCertCertMeta   meta = { .subject_dn = "CN=device-scep-accel" };
+    WolfCertKey*       key = NULL;
+    WolfCertKey*       imported = NULL;
+    WolfCertBuffer     pem = { 0 };
+    WolfCertBuffer     csr = { 0 };
+    WolfCertScepResult issued = { 0 };
+
+#ifndef WOLF_CRYPTO_CB_FIND
+    REQUIRE(wolfcert_set_default_dev_id(ACCEL_DEVID + 1) ==
+            WOLFCERT_ERR_BAD_ARG);
+#endif
+    REQUIRE(wc_CryptoCb_RegisterDevice(ACCEL_DEVID, accel_cb, NULL) == 0);
+    REQUIRE(wolfcert_set_default_dev_id(ACCEL_DEVID) == WOLFCERT_OK);
+
+    REQUIRE(wolfcert_key_generate(&kcfg, &key) == WOLFCERT_OK);
+    REQUIRE(wolfcert_key_dev_id(key) == ACCEL_DEVID);
+    REQUIRE(wolfcert_key_to_pem(key, &pem) == WOLFCERT_OK);
+    REQUIRE(wolfcert_key_from_pem(pem.data, pem.len, NULL, &imported) ==
+            WOLFCERT_OK);
+    REQUIRE(wolfcert_key_dev_id(imported) == ACCEL_DEVID);
+    REQUIRE(wolfcert_csr_build(key, &meta, &csr) == WOLFCERT_OK);
+
+    accel_priv = 0;
+    accel_pub = 0;
+    REQUIRE(wolfcert_scep_pkcs_req(cli, caps, ca_der_buf, ca_der_len,
+                                   ca_der_buf, ca_der_len,
+                                   key, csr.data, csr.len, &issued) ==
+            WOLFCERT_OK);
+    REQUIRE(issued.status == WOLFCERT_SCEP_STATUS_SUCCESS);
+    /* Self-signed signer, pkiMessage signature and CertRep decryption. */
+    REQUIRE(accel_priv >= 3);
+    REQUIRE(accel_pub >= 2);
+
+    REQUIRE(wolfcert_set_default_dev_id(INVALID_DEVID) == WOLFCERT_OK);
+    wc_CryptoCb_UnRegisterDevice(ACCEL_DEVID);
+    wolfcert_scep_result_free(&issued);
+    wolfcert_buffer_free(&csr);
+    wolfcert_buffer_free(&pem);
+    wolfcert_key_free(imported);
+    wolfcert_key_free(key);
+    return WOLFCERT_OK;
+}
+#endif /* WOLF_CRYPTO_CB */
+
 /* Two PKCSReqs of one key under txid_mode PUBKEY_HASH carry the same
  * transactionID, the upper-case hex SHA-256 of the CSR's SPKI. */
 static int check_pubkey_txid(const WolfCertServerCfg* cli,
@@ -489,7 +566,7 @@ static int check_renewal_foreign_signer(const WolfCertServerCfg* cli,
     int rc;
 
     rc = wolfcert_scep_self_signed_rsa((RsaKey*)key->impl, csr, csr_len,
-                                       &signer, &signer_len, NULL);
+                                       &signer, &signer_len, INVALID_DEVID, NULL);
     if (rc == WOLFCERT_OK) {
         rc = wolfcert_scep_renewal_req(cli, caps, ca_der_buf, ca_der_len,
                                        ca_der_buf, ca_der_len,
@@ -874,7 +951,7 @@ static void msgtype_send_cert_rep(const struct msgtype_ctx* mc, int cs,
     WolfCertBuffer rep = { 0 };
     if (wolfcert_scep_build_pki_message(NULL, 0, mc->rep_cert, mc->rep_cert_len,
                                         mc->rep_key, mc->rep_key_len, SHA256h,
-                                        &attrs, &rep, NULL) != WOLFCERT_OK)
+                                        &attrs, &rep, INVALID_DEVID, NULL) != WOLFCERT_OK)
         return;
 
     char hdr[160];
@@ -952,7 +1029,7 @@ static void* msgtype_srv_thread(void* arg)
                                             &mt,                /* messageType */
                                             NULL,               /* pkiStatus   */
                                             NULL, NULL,         /* signer cert */
-                                            NULL,               /* failInfo    */
+                                            NULL,               INVALID_DEVID, /* failInfo    */
                                             NULL) == WOLFCERT_OK) {
             if (mt != NULL)
                 snprintf(mc->seen, sizeof(mc->seen), "%s", mt);
@@ -1250,10 +1327,10 @@ static int check_required_attrs(WolfCertServer* s, const WolfCertKeyCfg* kcfg,
         rc = wolfcert_key_to_der(key, &kder);
     if (rc == WOLFCERT_OK)
         rc = wolfcert_scep_self_signed_rsa((RsaKey*)key->impl, csr.data,
-                                           csr.len, &signer, &signer_len, NULL);
+                                           csr.len, &signer, &signer_len, INVALID_DEVID, NULL);
     if (rc == WOLFCERT_OK)
         rc = wolfcert_scep_envelop(ca_der_buf, ca_der_len, csr.data, csr.len,
-                                   AES128CBCb, &env, NULL);
+                                   AES128CBCb, &env, INVALID_DEVID, NULL);
 
     memset(tid,    'A', sizeof(tid));
     memset(snonce, 0x22, sizeof(snonce));
@@ -1308,7 +1385,7 @@ static int check_required_attrs(WolfCertServer* s, const WolfCertKeyCfg* kcfg,
 
         rc = wolfcert_scep_build_pki_message(env.data, env.len,
                     signer, signer_len, kder.data, kder.len,
-                    SHA256h, &a, &msg, NULL);
+                    SHA256h, &a, &msg, INVALID_DEVID, NULL);
         if (rc != WOLFCERT_OK)
             break;
 
@@ -1326,7 +1403,7 @@ static int check_required_attrs(WolfCertServer* s, const WolfCertKeyCfg* kcfg,
             ok = (st == 200 && rsp != NULL &&
                   wolfcert_scep_parse_pki_message(rsp, rsp_len, &renv,
                       &r_tid, &r_tidl, &r_sn, &r_snl, &r_rn, &r_rnl,
-                      &r_mt, &r_st, &r_sc, &r_scl, &r_fi, NULL) == WOLFCERT_OK);
+                      &r_mt, &r_st, &r_sc, &r_scl, &r_fi, INVALID_DEVID, NULL) == WOLFCERT_OK);
 
             ok = ok && r_tid != NULL && r_tidl == sizeof(tid) &&
                  memcmp(r_tid, tid, sizeof(tid)) == 0 &&
@@ -1359,7 +1436,7 @@ static int check_required_attrs(WolfCertServer* s, const WolfCertKeyCfg* kcfg,
 
         rc = wolfcert_scep_build_pki_message(env.data, env.len,
                     signer, signer_len, kder.data, kder.len,
-                    SHA256h, &a, &msg, NULL);
+                    SHA256h, &a, &msg, INVALID_DEVID, NULL);
         if (rc == WOLFCERT_OK) {
             if (raw_http_req(wolfcert_server_port(s), "POST",
                              "/scep?operation=PKIOperation",
@@ -1611,7 +1688,7 @@ static int check_unprintable_tid(uint16_t port, const WolfCertKeyCfg* kcfg)
         rc = wolfcert_key_to_der(key, &kder);
     if (rc == WOLFCERT_OK)
         rc = wolfcert_scep_self_signed_rsa((RsaKey*)key->impl, csr.data,
-                                           csr.len, &signer, &signer_len, NULL);
+                                           csr.len, &signer, &signer_len, INVALID_DEVID, NULL);
 
     if (rc == WOLFCERT_OK) {
         st = post_raw_tid(port, signer, signer_len, &kder, "tid@1", 0);
@@ -1687,10 +1764,10 @@ static int check_malformed_dispatch(uint16_t port, const WolfCertKeyCfg* kcfg,
         rc = wolfcert_key_to_der(key, &kder);
     if (rc == WOLFCERT_OK)
         rc = wolfcert_scep_self_signed_rsa((RsaKey*)key->impl, csr.data,
-                                           csr.len, &signer, &signer_len, NULL);
+                                           csr.len, &signer, &signer_len, INVALID_DEVID, NULL);
     if (rc == WOLFCERT_OK)
         rc = wolfcert_scep_envelop(ca_der_buf, ca_der_len, csr.data, csr.len,
-                                   AES128CBCb, &env, NULL);
+                                   AES128CBCb, &env, INVALID_DEVID, NULL);
 
     /* The last round needs a cipher the CA cannot run: copy the envelope and
      * point its algorithm at an unassigned OID under the same arc. */
@@ -1733,7 +1810,7 @@ static int check_malformed_dispatch(uint16_t port, const WolfCertKeyCfg* kcfg,
 
         rc = wolfcert_scep_build_pki_message(content, content_len,
                  signer, signer_len, kder.data, kder.len,
-                 SHA256h, &a, &msg, NULL);
+                 SHA256h, &a, &msg, INVALID_DEVID, NULL);
         if (rc == WOLFCERT_OK) {
             WolfCertHttpRequest req = {
                 .method       = "POST",
@@ -1748,7 +1825,7 @@ static int check_malformed_dispatch(uint16_t port, const WolfCertKeyCfg* kcfg,
             ok = ok && wolfcert_scep_parse_pki_message(resp.body,
                            resp.body_len, &renv, &r_tid, &r_tidl, &r_sn,
                            &r_snl, &r_rn, &r_rnl, &r_mt, &r_st, &r_sc,
-                           &r_scl, &r_fi, NULL) == WOLFCERT_OK;
+                           &r_scl, &r_fi, INVALID_DEVID, NULL) == WOLFCERT_OK;
 
             ok = ok && r_mt != NULL && strcmp(r_mt, "3") == 0 &&
                  r_st != NULL && strcmp(r_st, "2") == 0 &&
@@ -1792,7 +1869,7 @@ static int check_malformed_dispatch(uint16_t port, const WolfCertKeyCfg* kcfg,
         WolfCertBuffer msg = { 0 };
 
         rc = wolfcert_scep_build_pki_message(env.data, env.len, signer,
-                 signer_len, kder.data, kder.len, SHA256h, &a, &msg, NULL);
+                 signer_len, kder.data, kder.len, SHA256h, &a, &msg, INVALID_DEVID, NULL);
         if (rc == WOLFCERT_OK) {
             if (raw_http_req(port, "POST", "/scep?operation=PKIOperation",
                              "application/x-pki-message",
@@ -2054,6 +2131,10 @@ int main(void)
     if (rc != WOLFCERT_OK)
         fprintf(stderr, "SCEP rsa:4096 rc=%d (%s)\n", rc, wolfcert_strerror(rc));
     REQUIRE(rc == WOLFCERT_OK);
+#ifdef WOLF_CRYPTO_CB
+    REQUIRE(check_default_dev_id(&cli, &caps, ca_der->buffer, ca_der->length)
+            == WOLFCERT_OK);
+#endif
 
     /* A CA advertising SHA-512 or SHA-384 still enrolls within the digests
      * wolfSSL was built with, and so does a forced SHA-256. */
@@ -2366,7 +2447,7 @@ int main(void)
         WolfCertBuffer wmsg = { 0 };
         REQUIRE(wolfcert_scep_build_pki_message(content, sizeof(content),
                     signer_cert, (size_t)cl, signer_key, (size_t)kl,
-                    SHA256h, &wattrs, &wmsg, NULL) == WOLFCERT_OK);
+                    SHA256h, &wattrs, &wmsg, INVALID_DEVID, NULL) == WOLFCERT_OK);
 
         WolfCertBuffer wenv = { 0 };
         uint8_t *w_tid = NULL, *w_sn = NULL, *w_rn = NULL, *w_sc = NULL;
@@ -2374,7 +2455,7 @@ int main(void)
         char    *w_mt = NULL,  *w_st = NULL;
         REQUIRE(wolfcert_scep_parse_pki_message(wmsg.data, wmsg.len, &wenv,
                     &w_tid, &w_tidl, &w_sn, &w_snl, &w_rn, &w_rnl,
-                    &w_mt, &w_st, &w_sc, &w_scl, NULL, NULL) == WOLFCERT_OK);
+                    &w_mt, &w_st, &w_sc, &w_scl, NULL, INVALID_DEVID, NULL) == WOLFCERT_OK);
         REQUIRE(w_rn != NULL);                              /* present */
         REQUIRE(w_rnl == sizeof(rnonce));
         REQUIRE(memcmp(w_rn, rnonce, sizeof(rnonce)) == 0); /* unchanged */

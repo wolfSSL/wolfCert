@@ -1277,6 +1277,8 @@ int main(void)
     alarm(25);
 
     REQUIRE(wolfcert_init(NULL) == WOLFCERT_OK);
+    /* A WC_USE_DEVID build starts on a device; these checks expect none. */
+    REQUIRE(wolfcert_set_default_dev_id(INVALID_DEVID) == WOLFCERT_OK);
     if (test_url_parser())
         return 1;
 #ifdef WOLFCERT_HAVE_SERVER

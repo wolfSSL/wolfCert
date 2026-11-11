@@ -92,13 +92,18 @@ typedef enum {
 typedef struct {
     WolfCertKeyType type;
     int             param;       /* RSA 2048/3072/4096 or ECC 256/384/521 bits */
-    int             dev_id;      /* CryptoCb devId, or INVALID_DEVID */
+    int             dev_id;      /* devId; INVALID_DEVID = the default */
     void*           heap;        /* optional heap hint; NULL = default */
-    /* Backend key id, opaque to wolfCert; needs dev_id. Up to
+    /* Backend key id, opaque to wolfCert; needs a devId. Up to
      * WOLFCERT_KEY_ID_MAX_LEN bytes. */
     const uint8_t*  key_id;
     size_t          key_id_len;
 } WolfCertKeyCfg;
+
+/* Registered devId for client crypto and keys made later with INVALID_DEVID;
+ * starts as WC_USE_DEVID if defined. Set it before threads use wolfCert. */
+WOLFCERT_API int  wolfcert_set_default_dev_id(int dev_id);
+WOLFCERT_API int  wolfcert_default_dev_id(void);
 
 /* Called by wolfcert_csr_build() once the standard fields are set, with the
  * wolfSSL Cert* to add what wolfCert does not expose; any error aborts.
@@ -245,8 +250,8 @@ typedef struct {
 
     WolfCertTransport transport;
 
-    /* What client_key holds, and the CryptoCb device holding an _ID key,
-     * which needs client_cert, client_key and an https:// URL. */
+    /* What client_key holds, and the device holding an _ID key (INVALID_DEVID =
+     * default). _ID needs client_cert, client_key and an https:// URL. */
     WolfCertClientKeySrc client_key_src;
     int                  client_key_dev_id;
 } WolfCertServerCfg;

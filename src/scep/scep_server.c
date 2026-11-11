@@ -590,6 +590,7 @@ static int send_cert_rep(WolfCertServer* s, int fd,
 
         rc = wolfcert_scep_envelop(env_target, env_target_len,
                                     p7.data, p7.len, SCEP_SRV_ENC_OID, &resp_env,
+                                    INVALID_DEVID,
                                     s->heap);
 
         wolfcert_buffer_free(&p7);
@@ -679,7 +680,8 @@ static int send_cert_rep(WolfCertServer* s, int fd,
     rc = wolfcert_scep_build_pki_message(resp_env.data, resp_env.len,
                                           sign_cert, sign_cert_len,
                                           sign_key,  sign_key_len,
-                                          SHA256h, &attrs, &pki_out, s->heap);
+                                          SHA256h, &attrs, &pki_out,
+                                          INVALID_DEVID, s->heap);
 
     wolfcert_buffer_free(&resp_env);
     if (rc != WOLFCERT_OK) {
@@ -1099,7 +1101,8 @@ static int handle_pki_op(WolfCertServer* s, int fd, const ScepRequest* req)
 
     int rc = wolfcert_scep_parse_pki_message(req->body, req->body_len, &env,
             &tid, &tid_len, &snonce, &snonce_len, &rnonce, &rnonce_len,
-            &mt, &ps, &signer_cert, &signer_cert_len, NULL, s->heap);
+            &mt, &ps, &signer_cert, &signer_cert_len, NULL, INVALID_DEVID,
+            s->heap);
     if (rc == WOLFCERT_ERR_MEMORY) {
         send_text(s, fd, 500, "Server Error", "text/plain", "");
         goto out;
@@ -1129,6 +1132,7 @@ static int handle_pki_op(WolfCertServer* s, int fd, const ScepRequest* req)
     rep_identity(s, &rcpt_cert, &rcpt_cert_len, &rcpt_key, &rcpt_key_len);
     rc = wolfcert_scep_deenvelop(rcpt_cert, rcpt_cert_len, rcpt_key,
                                  rcpt_key_len, env.data, env.len, &csr,
+                                 INVALID_DEVID,
                                  s->heap);
     if (rc != WOLFCERT_OK) {
         const char* fail_info = rc == WOLFCERT_ERR_UNSUPPORTED
@@ -1328,7 +1332,7 @@ static int make_split_ra(WolfCertServer* s, ScepPriv* p)
     size_t lens[2];
     int rc;
 
-    rc = wolfcert_key_generate(&kcfg, &key);
+    rc = wolfcert_key_generate_on(&kcfg, INVALID_DEVID, &key);
     if (rc == WOLFCERT_OK)
         rc = wolfcert_csr_build(key, &meta, &csr);
     if (rc == WOLFCERT_OK)
@@ -1465,7 +1469,7 @@ static int bundle_root(WolfCertServer* s, uint8_t** root, size_t* root_len)
     size_t ca_len = 0;
     int rc;
 
-    rc = wolfcert_key_generate(&kcfg, &key);
+    rc = wolfcert_key_generate_on(&kcfg, INVALID_DEVID, &key);
     if (rc == WOLFCERT_OK)
         rc = bundle_cert(s, RSA_TYPE, key->impl, "wolfCert Test Root",
                          "keyCertSign,cRLSign,keyEncipherment", BUNDLE_CA,
@@ -1535,7 +1539,7 @@ WOLFCERT_TEST_VIS int wolfcert_scep_server_set_bundle_fault(WolfCertServer* s,
     if (rc == WOLFCERT_OK && mode == 1)
         rc = bundle_root(s, &der[3], &len[3]);
     if (rc == WOLFCERT_OK && mode == 3) {
-        rc = wolfcert_key_generate(&ecc, &ecc_key);
+        rc = wolfcert_key_generate_on(&ecc, INVALID_DEVID, &ecc_key);
         if (rc == WOLFCERT_OK)
             rc = bundle_cert(s, ECC_TYPE, ecc_key->impl,
                              "wolfCert Test ECC Leaf", NULL, 0, NULL, NULL, 0,

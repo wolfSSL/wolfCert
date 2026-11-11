@@ -49,14 +49,14 @@ static WolfCertKey* alloc_shell(WolfCertKeyType type, int dev_id,
     return k;
 }
 
-static int check_key_id(const WolfCertKeyCfg* cfg)
+static int check_key_id(const WolfCertKeyCfg* cfg, int dev_id)
 {
     if (cfg->key_id_len == 0)
         return cfg->key_id == NULL ? WOLFCERT_OK
                : WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "keygen",
                               "key_id is set but key_id_len is 0");
 
-    return wolfcert_key_id_check(cfg->key_id, cfg->key_id_len, cfg->dev_id,
+    return wolfcert_key_id_check(cfg->key_id, cfg->key_id_len, dev_id,
                                  "keygen");
 }
 
@@ -74,21 +74,31 @@ static void free_shell(WolfCertKey* k)
 
 int wolfcert_key_generate(const WolfCertKeyCfg* cfg, WolfCertKey** out_key)
 {
-    if (cfg == NULL || out_key == NULL)
+    return wolfcert_key_generate_on(cfg,
+        cfg != NULL ? wolfcert_devid_or_default(cfg->dev_id) : INVALID_DEVID,
+        out_key);
+}
+
+int wolfcert_key_generate_on(const WolfCertKeyCfg* cfg, int dev_id,
+                             WolfCertKey** out_key)
+{
+    if (out_key == NULL)
         return WOLFCERT_ERR_BAD_ARG;
     *out_key = NULL;
+    if (cfg == NULL)
+        return WOLFCERT_ERR_BAD_ARG;
 
     const WolfCertKeyAlg* alg = wolfcert_key_alg(cfg->type);
     if (alg == NULL)
         return WOLFCERT_ERR(WOLFCERT_ERR_UNSUPPORTED, "keygen",
                             "unknown or disabled key type %d", (int)cfg->type);
 
-    int rc = check_key_id(cfg);
+    int rc = check_key_id(cfg, dev_id);
     if (rc != WOLFCERT_OK)
         return rc;
 
     void* heap = cfg->heap ? cfg->heap : wolfcert_default_heap();
-    WolfCertKey* k = alloc_shell(cfg->type, cfg->dev_id, cfg->key_id,
+    WolfCertKey* k = alloc_shell(cfg->type, dev_id, cfg->key_id,
                                  cfg->key_id_len, heap);
     if (k == NULL)
         return WOLFCERT_ERR_MEMORY;
@@ -96,7 +106,7 @@ int wolfcert_key_generate(const WolfCertKeyCfg* cfg, WolfCertKey** out_key)
     /* The RNG is set up first; a DRBG alloc between the large ML-DSA
      * allocations tripped a glibc sysmalloc assertion. */
     WC_RNG rng;
-    rc = wc_InitRng_ex(&rng, heap, cfg->dev_id);
+    rc = wc_InitRng_ex(&rng, heap, dev_id);
     if (rc != 0) {
         free_shell(k);
         return WOLFCERT_ERR_WC(rc, "keygen", "InitRng");
@@ -121,7 +131,7 @@ int wolfcert_key_generate(const WolfCertKeyCfg* cfg, WolfCertKey** out_key)
         free_shell(k);
         return WOLFCERT_ERR(WOLFCERT_ERR_UNSUPPORTED, "keygen",
                             "CryptoCb device %d did not generate the key",
-                            cfg->dev_id);
+                            dev_id);
     }
 
     /* The device may rename the key, as a TPM does for a transient one. */
@@ -134,7 +144,7 @@ int wolfcert_key_generate(const WolfCertKeyCfg* cfg, WolfCertKey** out_key)
             *out_key = k;
             return WOLFCERT_ERR(WOLFCERT_ERR_CRYPTO, "keygen",
                                 "CryptoCb device %d left a bad key id",
-                                cfg->dev_id);
+                                dev_id);
         }
         memcpy(k->id, id, (size_t)id_len);
         k->id_len = (size_t)id_len;
@@ -210,8 +220,8 @@ int wolfcert_key_from_pem(const uint8_t* data, size_t data_len,
     const WolfCertKeyAlg* const* list = wolfcert_key_algs_all();
     for (; *list != NULL; ++list) {
         const WolfCertKeyAlg* a = *list;
-        WolfCertKey* k = alloc_shell(a->type, INVALID_DEVID, NULL, 0,
-                                     heap);
+        WolfCertKey* k = alloc_shell(a->type, wolfcert_default_dev_id(), NULL,
+                                     0, heap);
         if (k == NULL) {
             if (der != NULL)
                 wc_FreeDer(&der);
@@ -320,7 +330,8 @@ int wolfcert_key_from_id(const WolfCertKeyCfg* cfg,
     if (cfg == NULL || cfg->key_id_len == 0 || cert == NULL || cert_len == 0)
         return WOLFCERT_ERR_BAD_ARG;
 
-    int rc = check_key_id(cfg);
+    int dev_id = wolfcert_devid_or_default(cfg->dev_id);
+    int rc = check_key_id(cfg, dev_id);
     if (rc != WOLFCERT_OK)
         return rc;
 
@@ -336,7 +347,7 @@ int wolfcert_key_from_id(const WolfCertKeyCfg* cfg,
     if (rc != WOLFCERT_OK)
         return rc;
 
-    WolfCertKey* k = alloc_shell(cfg->type, cfg->dev_id, cfg->key_id,
+    WolfCertKey* k = alloc_shell(cfg->type, dev_id, cfg->key_id,
                                  cfg->key_id_len, heap);
     if (k == NULL) {
         WOLFCERT_XFREE(spki, heap);

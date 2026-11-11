@@ -670,33 +670,38 @@ static int scep_call_check(const ScepCall* c)
 }
 
 struct WolfCertScepSession {
-    WolfCertHttpSession*      http;
-    char*                     server_url;     /* full SCEP endpoint URL, owned */
-    void*                     heap;
+    WolfCertHttpSession*       http;
+    char*                      server_url;  /* full SCEP endpoint URL, owned */
+    void*                      heap;
     WolfCertScepTxidMode       txid_mode;
     WolfCertScepContentCipher  content_cipher;
     WolfCertScepRenewalMsgType renewal_msg_type;
     WolfCertScepSigningHash    signing_hash;
-    char*                      ca_id;          /* owned copy, or NULL */
+    char*                      ca_id;       /* owned copy, or NULL */
 
     /* In-flight state of the single active round trip. */
     int                  in_active;
-    enum scep_session_op in_op;        /* valid when in_active */
+    enum scep_session_op in_op;             /* valid when in_active */
     WolfCertEncoding     in_enc;
-    char*                in_url;       /* owned request URL */
-    WolfCertBuffer       in_pki;       /* built pkiMessage, owned (POST body) */
+    char*                in_url;            /* owned request URL */
+    WolfCertBuffer       in_pki;            /* pkiMessage POST body, owned */
     WolfCertHttpRequest  in_req;
     WolfCertHttpResponse in_resp;
 
-    const uint8_t* in_ca_bundle;  size_t in_ca_bundle_len;  /* in use */
-    uint8_t*       in_ca_bundle_copy;  /* owned, for an _nb request */
-    const uint8_t* in_signer;     size_t in_signer_len;     /* in use */
-    uint8_t*       in_signer_copy;     /* owned: _nb copy or self-signed */
-    uint8_t* in_signer_key;  size_t in_signer_key_len;   /* key DER, zeroized */
-    uint8_t* in_txid;        size_t in_txid_len;         /* owned, from scep_prepare */
-    uint8_t  in_nonce[SCEP_NONCE_SZ];
-    WolfCertBuffer       in_ias;       /* IssuerAndSubject or IssuerAndSerial sent, owned */
-    const void*          in_out;       /* caller's output, checked on resume */
+    const uint8_t*       in_ca_bundle;      /* in use */
+    size_t               in_ca_bundle_len;
+    uint8_t*             in_ca_bundle_copy; /* owned, for an _nb request */
+    const uint8_t*       in_signer;         /* in use */
+    size_t               in_signer_len;
+    uint8_t*             in_signer_copy;    /* owned: _nb copy or self-signed */
+    uint8_t*             in_signer_key;     /* key DER, zeroized */
+    size_t               in_signer_key_len;
+    int                  in_signer_dev_id;
+    uint8_t*             in_txid;           /* owned, from scep_prepare */
+    size_t               in_txid_len;
+    uint8_t              in_nonce[SCEP_NONCE_SZ];
+    WolfCertBuffer       in_ias;            /* IssuerAndSubject/Serial, owned */
+    const void*          in_out;            /* caller's output, resume check */
 };
 
 static uint8_t* dup_buf(const uint8_t* src, size_t len, void* heap)
@@ -970,12 +975,13 @@ static int scep_prepare(WolfCertScepSession* s, const ScepCall* c,
     WolfCertBuffer env = { 0 };
     int rc = wolfcert_scep_envelop(c->ra_cert, c->ra_cert_len,
                                     envelope_content, envelope_content_len,
-                                    enc_oid, &env, heap);
+                                    enc_oid, &env, wolfcert_default_dev_id(),
+                                    heap);
     if (rc != WOLFCERT_OK)
         return rc;
 
     WC_RNG rng;
-    int rng_rc = wc_InitRng_ex(&rng, heap, INVALID_DEVID);
+    int rng_rc = wc_InitRng_ex(&rng, heap, wolfcert_default_dev_id());
     if (rng_rc != 0) {
         wolfcert_buffer_free(&env);
         return WOLFCERT_ERR_WC(rng_rc, "scep", "RNG init failed");
@@ -1004,7 +1010,8 @@ static int scep_prepare(WolfCertScepSession* s, const ScepCall* c,
     rc = wolfcert_scep_build_pki_message(env.data, env.len,
                                           s->in_signer, s->in_signer_len,
                                           s->in_signer_key, s->in_signer_key_len,
-                                          hash_oid, &attrs, out_pki, heap);
+                                          hash_oid, &attrs, out_pki,
+                                          s->in_signer_dev_id, heap);
 
     wolfcert_buffer_free(&env);
     return rc;
@@ -1031,7 +1038,8 @@ static int scep_finish(const WolfCertScepSession* s, WolfCertScepResult* out)
     int rc = wolfcert_scep_parse_pki_message(s->in_resp.body,
             s->in_resp.body_len, &resp_env,
             &rx_tid, &rx_tid_len, &rx_sn, &rx_sn_len, &rx_rn, &rx_rn_len,
-            &resp_mt, &status, &rx_signer, &rx_signer_len, &fail_info, heap);
+            &resp_mt, &status, &rx_signer, &rx_signer_len, &fail_info,
+            wolfcert_default_dev_id(), heap);
 
     WOLFCERT_XFREE(rx_sn,  heap);
 
@@ -1104,7 +1112,7 @@ static int scep_finish(const WolfCertScepSession* s, WolfCertScepResult* out)
             rc = wolfcert_scep_deenvelop(s->in_signer, s->in_signer_len,
                                           s->in_signer_key, s->in_signer_key_len,
                                           resp_env.data, resp_env.len, &inner,
-                                          heap);
+                                          s->in_signer_dev_id, heap);
             if (rc == WOLFCERT_OK)
                 rc = wolfcert_pkcs7_certs_to_pem(inner.data, inner.len,
                                                  &out->cert_pem, heap);
@@ -1142,7 +1150,8 @@ static int scep_session_begin_pki_op(WolfCertScepSession* s, const ScepCall* c,
         rc = wolfcert_scep_self_signed_rsa((RsaKey*)c->key->impl,
                                             c->csr, c->csr_len,
                                             &s->in_signer_copy,
-                                            &s->in_signer_len, heap);
+                                            &s->in_signer_len,
+                                            c->key->dev_id, heap);
         s->in_signer = s->in_signer_copy;
     }
     else {
@@ -1195,6 +1204,7 @@ static int scep_session_begin_pki_op(WolfCertScepSession* s, const ScepCall* c,
         rc = wolfcert_key_export_der(c->key, &s->in_signer_key, &key_len,
                                      heap);
     s->in_signer_key_len = (size_t)key_len;
+    s->in_signer_dev_id  = c->key->dev_id;
     if (rc == WOLFCERT_OK)
         rc = scep_prepare(s, c, msg_type, content, content_len, &pki);
     if (rc == WOLFCERT_OK)

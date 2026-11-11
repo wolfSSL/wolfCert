@@ -919,16 +919,17 @@ int wolfcert_http_chunked_decode(const uint8_t* in, size_t in_len,
 }
 
 typedef struct {
-    const uint8_t* trust_anchors;
-    size_t         trust_anchors_len;
-    int            verify_server;
-    const uint8_t* client_cert;
-    size_t         client_cert_len;
-    const uint8_t* client_key;
-    size_t         client_key_len;
+    const uint8_t*       trust_anchors;
+    size_t               trust_anchors_len;
+    int                  verify_server;
+    const uint8_t*       client_cert;
+    size_t               client_cert_len;
+    const uint8_t*       client_key;
+    size_t               client_key_len;
     WolfCertClientKeySrc client_key_src;
-    int            client_key_dev_id;
-    int            allow_post_handshake_auth;
+    int                  client_key_dev_id;
+    int                  allow_post_handshake_auth;
+    int                  tls_dev_id;
 } TlsDials;
 
 static int buf_filetype(const uint8_t* buf, size_t len)
@@ -968,9 +969,10 @@ static int use_client_key(WOLFSSL_CTX* ctx, const TlsDials* d)
 #endif
     }
     else {
+        int type = buf_filetype(d->client_key, d->client_key_len);
+
         rc = wolfSSL_CTX_use_PrivateKey_buffer(ctx, d->client_key,
-                (long)d->client_key_len,
-                buf_filetype(d->client_key, d->client_key_len));
+                                               (long)d->client_key_len, type);
     }
 
     if (rc != WOLFSSL_SUCCESS)
@@ -986,6 +988,12 @@ static int setup_tls_ex(WolfCertConn* c, const TlsDials* dials,
     WOLFSSL_CTX* ctx = wolfSSL_CTX_new(wolfTLS_client_method());
     if (ctx == NULL)
         return WOLFCERT_ERR_TLS;
+    /* Keeps the devId wolfSSL_CTX_new picks itself, such as CAAM's. */
+    if (dials->tls_dev_id != INVALID_DEVID &&
+            wolfSSL_CTX_SetDevId(ctx, dials->tls_dev_id) != WOLFSSL_SUCCESS) {
+        wolfSSL_CTX_free(ctx);
+        return WOLFCERT_ERR_TLS;
+    }
 
 #ifdef WOLFSSL_NO_TLS12
     (void)wolfSSL_CTX_SetMinVersion(ctx, WOLFSSL_TLSV1_3);
@@ -1081,13 +1089,19 @@ static size_t rx_max(size_t max_body)
 int wolfcert_http_session_open(const WolfCertHttpSessionCfg* cfg,
                                WolfCertHttpSession** out)
 {
+    return wolfcert_http_session_open_dev(cfg, wolfcert_default_dev_id(), out);
+}
+
+int wolfcert_http_session_open_dev(const WolfCertHttpSessionCfg* cfg,
+                                   int tls_dev_id, WolfCertHttpSession** out)
+{
     if (cfg == NULL || cfg->base_url == NULL || out == NULL)
         return WOLFCERT_ERR_BAD_ARG;
 
+    int key_dev_id = wolfcert_devid_or_default(cfg->client_key_dev_id);
     int rc = check_client_key(cfg->client_key_src, cfg->client_cert,
                               cfg->client_cert_len, cfg->client_key,
-                              cfg->client_key_len,
-                              cfg->client_key_dev_id);
+                              cfg->client_key_len, key_dev_id);
     if (rc != WOLFCERT_OK)
         return rc;
 
@@ -1133,8 +1147,9 @@ int wolfcert_http_session_open(const WolfCertHttpSessionCfg* cfg,
             .client_key                = cfg->client_key,
             .client_key_len            = cfg->client_key_len,
             .client_key_src            = cfg->client_key_src,
-            .client_key_dev_id         = cfg->client_key_dev_id,
+            .client_key_dev_id         = key_dev_id,
             .allow_post_handshake_auth = cfg->allow_post_handshake_auth,
+            .tls_dev_id                = tls_dev_id,
         };
 
         rc = setup_tls_ex(&s->conn, &dials, s->base.host, &s->ctx);

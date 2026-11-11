@@ -22,12 +22,21 @@
 
 #include <wolfssl/wolfcrypt/error-crypt.h>
 #include <wolfssl/wolfcrypt/coding.h>
+#ifdef WOLF_CRYPTO_CB
+#include <wolfssl/wolfcrypt/cryptocb.h>
+#endif
 
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 
 static void*            g_default_heap = NULL;
+#if defined(WC_USE_DEVID) && defined(WOLF_CRYPTO_CB)
+#define START_DEV_ID WC_USE_DEVID
+#else
+#define START_DEV_ID INVALID_DEVID
+#endif
+static int              g_default_dev_id = START_DEV_ID;
 static WolfCertLogCb    g_log_cb       = NULL;
 static void*            g_log_ctx      = NULL;
 static WolfCertLogLevel g_log_level    = WOLFCERT_LOG_WARN;
@@ -49,6 +58,31 @@ void  wolfcert_set_default_heap(void* heap)
 void* wolfcert_default_heap(void)
 {
     return g_default_heap;
+}
+
+int wolfcert_set_default_dev_id(int dev_id)
+{
+#ifndef WOLF_CRYPTO_CB
+    if (dev_id != INVALID_DEVID)
+        return WOLFCERT_ERR(WOLFCERT_ERR_UNSUPPORTED, "wolfcert",
+                            "wolfSSL lacks WOLF_CRYPTO_CB");
+#elif !defined(WOLF_CRYPTO_CB_FIND)
+    if (dev_id != INVALID_DEVID && !wc_CryptoCb_IsDeviceRegistered(dev_id))
+        return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "wolfcert",
+                            "no CryptoCb device %d is registered", dev_id);
+#endif
+    g_default_dev_id = dev_id;
+    return WOLFCERT_OK;
+}
+
+int wolfcert_default_dev_id(void)
+{
+    return g_default_dev_id;
+}
+
+void wolfcert_default_dev_id_reset(void)
+{
+    g_default_dev_id = START_DEV_ID;
 }
 
 void wolfcert_set_log_cb(WolfCertLogCb cb, void* ctx)

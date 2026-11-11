@@ -394,6 +394,8 @@ int main(void)
 {
     REQUIRE(test_static_mem_init() == 0);
     REQUIRE(wolfcert_init(test_heap_hint()) == WOLFCERT_OK);
+    /* A WC_USE_DEVID build starts on a device; these checks expect none. */
+    REQUIRE(wolfcert_set_default_dev_id(INVALID_DEVID) == WOLFCERT_OK);
 #ifdef WOLFCERT_HAVE_ECC
     if (roundtrip(WOLFCERT_KEY_ECC, 256))
         return 1;
@@ -445,6 +447,13 @@ int main(void)
     WolfCertKey* k = NULL;
     REQUIRE(wolfcert_key_generate(&bad, &k) != WOLFCERT_OK);
     REQUIRE(wolfcert_key_dev_id(NULL) == INVALID_DEVID);
+    k = (WolfCertKey*)&bad;
+    REQUIRE(wolfcert_key_generate(NULL, &k) == WOLFCERT_ERR_BAD_ARG);
+    REQUIRE(k == NULL);
+#ifndef WOLF_CRYPTO_CB
+    REQUIRE(wolfcert_set_default_dev_id(7) == WOLFCERT_ERR_UNSUPPORTED);
+#endif
+    REQUIRE(wolfcert_set_default_dev_id(INVALID_DEVID) == WOLFCERT_OK);
 
     wolfcert_cleanup();
     printf("OK\n");

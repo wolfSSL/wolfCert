@@ -40,6 +40,7 @@ int wolfcert_init(void* heap)
 void wolfcert_cleanup(void)
 {
     wolfSSL_Cleanup();
+    wolfcert_default_dev_id_reset();
 }
 
 void wolfcert_buffer_free(WolfCertBuffer* buf)

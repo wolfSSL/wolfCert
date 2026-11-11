@@ -353,21 +353,36 @@ From there, every private-key operation on the key routes through
 `my_callback`: CSR signing, and TLS client authentication by id or for EST
 `/simplereenroll`. wolfSSL also hands the backend public-key operations on
 that id, such as the check of its own RSA signature in TLS, so the backend
-must serve those too. Pass `INVALID_DEVID` to force software operation.
+must serve those too.
 
 A `dev_id` without a `key_id` only offloads the computation. The key itself
 is an ordinary wolfCrypt key in host memory, and `wolfcert_key_to_pem` exports
 it. Only a `key_id` keeps the key in the backend.
+
+A crypto accelerator gets the rest of the client's work through
+`wolfcert_set_default_dev_id`: the TLS connection, SCEP's PKCS#7, and every
+key generated or imported with `dev_id = INVALID_DEVID`, which takes the
+default as its device. The default is `WC_USE_DEVID` when wolfSSL defines it,
+as the NXP EdgeLock port does, else `INVALID_DEVID`; set it to `INVALID_DEVID`
+to run all of this in software, except that TLS keeps a devId wolfSSL picks
+itself (CAAM, ARIA, MAXQ10xx). The setter returns `WOLFCERT_ERR_BAD_ARG` for a
+devId with no registered device, unless wolfSSL has `WOLF_CRYPTO_CB_FIND`,
+and `wolfcert_cleanup` restores the start value. A key keeps the device it was
+made with, so change the default before generating or importing keys, and
+before other threads use wolfCert. A key's own `dev_id` still takes
+precedence, so a key held in one device can sign while another accelerates the
+connection. The built-in test server always runs in software.
 
 For TLS client authentication, `WolfCertServerCfg.client_key_src` says what
 `client_key` holds and where the handshake signs with it:
 
 | `client_key_src` | `client_key` holds | Signed |
 |---|---|---|
-| `WOLFCERT_CLIENT_KEY_BUFFER` (default) | PEM or DER | in software |
+| `WOLFCERT_CLIENT_KEY_BUFFER` (default) | PEM or DER | on the connection's device, the default devId |
 | `WOLFCERT_CLIENT_KEY_ID` | the key id | in `client_key_dev_id` |
 
-EST `/simplereenroll` picks the source from the key being renewed.
+EST `/simplereenroll` picks the source from the key being renewed, and runs
+the connection of a key without a `key_id` on that key's `dev_id`.
 
 A key with a `key_id` never leaves the backend: `wolfcert_key_to_pem` and
 `wolfcert_key_to_der` fail with `WOLFCERT_ERR_UNSUPPORTED`. Persist the id and

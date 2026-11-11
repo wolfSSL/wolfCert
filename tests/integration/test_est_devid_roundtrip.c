@@ -60,8 +60,9 @@ int main(void)
         }                                                                   \
     } while (0)
 
-#define MOCK_DEVID 0x6d6b
-#define MOCK_SLOTS 4
+#define MOCK_DEVID  0x6d6b
+#define ACCEL_DEVID 0x6163
+#define MOCK_SLOTS  4
 
 enum { MOCK_ECC = 1, MOCK_RSA, MOCK_MLDSA, MOCK_ED25519, MOCK_ED448 };
 
@@ -339,6 +340,29 @@ static int mock_cb(int devId, wc_CryptoInfo* info, void* ctx)
     default:
         return CRYPTOCB_UNAVAILABLE;
     }
+}
+
+/* An accelerator that counts what it is offered and leaves it to software. */
+static int accel_calls;
+static int accel_signs;
+
+static int accel_cb(int devId, wc_CryptoInfo* info, void* ctx)
+{
+    (void)devId;
+    (void)ctx;
+
+    accel_calls++;
+    if (info->algo_type == WC_ALGO_TYPE_PK &&
+        info->pk.type == WC_PK_TYPE_ECDSA_SIGN)
+        accel_signs++;
+#ifndef NO_RSA
+    if (info->algo_type == WC_ALGO_TYPE_PK &&
+        info->pk.type == WC_PK_TYPE_RSA &&
+        (info->pk.rsa.type == RSA_PRIVATE_ENCRYPT ||
+         info->pk.rsa.type == RSA_PRIVATE_DECRYPT))
+        accel_signs++;
+#endif
+    return CRYPTOCB_UNAVAILABLE;
 }
 
 #ifdef MOCK_HAVE_ED448
@@ -742,8 +766,8 @@ static int test_client_key_src(const char* url,
     key = NULL;
 
 #ifdef KEEP_PEER_CERT
-    /* A dev_id key without a key_id signs its CSR on the device and the
-     * handshake in software. */
+    /* A dev_id key without a key_id signs its CSR and the handshake on the
+     * device. */
     const WolfCertCertMeta renew_meta = { 0 };
     WolfCertClient* client = NULL;
     WolfCertKey* unused = NULL;
@@ -764,12 +788,130 @@ static int test_client_key_src(const char* url,
         fprintf(stderr, "dev reenroll rc=%d (%s)\n", rc,
                 wolfcert_last_error_message());
     REQUIRE(rc == WOLFCERT_OK);
-    REQUIRE(mock_sign_requests == requests + 1);
+    REQUIRE(mock_sign_requests >= requests + 2);
     wolfcert_buffer_free(&renewed);
     wolfcert_est_result_free(&cert);
     wolfcert_buffer_free(&csr);
     wolfcert_key_free(key);
 #endif
+    return 0;
+}
+
+/* The default devId gets the client's TLS crypto, including a PEM client key's
+ * signature, while a key_id key still signs in its own device. */
+static int test_default_dev_id(const char* url,
+                               const uint8_t* tls_cert, size_t tls_cert_len,
+                               const uint8_t* boot_cert, size_t boot_cert_len,
+                               const uint8_t* boot_key, size_t boot_key_len)
+{
+    static const uint8_t id[] = "wolfcert/accel-key";
+    static const uint8_t dflt_id[] = "wolfcert/default-key";
+    const WolfCertCertMeta meta = {
+        .subject_dn = "CN=devid-default,O=wolfSSL"
+    };
+    WolfCertKeyCfg kcfg = { .type = TEST_ENROLL_KEY_TYPE,
+                            .param = TEST_ENROLL_KEY_PARAM,
+                            .dev_id = INVALID_DEVID };
+    WolfCertServerCfg cli = {
+        .protocol          = WOLFCERT_PROTO_EST,
+        .server_url        = url,
+        .trust_anchors     = tls_cert,
+        .trust_anchors_len = tls_cert_len,
+        .verify_server     = 1,
+        .client_cert       = boot_cert,
+        .client_cert_len   = boot_cert_len,
+        .client_key        = boot_key,
+        .client_key_len    = boot_key_len,
+    };
+    WolfCertKey* key = NULL;
+    WolfCertBuffer csr = { 0 };
+    WolfCertEstResult cert = { 0 };
+    WolfCertEstResult issued = { 0 };
+    int ops;
+
+#ifndef WC_USE_DEVID
+    REQUIRE(wolfcert_default_dev_id() == INVALID_DEVID);
+#endif
+    REQUIRE(wolfcert_key_generate(&kcfg, &key) == WOLFCERT_OK);
+    REQUIRE(wolfcert_csr_build(key, &meta, &csr) == WOLFCERT_OK);
+
+    REQUIRE(wolfcert_set_default_dev_id(INVALID_DEVID) == WOLFCERT_OK);
+    accel_calls = 0;
+    REQUIRE(wolfcert_est_simple_enroll(&cli, csr.data, csr.len, &cert) ==
+            WOLFCERT_OK);
+    wolfcert_est_result_free(&cert);
+    REQUIRE(accel_calls == 0);
+
+    REQUIRE(wolfcert_set_default_dev_id(ACCEL_DEVID) == WOLFCERT_OK);
+    REQUIRE(wolfcert_default_dev_id() == ACCEL_DEVID);
+    accel_signs = 0;
+    REQUIRE(wolfcert_est_simple_enroll(&cli, csr.data, csr.len, &cert) ==
+            WOLFCERT_OK);
+    wolfcert_est_result_free(&cert);
+    REQUIRE(accel_calls > 0);
+    REQUIRE(accel_signs > 0);
+    wolfcert_buffer_free(&csr);
+    wolfcert_key_free(key);
+    key = NULL;
+
+    /* A key made with INVALID_DEVID now takes the default for its own work. */
+    accel_signs = 0;
+    REQUIRE(wolfcert_key_generate(&kcfg, &key) == WOLFCERT_OK);
+    REQUIRE(wolfcert_key_dev_id(key) == ACCEL_DEVID);
+    REQUIRE(wolfcert_csr_build(key, &meta, &csr) == WOLFCERT_OK);
+    REQUIRE(accel_signs == 1);
+    wolfcert_buffer_free(&csr);
+    wolfcert_key_free(key);
+    key = NULL;
+
+    /* A key_id with INVALID_DEVID goes to the default device too. */
+    REQUIRE(wolfcert_set_default_dev_id(MOCK_DEVID) == WOLFCERT_OK);
+    kcfg.key_id     = dflt_id;
+    kcfg.key_id_len = sizeof(dflt_id) - 1;
+    REQUIRE(wolfcert_key_generate(&kcfg, &key) == WOLFCERT_OK);
+    REQUIRE(wolfcert_key_dev_id(key) == MOCK_DEVID);
+    wolfcert_key_free(key);
+    key = NULL;
+    REQUIRE(wolfcert_set_default_dev_id(ACCEL_DEVID) == WOLFCERT_OK);
+
+    kcfg.dev_id     = MOCK_DEVID;
+    kcfg.key_id     = id;
+    kcfg.key_id_len = sizeof(id) - 1;
+    REQUIRE(wolfcert_key_generate(&kcfg, &key) == WOLFCERT_OK);
+    REQUIRE(wolfcert_csr_build(key, &meta, &csr) == WOLFCERT_OK);
+    REQUIRE(wolfcert_est_simple_enroll(&cli, csr.data, csr.len, &issued) ==
+            WOLFCERT_OK);
+
+    cli.client_cert       = issued.cert_pem.data;
+    cli.client_cert_len   = issued.cert_pem.len;
+    cli.client_key        = id;
+    cli.client_key_len    = sizeof(id) - 1;
+    cli.client_key_src    = WOLFCERT_CLIENT_KEY_ID;
+    cli.client_key_dev_id = MOCK_DEVID;
+    accel_calls = 0;
+    accel_signs = 0;
+    ops = mock_private_ops;
+    REQUIRE(wolfcert_est_simple_enroll(&cli, csr.data, csr.len, &cert) ==
+            WOLFCERT_OK);
+    REQUIRE(accel_calls > 0);
+    REQUIRE(accel_signs == 0);
+    REQUIRE(mock_private_ops > ops);
+    wolfcert_est_result_free(&cert);
+
+    /* client_key_dev_id = INVALID_DEVID names the default device. */
+    REQUIRE(wolfcert_set_default_dev_id(MOCK_DEVID) == WOLFCERT_OK);
+    cli.client_key_dev_id = INVALID_DEVID;
+    ops = mock_private_ops;
+    REQUIRE(wolfcert_est_simple_enroll(&cli, csr.data, csr.len, &cert) ==
+            WOLFCERT_OK);
+    REQUIRE(mock_private_ops > ops);
+
+    REQUIRE(wolfcert_set_default_dev_id(INVALID_DEVID) == WOLFCERT_OK);
+    wolfcert_est_result_free(&cert);
+    wolfcert_est_result_free(&issued);
+    wolfcert_buffer_free(&csr);
+    wolfcert_key_free(key);
+    mock_reset();
     return 0;
 }
 
@@ -873,6 +1015,9 @@ int main(void)
 
     REQUIRE(wolfcert_init(NULL) == WOLFCERT_OK);
     REQUIRE(wc_CryptoCb_RegisterDevice(MOCK_DEVID, mock_cb, NULL) == 0);
+    REQUIRE(wc_CryptoCb_RegisterDevice(ACCEL_DEVID, accel_cb, NULL) == 0);
+    /* A WC_USE_DEVID build starts on a device; these checks expect none. */
+    REQUIRE(wolfcert_set_default_dev_id(INVALID_DEVID) == WOLFCERT_OK);
     REQUIRE(test_cfg_errors() == 0);
 
     REQUIRE(mint_self_id("127.0.0.1", 0, &tls_cert, &tls_cert_len,
@@ -950,9 +1095,12 @@ int main(void)
 #endif
 #ifdef MOCK_HAVE_ED448
     REQUIRE(run_key_type(url, WOLFCERT_KEY_ED448, 0, tls_cert, tls_cert_len,
-                         boot_cert, boot_cert_len, boot_key, boot_key_len) == 0);
+                         boot_cert, boot_cert_len, boot_key,
+                         boot_key_len) == 0);
 #endif
     REQUIRE(test_client_key_src(url, tls_cert, tls_cert_len, boot_cert,
+                                boot_cert_len, boot_key, boot_key_len) == 0);
+    REQUIRE(test_default_dev_id(url, tls_cert, tls_cert_len, boot_cert,
                                 boot_cert_len, boot_key, boot_key_len) == 0);
     REQUIRE(test_failure_keeps_key(url, tls_cert, tls_cert_len) == 0);
 
@@ -966,8 +1114,15 @@ int main(void)
     free(tls_key);
     free(boot_cert);
     free(boot_key);
+    REQUIRE(wolfcert_set_default_dev_id(ACCEL_DEVID) == WOLFCERT_OK);
+    wc_CryptoCb_UnRegisterDevice(ACCEL_DEVID);
     wc_CryptoCb_UnRegisterDevice(MOCK_DEVID);
     wolfcert_cleanup();
+#ifdef WC_USE_DEVID
+    REQUIRE(wolfcert_default_dev_id() == WC_USE_DEVID);
+#else
+    REQUIRE(wolfcert_default_dev_id() == INVALID_DEVID);
+#endif
     printf("est_devid_roundtrip: OK\n");
     return 0;
 }

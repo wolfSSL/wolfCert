@@ -157,8 +157,8 @@ struct WolfCertEstSession {
     WolfCertEncoding     in_enc;
 };
 
-int wolfcert_est_session_open(const WolfCertServerCfg* srv,
-                              WolfCertEstSession** out)
+static int est_session_open_dev(const WolfCertServerCfg* srv, int tls_dev_id,
+                                WolfCertEstSession** out)
 {
     if (srv == NULL || srv->server_url == NULL || out == NULL)
         return WOLFCERT_ERR_BAD_ARG;
@@ -228,7 +228,7 @@ int wolfcert_est_session_open(const WolfCertServerCfg* srv,
         .transport                 = srv->transport,
         .heap                      = heap,
     };
-    rc = wolfcert_http_session_open(&hcfg, &s->http);
+    rc = wolfcert_http_session_open_dev(&hcfg, tls_dev_id, &s->http);
     if (rc != WOLFCERT_OK) {
         /* Free with wolfcert_est_session_close() to zero s->basic_pass. */
         wolfcert_est_session_close(s);
@@ -237,6 +237,12 @@ int wolfcert_est_session_open(const WolfCertServerCfg* srv,
 
     *out = s;
     return WOLFCERT_OK;
+}
+
+int wolfcert_est_session_open(const WolfCertServerCfg* srv,
+                              WolfCertEstSession** out)
+{
+    return est_session_open_dev(srv, wolfcert_default_dev_id(), out);
 }
 
 int wolfcert_est_session_fd(const WolfCertEstSession* s)
@@ -500,7 +506,8 @@ int wolfcert_est_session_simple_reenroll_nb(WolfCertEstSession* s,
                             WOLFCERT_ENCODING_PEM, &out->cert_pem, out, 1);
 }
 
-static int est_one_shot(const WolfCertServerCfg* srv, enum est_session_op op,
+static int est_one_shot(const WolfCertServerCfg* srv, int tls_dev_id,
+                        enum est_session_op op,
                         const uint8_t* csr_der, size_t csr_der_len,
                         WolfCertEncoding enc, WolfCertBuffer* out,
                         WolfCertEstResult* res)
@@ -511,7 +518,7 @@ static int est_one_shot(const WolfCertServerCfg* srv, enum est_session_op op,
     est_call_clear(NULL, out, res);
     rc = est_call_check(op, csr_der, csr_der_len, enc, out);
     if (rc == WOLFCERT_OK)
-        rc = wolfcert_est_session_open(srv, &s);
+        rc = est_session_open_dev(srv, tls_dev_id, &s);
     if (rc == WOLFCERT_OK) {
         wolfcert_http_session_set_close(s->http);
         rc = est_session_call(s, op, csr_der, csr_der_len, enc, out, res, 0);
@@ -524,14 +531,15 @@ static int est_one_shot(const WolfCertServerCfg* srv, enum est_session_op op,
 int wolfcert_est_get_cacerts(const WolfCertServerCfg* srv, WolfCertEncoding enc,
                              WolfCertBuffer* out_ca)
 {
-    return est_one_shot(srv, EST_OP_GET_CACERTS, NULL, 0, enc, out_ca, NULL);
+    return est_one_shot(srv, wolfcert_default_dev_id(), EST_OP_GET_CACERTS,
+                        NULL, 0, enc, out_ca, NULL);
 }
 
 int wolfcert_est_get_csr_attrs(const WolfCertServerCfg* srv,
                                WolfCertBuffer* out_attrs_der)
 {
-    return est_one_shot(srv, EST_OP_GET_CSRATTRS, NULL, 0,
-                        WOLFCERT_ENCODING_DER, out_attrs_der, NULL);
+    return est_one_shot(srv, wolfcert_default_dev_id(), EST_OP_GET_CSRATTRS,
+                        NULL, 0, WOLFCERT_ENCODING_DER, out_attrs_der, NULL);
 }
 
 int wolfcert_est_simple_enroll(const WolfCertServerCfg* srv,
@@ -541,8 +549,9 @@ int wolfcert_est_simple_enroll(const WolfCertServerCfg* srv,
     if (out == NULL)
         return WOLFCERT_ERR_BAD_ARG;
 
-    return est_one_shot(srv, EST_OP_SIMPLE_ENROLL, csr_der, csr_der_len,
-                        WOLFCERT_ENCODING_PEM, &out->cert_pem, out);
+    return est_one_shot(srv, wolfcert_default_dev_id(), EST_OP_SIMPLE_ENROLL,
+                        csr_der, csr_der_len, WOLFCERT_ENCODING_PEM,
+                        &out->cert_pem, out);
 }
 
 int wolfcert_est_simple_reenroll(const WolfCertServerCfg* srv,
@@ -553,6 +562,7 @@ int wolfcert_est_simple_reenroll(const WolfCertServerCfg* srv,
 {
     WolfCertServerCfg cfg;
     WolfCertBuffer key_der = { 0 };
+    int tls_dev_id;
     int rc = WOLFCERT_OK;
 
     if (out == NULL)
@@ -564,15 +574,18 @@ int wolfcert_est_simple_reenroll(const WolfCertServerCfg* srv,
         current_key == NULL)
         return WOLFCERT_ERR_BAD_ARG;
 
-    /* The TLS identity is the cert being renewed. */
+    /* The TLS identity is the cert being renewed. wolfSSL signs with a key
+     * loaded from DER on the context's devId, so that is the key's device. */
     cfg = *srv;
+    tls_dev_id = current_key->dev_id;
     cfg.client_cert       = current_cert;
     cfg.client_cert_len   = current_cert_len;
-    cfg.client_key_dev_id = current_key->dev_id;
     if (current_key->id_len > 0) {
-        cfg.client_key     = current_key->id;
-        cfg.client_key_len = current_key->id_len;
-        cfg.client_key_src = WOLFCERT_CLIENT_KEY_ID;
+        cfg.client_key        = current_key->id;
+        cfg.client_key_len    = current_key->id_len;
+        cfg.client_key_src    = WOLFCERT_CLIENT_KEY_ID;
+        cfg.client_key_dev_id = current_key->dev_id;
+        tls_dev_id            = wolfcert_default_dev_id();
     }
     else {
         rc = wolfcert_key_to_der(current_key, &key_der);
@@ -581,7 +594,8 @@ int wolfcert_est_simple_reenroll(const WolfCertServerCfg* srv,
         cfg.client_key_src = WOLFCERT_CLIENT_KEY_BUFFER;
     }
     if (rc == WOLFCERT_OK)
-        rc = est_one_shot(&cfg, EST_OP_SIMPLE_REENROLL, csr_der, csr_der_len,
+        rc = est_one_shot(&cfg, tls_dev_id, EST_OP_SIMPLE_REENROLL,
+                          csr_der, csr_der_len,
                           WOLFCERT_ENCODING_PEM, &out->cert_pem, out);
 
     wolfcert_buffer_free_secure(&key_der);

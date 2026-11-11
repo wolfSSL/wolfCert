@@ -1451,7 +1451,7 @@ static int cmd_enroll(int argc, char** argv)
     WolfCertKey* key = NULL;
     WolfCertBuffer csr = { 0 };
     WolfCertBuffer issued = { 0 };
-    WolfCertKeyCfg kcfg = { .dev_id = WOLFCERT_DEVID_SOFTWARE };
+    WolfCertKeyCfg kcfg = { .dev_id = INVALID_DEVID };
     WolfCertProtocol p = 0;
 #ifdef WOLFCERT_HAVE_SCEP
     CaPin pin = { 0 };

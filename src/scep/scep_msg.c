@@ -327,7 +327,7 @@ WOLFCERT_TEST_VIS int wolfcert_scep_envelop(const uint8_t* ra_cert_der,
     size_t ra_cert_len, const uint8_t* payload, size_t payload_len, int enc_oid,
     WolfCertBuffer* out_der, void* heap)
 {
-    PKCS7* p7 = wc_PKCS7_New(heap, WOLFCERT_DEVID_SOFTWARE);
+    PKCS7* p7 = wc_PKCS7_New(heap, INVALID_DEVID);
     if (p7 == NULL)
         return WOLFCERT_ERR_MEMORY;
 
@@ -347,7 +347,7 @@ WOLFCERT_TEST_VIS int wolfcert_scep_envelop(const uint8_t* ra_cert_der,
     }
 
     WC_RNG rng;
-    if (wc_InitRng_ex(&rng, heap, WOLFCERT_DEVID_SOFTWARE) != 0) {
+    if (wc_InitRng_ex(&rng, heap, INVALID_DEVID) != 0) {
         wc_PKCS7_Free(p7);
         return WOLFCERT_ERR_CRYPTO;
     }
@@ -391,7 +391,7 @@ int wolfcert_scep_deenvelop(const uint8_t* recipient_cert_der, size_t recipient_
     if (env_len == 0 || env_len > WOLFCERT_SCEP_MAX_MSG_SZ)
         return WOLFCERT_ERR_BAD_ARG;
 
-    PKCS7* p7 = wc_PKCS7_New(heap, WOLFCERT_DEVID_SOFTWARE);
+    PKCS7* p7 = wc_PKCS7_New(heap, INVALID_DEVID);
     if (p7 == NULL)
         return WOLFCERT_ERR_MEMORY;
 
@@ -450,7 +450,7 @@ WOLFCERT_TEST_VIS int wolfcert_scep_self_signed_rsa(RsaKey* key,
     if (cert == NULL)
         return WOLFCERT_ERR_MEMORY;
 
-    wc_InitCert_ex(cert, heap, WOLFCERT_DEVID_SOFTWARE);
+    wc_InitCert_ex(cert, heap, INVALID_DEVID);
 
     dc = (DecodedCert*)WOLFCERT_XMALLOC(sizeof(*dc), heap);
     if (dc == NULL) {
@@ -503,7 +503,7 @@ WOLFCERT_TEST_VIS int wolfcert_scep_self_signed_rsa(RsaKey* key,
         return WOLFCERT_ERR_WC(rc, "scep", "SetKeyUsage");
     }
 
-    if (wc_InitRng_ex(&rng, heap, WOLFCERT_DEVID_SOFTWARE) != 0) {
+    if (wc_InitRng_ex(&rng, heap, INVALID_DEVID) != 0) {
         wc_CertFree(cert);
         return WOLFCERT_ERR_CRYPTO;
     }
@@ -534,7 +534,7 @@ WOLFCERT_TEST_VIS int wolfcert_scep_build_pki_message(const uint8_t* envelope_de
     const uint8_t* signer_key_der,  size_t signer_key_len, int hash_oid,
     const WolfCertScepAttrs* attrs, WolfCertBuffer* out_der, void* heap)
 {
-    PKCS7* p7 = wc_PKCS7_New(heap, WOLFCERT_DEVID_SOFTWARE);
+    PKCS7* p7 = wc_PKCS7_New(heap, INVALID_DEVID);
     if (p7 == NULL)
         return WOLFCERT_ERR_MEMORY;
 
@@ -545,7 +545,7 @@ WOLFCERT_TEST_VIS int wolfcert_scep_build_pki_message(const uint8_t* envelope_de
     }
 
     WC_RNG rng;
-    if (wc_InitRng_ex(&rng, heap, WOLFCERT_DEVID_SOFTWARE) != 0) {
+    if (wc_InitRng_ex(&rng, heap, INVALID_DEVID) != 0) {
         wc_PKCS7_Free(p7);
         return WOLFCERT_ERR_CRYPTO;
     }
@@ -739,7 +739,7 @@ WOLFCERT_TEST_VIS int wolfcert_scep_parse_pki_message(const uint8_t* pki_der,
     int bit;
     int rc;
 
-    p7 = wc_PKCS7_New(heap, WOLFCERT_DEVID_SOFTWARE);
+    p7 = wc_PKCS7_New(heap, INVALID_DEVID);
     if (p7 == NULL)
         return WOLFCERT_ERR_MEMORY;
 

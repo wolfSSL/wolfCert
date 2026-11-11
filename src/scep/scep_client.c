@@ -975,7 +975,7 @@ static int scep_prepare(WolfCertScepSession* s, const ScepCall* c,
         return rc;
 
     WC_RNG rng;
-    int rng_rc = wc_InitRng_ex(&rng, heap, WOLFCERT_DEVID_SOFTWARE);
+    int rng_rc = wc_InitRng_ex(&rng, heap, INVALID_DEVID);
     if (rng_rc != 0) {
         wolfcert_buffer_free(&env);
         return WOLFCERT_ERR_WC(rng_rc, "scep", "RNG init failed");

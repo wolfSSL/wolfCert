@@ -321,7 +321,7 @@ static int check_rsa4096(const WolfCertServerCfg* cli,
                          const uint8_t* ca_der_buf, size_t ca_der_len)
 {
     WolfCertKeyCfg        kcfg = { .type = WOLFCERT_KEY_RSA, .param = 4096,
-                                   .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                                   .dev_id = INVALID_DEVID };
     WolfCertCertMeta      meta = { .subject_dn = "CN=device-scep-4096" };
     WolfCertKey*          key = NULL;
     WolfCertBuffer        csr = { 0 };
@@ -1824,7 +1824,7 @@ static int test_split_ra(void)
                                  TEST_CA_CFG,
                                  .scep_split_ra = 1 };
     WolfCertKeyCfg kcfg = { .type = WOLFCERT_KEY_RSA, .param = 2048,
-                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                            .dev_id = INVALID_DEVID };
     WolfCertCertMeta meta = { .subject_dn = "CN=device-split-ra" };
     WolfCertServer* s = NULL;
     WolfCertScepCaps caps = { 0 };
@@ -2007,7 +2007,7 @@ int main(void)
     REQUIRE(check_getca_media_type(ca_der->buffer, ca_der->length) == 0);
 
     WolfCertKeyCfg kcfg = { .type = WOLFCERT_KEY_RSA, .param = 2048,
-                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                            .dev_id = INVALID_DEVID };
     WolfCertKey* dk = NULL;
     REQUIRE(wolfcert_key_generate(&kcfg, &dk) == WOLFCERT_OK);
     WolfCertCertMeta meta = { .subject_dn = "CN=device-scep-1" };
@@ -2234,7 +2234,7 @@ int main(void)
 #ifdef WOLFCERT_HAVE_ED25519
     /* Ed25519 signer must be rejected cleanly (RFC 8894 requires RSA). */
     WolfCertKeyCfg edcfg = { .type = WOLFCERT_KEY_ED25519, .param = 0,
-                             .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                             .dev_id = INVALID_DEVID };
     WolfCertKey* edk = NULL;
     REQUIRE(wolfcert_key_generate(&edcfg, &edk) == WOLFCERT_OK);
     WolfCertCertMeta edmeta = { .subject_dn = "CN=ed-scep" };

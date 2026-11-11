@@ -415,7 +415,7 @@ static int test_cfg_errors(void)
     uint8_t long_id[WOLFCERT_KEY_ID_MAX_LEN + 1] = { 0 };
     WolfCertKeyCfg cfg = { .type = TEST_ENROLL_KEY_TYPE,
                            .param = TEST_ENROLL_KEY_PARAM,
-                           .dev_id = WOLFCERT_DEVID_SOFTWARE,
+                           .dev_id = INVALID_DEVID,
                            .key_id = id, .key_id_len = sizeof(id) - 1 };
     WolfCertKey* k = NULL;
 
@@ -705,7 +705,7 @@ static int test_client_key_src(const char* url,
     const WolfCertCertMeta meta = { .subject_dn = "CN=devid-accel,O=wolfSSL" };
     WolfCertKeyCfg kcfg = { .type = TEST_ENROLL_KEY_TYPE,
                             .param = TEST_ENROLL_KEY_PARAM,
-                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                            .dev_id = INVALID_DEVID };
     WolfCertServerCfg cli = {
         .protocol          = WOLFCERT_PROTO_EST,
         .server_url        = url,
@@ -787,7 +787,7 @@ static int test_failure_keeps_key(const char* url, const uint8_t* tls_cert,
                             .key_id = id, .key_id_len = sizeof(id) - 1 };
     WolfCertKeyCfg scfg = { .type = TEST_ENROLL_KEY_TYPE,
                             .param = TEST_ENROLL_KEY_PARAM,
-                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                            .dev_id = INVALID_DEVID };
     WolfCertServerCfg cli = {
         .protocol          = WOLFCERT_PROTO_EST,
         .server_url        = url,

@@ -31,6 +31,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <wolfssl/wolfcrypt/types.h>
 
 #include <wolfcert/api.h>
 
@@ -77,10 +78,6 @@ typedef enum {
     WOLFCERT_KEY_MLDSA87 = 7
 } WolfCertKeyType;
 
-/* Keys are offloaded through a wolfSSL CryptoCb devId that the application
- * registers; WOLFCERT_DEVID_SOFTWARE selects software. */
-#define WOLFCERT_DEVID_SOFTWARE (-1)
-
 /* Defaults to wolfSSL's default ECC_MAX_ID_LEN / RSA_MAX_ID_LEN. */
 #ifndef WOLFCERT_KEY_ID_MAX_LEN
 #define WOLFCERT_KEY_ID_MAX_LEN 32
@@ -95,7 +92,7 @@ typedef enum {
 typedef struct {
     WolfCertKeyType type;
     int             param;       /* RSA 2048/3072/4096 or ECC 256/384/521 bits */
-    int             dev_id;      /* wolfSSL CryptoCb devId; -1 for software */
+    int             dev_id;      /* CryptoCb devId, or INVALID_DEVID */
     void*           heap;        /* optional heap hint; NULL = default */
     /* Backend key id, opaque to wolfCert; needs dev_id. Up to
      * WOLFCERT_KEY_ID_MAX_LEN bytes. */

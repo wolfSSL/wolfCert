@@ -88,7 +88,7 @@
 
 static inline int wolfcert_devid_is_cb(int dev_id)
 {
-    return dev_id != WOLFCERT_DEVID_SOFTWARE && dev_id != INVALID_DEVID;
+    return dev_id != INVALID_DEVID;
 }
 
 /* BAD_ARG or UNSUPPORTED, with a message, unless id names a key a CryptoCb

@@ -197,7 +197,7 @@ wolfcert_init(my_static_heap_hint);
 
 /* Per-object override (here: force a specific pool for a device key): */
 WolfCertKeyCfg cfg = { .type = WOLFCERT_KEY_ECC, .param = 256,
-                       .dev_id = WOLFCERT_DEVID_SOFTWARE,
+                       .dev_id = INVALID_DEVID,
                        .heap = slow_path_pool };
 wolfcert_key_generate(&cfg, &key);
 ```

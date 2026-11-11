@@ -363,7 +363,7 @@ static int loaded_ca_signs(const WolfCertBuffer* cert, const WolfCertBuffer* key
     /* Any compiled algorithm serves as the leaf; the first entry always is. */
     WolfCertKeyCfg kcfg = { .type = CA_KEY_TYPES[0],
                             .param = ca_key_param(CA_KEY_TYPES[0]),
-                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                            .dev_id = INVALID_DEVID };
     WolfCertCertMeta meta = { .subject_dn = "CN=leaf" };
     WolfCertKey* leaf_key = NULL;
     WolfCertBuffer csr = { 0 };
@@ -807,7 +807,7 @@ static int make_self_pair(int is_ca, int skid_len, WolfCertBuffer* cert_out,
                           WolfCertBuffer* key_out)
 {
     WolfCertKeyCfg kcfg = { .type = WOLFCERT_KEY_ECC, .param = 256,
-                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                            .dev_id = INVALID_DEVID };
     WolfCertKey* dk = NULL;
     ecc_key wck;
     word32 idx = 0;

@@ -49,7 +49,7 @@
 static int roundtrip(WolfCertKeyType type, int param)
 {
     WolfCertKeyCfg cfg = { .type = type, .param = param,
-                           .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                           .dev_id = INVALID_DEVID };
     WolfCertKey* k = NULL;
     REQUIRE(wolfcert_key_generate(&cfg, &k) == WOLFCERT_OK);
     REQUIRE(k != NULL);
@@ -429,7 +429,7 @@ int main(void)
     /* Runtime rejection when the wolfSSL build lacks Dilithium. */
     {
         WolfCertKeyCfg cfg = { .type = WOLFCERT_KEY_MLDSA44, .param = 0,
-                               .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                               .dev_id = INVALID_DEVID };
         WolfCertKey* k = NULL;
         REQUIRE(wolfcert_key_generate(&cfg, &k) == WOLFCERT_ERR_UNSUPPORTED);
     }
@@ -441,9 +441,10 @@ int main(void)
 #endif
 
     WolfCertKeyCfg bad = { .type = WOLFCERT_KEY_ECC, .param = 123,
-                           .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                           .dev_id = INVALID_DEVID };
     WolfCertKey* k = NULL;
     REQUIRE(wolfcert_key_generate(&bad, &k) != WOLFCERT_OK);
+    REQUIRE(wolfcert_key_dev_id(NULL) == INVALID_DEVID);
 
     wolfcert_cleanup();
     printf("OK\n");

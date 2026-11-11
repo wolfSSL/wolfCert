@@ -116,7 +116,7 @@ static int enroll_with_challenge(WolfCertServer* s)
     REQUIRE(wolfcert_client_new(&cli) == WOLFCERT_OK);
 
     WolfCertKeyCfg  key_cfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
-                                .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                                .dev_id = INVALID_DEVID };
     WolfCertCertMeta meta = {
         .subject_dn = "CN=enforce-ok",
         .challenge_password = "hunter2",
@@ -150,7 +150,7 @@ static int enroll_without_challenge(WolfCertServer* s)
     REQUIRE(wolfcert_client_new(&cli) == WOLFCERT_OK);
 
     WolfCertKeyCfg  key_cfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
-                                .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                                .dev_id = INVALID_DEVID };
     WolfCertCertMeta meta = {
         .subject_dn = "CN=enforce-reject",
     };
@@ -204,7 +204,7 @@ static int reject_body_names_missing_oid(uint16_t port)
     /* OID_CHALLENGE_PASSWORD in dotted form. */
     static const char EXPECT_OID[] = "1.2.840.113549.1.9.7";
     WolfCertKeyCfg key_cfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
-                               .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                               .dev_id = INVALID_DEVID };
     WolfCertCertMeta meta = { .subject_dn = "CN=raw-enforce" };
     WolfCertKey* key = NULL;
     WolfCertBuffer csr_der = { 0 };
@@ -334,7 +334,7 @@ static int values_only_policy_does_not_block(WolfCertServer* s)
     REQUIRE(wolfcert_client_new(&cli) == WOLFCERT_OK);
 
     WolfCertKeyCfg  key_cfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
-                                .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                                .dev_id = INVALID_DEVID };
     WolfCertCertMeta meta = { .subject_dn = "CN=enforce-values-advisory" };
 
     WolfCertKey* key = NULL;

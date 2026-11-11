@@ -51,7 +51,7 @@ static WolfCertKey* ca_as_key(WolfCertCa* ca, WolfCertKey* shim)
     memset(shim, 0, sizeof(*shim));
     shim->type   = ca->type;
     shim->heap   = ca->heap;
-    shim->dev_id = WOLFCERT_DEVID_SOFTWARE;
+    shim->dev_id = INVALID_DEVID;
     shim->impl   = ca->impl;
     return shim;
 }
@@ -84,7 +84,7 @@ static int gen_self_signed_cert(WolfCertCa* ca)
     if (cert == NULL)
         return WOLFCERT_ERR_MEMORY;
 
-    wc_InitCert_ex(cert, ca->heap, WOLFCERT_DEVID_SOFTWARE);
+    wc_InitCert_ex(cert, ca->heap, INVALID_DEVID);
 
     snprintf(cert->subject.commonName, sizeof(cert->subject.commonName),
              "%s", "wolfCert Test CA");
@@ -118,7 +118,7 @@ static int gen_self_signed_cert(WolfCertCa* ca)
     }
 
     WC_RNG rng;
-    if (wc_InitRng_ex(&rng, ca->heap, WOLFCERT_DEVID_SOFTWARE) != 0) {
+    if (wc_InitRng_ex(&rng, ca->heap, INVALID_DEVID) != 0) {
         wc_CertFree(cert);
         return WOLFCERT_ERR_CRYPTO;
     }
@@ -187,14 +187,14 @@ int wolfcert_ca_generate(WolfCertCa* ca, WolfCertKeyType type, int param, void* 
     ca_sync_from_shim(ca, &shim);
 
     WC_RNG rng;
-    if (wc_InitRng_ex(&rng, heap, WOLFCERT_DEVID_SOFTWARE) != 0) {
+    if (wc_InitRng_ex(&rng, heap, INVALID_DEVID) != 0) {
         alg->free_(&shim);
         ca->impl = NULL;
         return WOLFCERT_ERR_CRYPTO;
     }
 
     WolfCertKeyCfg cfg = { .type = ca->type, .param = p,
-                           .dev_id = WOLFCERT_DEVID_SOFTWARE, .heap = heap };
+                           .dev_id = INVALID_DEVID, .heap = heap };
 
     rc = alg->make(&shim, &cfg, &rng);
 
@@ -494,7 +494,7 @@ static int decode_subject_pubkey(word32 keyOID,
         if (rk == NULL)
             return WOLFCERT_ERR_MEMORY;
 
-        if (wc_InitRsaKey_ex(rk, heap, WOLFCERT_DEVID_SOFTWARE) != 0) {
+        if (wc_InitRsaKey_ex(rk, heap, INVALID_DEVID) != 0) {
             WOLFCERT_XFREE(rk, heap);
             return WOLFCERT_ERR_CRYPTO;
         }
@@ -517,7 +517,7 @@ static int decode_subject_pubkey(word32 keyOID,
         if (ek == NULL)
             return WOLFCERT_ERR_MEMORY;
 
-        if (wc_ecc_init_ex(ek, heap, WOLFCERT_DEVID_SOFTWARE) != 0) {
+        if (wc_ecc_init_ex(ek, heap, INVALID_DEVID) != 0) {
             WOLFCERT_XFREE(ek, heap);
             return WOLFCERT_ERR_CRYPTO;
         }
@@ -540,7 +540,7 @@ static int decode_subject_pubkey(word32 keyOID,
         if (ek == NULL)
             return WOLFCERT_ERR_MEMORY;
 
-        if (wc_ed25519_init_ex(ek, heap, WOLFCERT_DEVID_SOFTWARE) != 0) {
+        if (wc_ed25519_init_ex(ek, heap, INVALID_DEVID) != 0) {
             WOLFCERT_XFREE(ek, heap);
             return WOLFCERT_ERR_CRYPTO;
         }
@@ -563,7 +563,7 @@ static int decode_subject_pubkey(word32 keyOID,
         if (ek == NULL)
             return WOLFCERT_ERR_MEMORY;
 
-        if (wc_ed448_init_ex(ek, heap, WOLFCERT_DEVID_SOFTWARE) != 0) {
+        if (wc_ed448_init_ex(ek, heap, INVALID_DEVID) != 0) {
             WOLFCERT_XFREE(ek, heap);
             return WOLFCERT_ERR_CRYPTO;
         }
@@ -595,7 +595,7 @@ static int decode_subject_pubkey(word32 keyOID,
         if (dk == NULL)
             return WOLFCERT_ERR_MEMORY;
 
-        if (wc_MlDsaKey_Init(dk, heap, WOLFCERT_DEVID_SOFTWARE) != 0) {
+        if (wc_MlDsaKey_Init(dk, heap, INVALID_DEVID) != 0) {
             WOLFCERT_XFREE(dk, heap);
             return WOLFCERT_ERR_CRYPTO;
         }
@@ -844,7 +844,7 @@ int wolfcert_ca_issue(WolfCertCa* ca,
     }
 
     if (rc == 0) {
-        wc_InitCert_ex(nc, heap, WOLFCERT_DEVID_SOFTWARE);
+        wc_InitCert_ex(nc, heap, INVALID_DEVID);
 
         rc = wolfcert_copy_csr_subject(&dc, nc);
         if (rc == WOLFCERT_OK &&
@@ -880,7 +880,7 @@ int wolfcert_ca_issue(WolfCertCa* ca,
     }
 
     if (rc == 0) {
-        if (wc_InitRng_ex(&rng, heap, WOLFCERT_DEVID_SOFTWARE) != 0)
+        if (wc_InitRng_ex(&rng, heap, INVALID_DEVID) != 0)
             rc = WOLFCERT_ERR_CRYPTO;
         else
             rng_ok = 1;

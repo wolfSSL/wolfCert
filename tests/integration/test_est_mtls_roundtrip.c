@@ -80,7 +80,7 @@ static int test_reenroll_ignores_cfg_identity(const char* url,
     WolfCertEstSession* sess = NULL;
     WolfCertEstResult res = { 0 };
     WolfCertKeyCfg kcfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
-                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                            .dev_id = INVALID_DEVID };
     WolfCertCertMeta meta = { .subject_dn = "CN=factory-bootstrap" };
     WolfCertServerCfg cli = {
         .protocol          = WOLFCERT_PROTO_EST,
@@ -153,7 +153,7 @@ static int test_reenroll_rejects_identity_change(const char* url,
         { .subject_dn = "CN=factory-bootstrap", .san_dns = dns, .san_dns_len = 1 },
     };
     WolfCertKeyCfg kcfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
-                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                            .dev_id = INVALID_DEVID };
     WolfCertServerCfg cli = {
         .protocol          = WOLFCERT_PROTO_EST,
         .server_url        = url,
@@ -293,7 +293,7 @@ static int reenroll_key_type(const WolfCertServerCfg* cli, WolfCertKeyType type,
 {
     const WolfCertCertMeta meta = { .subject_dn = "CN=reenroll-type,O=wolfSSL" };
     WolfCertKeyCfg kcfg = { .type = type, .param = param,
-                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                            .dev_id = INVALID_DEVID };
     WolfCertKey* key = NULL;
     WolfCertBuffer csr = { 0 };
     WolfCertEstResult cert = { 0 };
@@ -345,7 +345,7 @@ static int test_reenroll_server_issued(const uint8_t* tls_cert, size_t tls_cert_
         .san_email = email, .san_email_len = 1,
     };
     WolfCertKeyCfg kcfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
-                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                            .dev_id = INVALID_DEVID };
     WolfCertServerCfgSrv cfg = {
         .protocol              = WOLFCERT_PROTO_EST,
         .bind_host             = "127.0.0.1",
@@ -490,7 +490,7 @@ static int test_reenroll_under_approval(const uint8_t* tls_cert, size_t tls_cert
     const WolfCertCertMeta same = { .subject_dn = "CN=factory-bootstrap" };
     const WolfCertCertMeta none = { 0 };
     WolfCertKeyCfg kcfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
-                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                            .dev_id = INVALID_DEVID };
     WolfCertServerCfgSrv cfg = {
         .protocol              = WOLFCERT_PROTO_EST,
         .bind_host             = "127.0.0.1",
@@ -577,7 +577,7 @@ static int test_reenroll_trust_issued(const uint8_t* tls_cert, size_t tls_cert_l
                                       const uint8_t* cli_key, size_t cli_key_len)
 {
     WolfCertKeyCfg kcfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
-                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                            .dev_id = INVALID_DEVID };
     WolfCertCertMeta meta = { .subject_dn = "CN=trust-issued" };
     WolfCertServerCfgSrv cfg = {
         .protocol                   = WOLFCERT_PROTO_EST,
@@ -765,7 +765,7 @@ static int test_trust_issued_with_client_ca(const uint8_t* tls_cert,
                                             size_t tls_key_len)
 {
     WolfCertKeyCfg kcfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
-                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                            .dev_id = INVALID_DEVID };
     WolfCertCertMeta meta = { .subject_dn = "CN=bootstrap" };
     WolfCertServerCfgSrv cfg = {
         .protocol                   = WOLFCERT_PROTO_EST,
@@ -915,12 +915,16 @@ static int test_trust_issued_with_client_ca(const uint8_t* tls_cert,
 /* A pinned self-signed client certificate still enrolls next to
  * tls_client_trust_issued. */
 static int test_trust_issued_pinned_self_signed(const uint8_t* tls_cert,
-    size_t tls_cert_len, const uint8_t* tls_key, size_t tls_key_len,
-    const uint8_t* cli_cert, size_t cli_cert_len, const uint8_t* cli_key,
-    size_t cli_key_len)
+                                                size_t tls_cert_len,
+                                                const uint8_t* tls_key,
+                                                size_t tls_key_len,
+                                                const uint8_t* cli_cert,
+                                                size_t cli_cert_len,
+                                                const uint8_t* cli_key,
+                                                size_t cli_key_len)
 {
     WolfCertKeyCfg kcfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
-                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                            .dev_id = INVALID_DEVID };
     WolfCertCertMeta meta = { .subject_dn = "CN=pinned" };
     WolfCertServerCfgSrv cfg = {
         .protocol                = WOLFCERT_PROTO_EST,
@@ -979,7 +983,7 @@ static int test_reenroll_needs_peer_cert(const char* url,
                                          const uint8_t* cli_key, size_t cli_key_len)
 {
     WolfCertKeyCfg kcfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
-                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                            .dev_id = INVALID_DEVID };
     WolfCertCertMeta meta = { .subject_dn = "CN=factory-bootstrap" };
     WolfCertServerCfg cli = {
         .protocol          = WOLFCERT_PROTO_EST,
@@ -1111,7 +1115,7 @@ int main(void)
         wolfcert_buffer_free(&ca_pem);
 
         WolfCertKeyCfg kcfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
-                                .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                                .dev_id = INVALID_DEVID };
         WolfCertKey* dk = NULL;
         REQUIRE(wolfcert_key_generate(&kcfg, &dk) == WOLFCERT_OK);
         WolfCertCertMeta meta = { .subject_dn = "CN=mtls-est-client" };

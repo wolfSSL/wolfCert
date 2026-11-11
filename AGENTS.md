@@ -149,7 +149,7 @@ WolfCertServerCfg srv = {
     .verify_server     = 1,
 };
 WolfCertKeyCfg   kcfg = { .type = WOLFCERT_KEY_ECC, .param = 256,
-                          .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                          .dev_id = INVALID_DEVID };
 WolfCertCertMeta meta = { .subject_dn = "CN=device-0001" };
 WolfCertKey*     key  = NULL;
 WolfCertBuffer   cert = { 0 };

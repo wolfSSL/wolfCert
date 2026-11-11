@@ -96,7 +96,7 @@ static int make_csr(const char* subject, WolfCertKey** out_key,
                     WolfCertBuffer* out_csr)
 {
     WolfCertKeyCfg kcfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
-                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                            .dev_id = INVALID_DEVID };
     if (wolfcert_key_generate(&kcfg, out_key) != WOLFCERT_OK)
         return 1;
     WolfCertCertMeta meta = { .subject_dn = subject };
@@ -222,7 +222,7 @@ static int pending_path(WolfCertServer* s)
     WolfCertClient* client = NULL;
     REQUIRE(wolfcert_client_new(&client) == WOLFCERT_OK);
     WolfCertKeyCfg kcfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
-                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                            .dev_id = INVALID_DEVID };
     WolfCertCertMeta meta = { .subject_dn = "CN=device-est-pending-client" };
     WolfCertKey* key = NULL;
     WolfCertBuffer cert = { 0 };

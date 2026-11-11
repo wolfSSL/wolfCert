@@ -180,7 +180,7 @@ static int test_client_reenroll_keeps_identity(const uint8_t* tls_cert,
 #ifdef KEEP_PEER_CERT
     WolfCertKeyCfg kcfg = { .type = TEST_ENROLL_KEY_TYPE,
                             .param = TEST_ENROLL_KEY_PARAM,
-                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                            .dev_id = INVALID_DEVID };
     int called = 0;
 #endif
 
@@ -382,7 +382,7 @@ int main(void)
     REQUIRE(ca_pem.len > 0);
 
     WolfCertKeyCfg kcfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
-                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                            .dev_id = INVALID_DEVID };
     WolfCertKey* dk = NULL;
     REQUIRE(wolfcert_key_generate(&kcfg, &dk) == WOLFCERT_OK);
     WolfCertCertMeta meta = { .subject_dn = "CN=tls-est-client" };

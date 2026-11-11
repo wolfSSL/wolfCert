@@ -200,7 +200,10 @@ needs changing. `prj.conf` leaves these to the board:
   `CONFIG_NET_CONFIG_MY_IPV4_ADDR`.
 - **An entropy source.** The devicetree's `zephyr,entropy` usually provides
   one, as the SoC's TRNG does on FRDM-MCXN947. `CONFIG_TEST_RANDOM_GENERATOR`
-  is for emulators only: keys generated from it are predictable.
+  is for emulators only: keys generated from it are predictable. On such an
+  emulator, wolfSSL after 5.9.4 also needs `WOLFSSL_ACCEPT_WEAK_ENTROPY`, which
+  `boards/qemu_x86.conf` sets through `CONFIG_COMPILER_OPT`. On real hardware,
+  enable the board's entropy driver instead.
 - **Stack and heap sizes.** Start from the FRDM-MCXN947 file (see
   [Sizing](#sizing)).
 
@@ -213,6 +216,7 @@ needs changing. `prj.conf` leaves these to the board:
 | `ASN no signer error to confirm failure` | `CONFIG_WOLFCERT_SAMPLE_CA_CERT` is not the CA that issued the server's certificate; see [step 2](#2-configure-the-sample) |
 | `enroll failed` once `CONFIG_NET_CONFIG_INIT_TIMEOUT` expires after the banner | No address: check the cable, and that DHCP answers on that network |
 | `wolfSSL is missing HAVE_PKCS7` at build time | No wolfSSL settings file; see [Configuration](#configuration) |
+| `Zephyr has no chosen entropy device` at build time | The board has no `zephyr,entropy` node, or its entropy driver is off (`CONFIG_ENTROPY_HAS_DRIVER` unset); see [Adding a board](#adding-a-board) |
 | `wolfCert requires wolfSSL 5.9.4 or newer` at build time | wolfSSL is too old; pin `v5.9.4-stable` as in [Adding wolfCert to a west workspace](#adding-wolfcert-to-a-west-workspace), then `west update` |
 
 ### Adapting it

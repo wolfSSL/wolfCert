@@ -39,7 +39,7 @@ KNOWN_CONFIGS=(
     est-only-nonrsa rsa-min ecc-only-est
     no-des3 tls13-only
     mldsa-44off mldsa-65off mldsa-87off
-    static-mem no-malloc
+    static-mem no-malloc no-cryptocb wolftpm
     # Negative configs for assert-configure-fails.sh.
     neg-no-rsa neg-no-pkcs7 neg-no-public-asn neg-no-aes128
 )
@@ -119,6 +119,15 @@ resolve_flags() {
             _base_flags
             printf '%s\n' --enable-staticmemory \
                 'CPPFLAGS=-DWOLFSSL_ALT_NAMES -DWOLFSSL_CERT_NAME_ALL -DKEEP_PEER_CERT -DWOLFSSL_HAVE_TLS_UNIQUE -DWOLFSSL_PUBLIC_ASN -DWOLFSSL_NO_MALLOC -DMAX_SIGNED_ATTRIBS_SZ=9' ;;
+        no-cryptocb)
+            # No WOLF_CRYPTO_CB, so no WOLF_PRIVATE_KEY_ID either.
+            _base_flags
+            printf '%s\n' --disable-cryptocb ;;
+        wolftpm)
+            # wolfTPM's fwTPM links the sp_* API and needs raw RSA.
+            _base_flags
+            printf '%s\n' --enable-wolftpm --enable-pkcallbacks \
+                'CPPFLAGS=-DWOLFSSL_ALT_NAMES -DWOLFSSL_CERT_NAME_ALL -DKEEP_PEER_CERT -DWOLFSSL_HAVE_TLS_UNIQUE -DWOLFSSL_PUBLIC_ASN -DWC_RSA_NO_PADDING' ;;
 
         # Negative configs: buildable wolfSSL builds that wolfCert rejects
         neg-no-rsa)

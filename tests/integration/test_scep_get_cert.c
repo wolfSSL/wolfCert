@@ -70,7 +70,7 @@ static int get_cert_path(WolfCertServer* s)
                         &ca_der, NULL, NULL, NULL) == 0);
 
     WolfCertKeyCfg kcfg = { .type = WOLFCERT_KEY_RSA, .param = 2048,
-                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                            .dev_id = INVALID_DEVID };
     WolfCertKey* dk = NULL;
     REQUIRE(wolfcert_key_generate(&kcfg, &dk) == WOLFCERT_OK);
     WolfCertCertMeta meta = { .subject_dn = "CN=device-getcert-1" };
@@ -325,7 +325,7 @@ static int disabled_path(WolfCertServer* s)
                         &ca_der, NULL, NULL, NULL) == 0);
 
     WolfCertKeyCfg kcfg = { .type = WOLFCERT_KEY_RSA, .param = 2048,
-                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                            .dev_id = INVALID_DEVID };
     WolfCertKey* dk = NULL;
     REQUIRE(wolfcert_key_generate(&kcfg, &dk) == WOLFCERT_OK);
     WolfCertCertMeta meta = { .subject_dn = "CN=device-getcert-off" };
@@ -374,7 +374,7 @@ int main(void)
     WolfCertServerCfgSrv cfg = {
         .protocol = WOLFCERT_PROTO_SCEP,
         .bind_host = "127.0.0.1", .bind_port = 0,
-        .ca_store = test_ca_store(),
+        TEST_CA_CFG,
         .scep_enable_get_cert = 1,
     };
     WolfCertServer* s = NULL;
@@ -394,7 +394,7 @@ int main(void)
     WolfCertServerCfgSrv cfg_off = {
         .protocol = WOLFCERT_PROTO_SCEP,
         .bind_host = "127.0.0.1", .bind_port = 0,
-        .ca_store = test_ca_store(),
+        TEST_CA_CFG,
     };
     WolfCertServer* s_off = NULL;
     REQUIRE(wolfcert_server_start(&cfg_off, &s_off) == WOLFCERT_OK);
@@ -409,7 +409,7 @@ int main(void)
     if (rc != 0)
         return rc;
 
-    test_ca_store_close();
+    test_ca_close();
     wolfcert_cleanup();
     printf("OK\n");
     return 0;

@@ -63,7 +63,7 @@ static void* server_thread(void* arg)
 static int enroll_mldsa(const WolfCertServerCfg* client_cfg, WolfCertKeyType kt,
                         const char* label, const WolfCertBuffer* ca_pem)
 {
-    WolfCertKeyCfg kcfg = { .type = kt, .dev_id = WOLFCERT_DEVID_SOFTWARE };
+    WolfCertKeyCfg kcfg = { .type = kt, .dev_id = INVALID_DEVID };
     WolfCertKey* dk = NULL;
     REQUIRE(wolfcert_key_generate(&kcfg, &dk) == WOLFCERT_OK);
 
@@ -114,7 +114,7 @@ int main(void)
         .protocol        = WOLFCERT_PROTO_EST,
         .bind_host       = "127.0.0.1",
         .bind_port       = 0,
-        .ca_store        = test_ca_store(),
+        TEST_CA_CFG,
         .http_basic_user = "alice",
         .http_basic_pass = "hunter2",
         .tls_cert_pem    = tls_cert, .tls_cert_pem_len = tls_cert_len,
@@ -158,7 +158,7 @@ int main(void)
     wolfcert_buffer_free(&ca_pem);
     free(tls_cert);
     free(tls_key);
-    test_ca_store_close();
+    test_ca_close();
     wolfcert_cleanup();
 
     if (rc == 0)

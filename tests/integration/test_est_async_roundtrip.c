@@ -112,7 +112,7 @@ int main(void)
                         &cli_cert, &cli_cert_len, &cli_key, &cli_key_len) == 0);
 
     WolfCertKeyCfg kcfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
-                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                            .dev_id = INVALID_DEVID };
     WolfCertKey* dk = NULL;
     REQUIRE(wolfcert_key_generate(&kcfg, &dk) == WOLFCERT_OK);
     WolfCertCertMeta meta = { .subject_dn = "CN=async-enrollee" };
@@ -123,7 +123,7 @@ int main(void)
         .protocol                = WOLFCERT_PROTO_EST,
         .bind_host               = "127.0.0.1",
         .bind_port               = 0,
-        .ca_store                = test_ca_store(),
+        TEST_CA_CFG,
         .tls_cert_pem            = tls_cert, .tls_cert_pem_len       = tls_cert_len,
         .tls_key_pem             = tls_key,  .tls_key_pem_len        = tls_key_len,
         .tls_client_ca_pem       = cli_cert, .tls_client_ca_pem_len  = cli_cert_len,
@@ -185,7 +185,7 @@ int main(void)
         .protocol        = WOLFCERT_PROTO_EST,
         .bind_host       = "127.0.0.1",
         .bind_port       = 0,
-        .ca_store        = test_ca_store(),
+        TEST_CA_CFG,
         .http_basic_user = "alice",
         .http_basic_pass = "hunter2",
         .tls_cert_pem    = tls_cert, .tls_cert_pem_len = tls_cert_len,
@@ -255,7 +255,7 @@ int main(void)
     free(tls_key);
     free(cli_cert);
     free(cli_key);
-    test_ca_store_close();
+    test_ca_close();
     wolfcert_cleanup();
     if (pha_skipped)
         return 77;

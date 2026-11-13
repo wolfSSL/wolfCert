@@ -82,12 +82,34 @@
 #error "WOLFCERT_SCEP_MAX_GET_URL exceeds WOLFCERT_HTTP_QUERY_SZ; raise WOLFCERT_HTTP_QUERY_SZ so the SCEP server can receive the largest GET the client will build."
 #endif
 
+#if defined(WOLF_CRYPTO_CB) && defined(WOLF_PRIVATE_KEY_ID)
+#define WOLFCERT_USE_KEY_ID
+#endif
+
+static inline int wolfcert_devid_is_cb(int dev_id)
+{
+    return dev_id != INVALID_DEVID;
+}
+
+/* Restores the start devId; wolfCrypt_Cleanup unregisters the devices. */
+void wolfcert_default_dev_id_reset(void);
+
+/* BAD_ARG or UNSUPPORTED, with a message, unless dev_id is INVALID_DEVID or
+ * names a registered CryptoCb device. */
+int  wolfcert_dev_id_check(int dev_id, const char* module);
+
+/* BAD_ARG or UNSUPPORTED, with a message, unless id names a key a CryptoCb
+ * device can hold in this build. */
+int  wolfcert_key_id_check(const uint8_t* id, size_t id_len, int dev_id,
+                           const char* module);
+
 struct WolfCertKey {
     WolfCertKeyType type;
     int             dev_id;
     int             curve_id;     /* ECC only */
     int             rsa_bits;     /* RSA only */
-    char*           label;
+    uint8_t         id[WOLFCERT_KEY_ID_MAX_LEN];
+    size_t          id_len;
     void*           heap;
     void*           impl;         /* RsaKey* / ecc_key* / ... */
 };
@@ -100,15 +122,20 @@ typedef struct {
     uint8_t* key_der;
     size_t   key_der_len;
     void*    heap;
+    int      skid_copies;  /* SKID is KEYID_SIZE, so issued AKIDs copy it */
 } WolfCertCa;
 
 int  wolfcert_ca_generate(WolfCertCa* ca, WolfCertKeyType type, int param, void* heap);
-WOLFCERT_TEST_VIS int  wolfcert_ca_load(WolfCertCa* ca, WolfCertStoreOps* store,
+/* Load a CA from a certificate and private key, each PEM or DER. */
+WOLFCERT_TEST_VIS int  wolfcert_ca_load(WolfCertCa* ca,
+                                        const uint8_t* cert, size_t cert_len,
+                                        const uint8_t* key, size_t key_len,
                                         void* heap);
-int  wolfcert_ca_save(const WolfCertCa* ca, WolfCertStoreOps* store);
+/* Copy out the CA certificate and, unless out_key is NULL, its key. */
+int  wolfcert_ca_export(const WolfCertCa* ca, WolfCertEncoding enc,
+                        WolfCertBuffer* out_cert, WolfCertBuffer* out_key);
+int  wolfcert_ca_skid_copies(const WolfCertCa* ca);
 WOLFCERT_TEST_VIS void wolfcert_ca_free(WolfCertCa* ca);
-/* wolfcert_buffer_free() after wiping: for a buffer that held key material. */
-void wolfcert_buffer_free_secure(WolfCertBuffer* buf);
 
 /* Rebuild an issued certificate's subject from a decoded CSR. */
 WOLFCERT_TEST_VIS int  wolfcert_copy_csr_subject(const DecodedCert* dc, Cert* nc);
@@ -138,6 +165,9 @@ struct WolfCertServer {
     void*                   priv;        /* protocol-specific state */
     WOLFSSL_CTX*            tls_ctx;
     WOLFSSL*                tls_current; /* owned by the accept loop */
+    /* Only ca.cert_der; set when tls_client_trust_issued meets a client CA. */
+    WOLFSSL_CERT_MANAGER*   issued_cm;
+    int                     renew_only;  /* tls_client_trust_issued alone */
     int                     keep_alive;  /* handlers clear it to close */
     /* Set when the accept loop armed SO_RCVTIMEO/SO_SNDTIMEO; would-block
      * retries in wolfcert_io_{recv,send} are allowed only then. */
@@ -256,6 +286,7 @@ void wolfcert_logv(WolfCertLogLevel lvl, const char* module, const char* fmt, ..
 int  wolfcert_rng_new(WC_RNG* rng);
 #ifdef WOLFCERT_HAVE_ECC
 int  wolfcert_ecc_curve_from_param(int param, int* out_curve_id, int* out_key_size);
+int  wolfcert_ecc_param_from_curve(int curve_id, int* out_param);
 #endif
 
 /* Returns WOLFCERT_ERR_BAD_ARG unless srv->protocol is want. */
@@ -273,6 +304,7 @@ typedef struct {
 
 WOLFCERT_TEST_VIS int  wolfcert_http_url_parse(const char* url, WolfCertUrl* out, void* heap);
 WOLFCERT_TEST_VIS void wolfcert_http_url_free (WolfCertUrl* u);
+
 
 /* Resume point for wolfcert_http_chunked_complete(); zero it before the first
  * call, setting max to cap the decoded body (0 for no cap). */
@@ -340,6 +372,11 @@ WOLFCERT_TEST_VIS int wolfcert_find_san(const DecodedCert* dc,
                                         const byte** san, word32* san_len);
 
 WOLFCERT_TEST_VIS int wolfcert_buffer_is_der(const uint8_t* buf, size_t len);
+
+/* Private key DER of a software key; fails for a key with a key_id. The
+ * caller zeroizes and frees *out_der. */
+int wolfcert_key_export_der(const WolfCertKey* key, uint8_t** out_der,
+                            int* out_len, void* heap);
 
 /* Degenerate (certs-only) PKCS#7 helpers. */
 WOLFCERT_TEST_VIS int wolfcert_pkcs7_certs_to_pem(const uint8_t* p7_der, size_t p7_der_len,
@@ -422,7 +459,7 @@ WOLFCERT_TEST_VIS int wolfcert_scep_issuer_name_matches(
 
 WOLFCERT_TEST_VIS int wolfcert_scep_envelop(const uint8_t* ra_cert_der,
     size_t ra_cert_len, const uint8_t* payload, size_t payload_len, int enc_oid,
-    WolfCertBuffer* out_der, void* heap);
+    WolfCertBuffer* out_der, int dev_id, void* heap);
 
 /* RFC 8894 section 4.1 GET PKIOperation URL; WOLFCERT_ERR_UNSUPPORTED past
  * WOLFCERT_SCEP_MAX_GET_URL. */
@@ -442,21 +479,23 @@ WOLFCERT_TEST_VIS int wolfcert_scep_pick_hash_oid(const WolfCertScepCaps* caps,
 int wolfcert_scep_deenvelop(const uint8_t* recipient_cert_der, size_t recipient_cert_len,
                             const uint8_t* recipient_key_der,  size_t recipient_key_len,
                             const uint8_t* env_der, size_t env_len,
-                            WolfCertBuffer* out_plain, void* heap);
+                            WolfCertBuffer* out_plain, int dev_id, void* heap);
 #ifdef WOLFCERT_HAVE_RSA
 WOLFCERT_TEST_VIS int wolfcert_scep_self_signed_rsa(RsaKey* key,
-    const uint8_t* csr_der, size_t csr_len, uint8_t** out_der, size_t* out_len, void* heap);
+    const uint8_t* csr_der, size_t csr_len, uint8_t** out_der, size_t* out_len,
+    int dev_id, void* heap);
 #endif
 WOLFCERT_TEST_VIS int wolfcert_scep_build_pki_message(const uint8_t* envelope_der,
     size_t envelope_len, const uint8_t* signer_cert_der, size_t signer_cert_len,
     const uint8_t* signer_key_der, size_t signer_key_len, int hash_oid,
-    const WolfCertScepAttrs* attrs, WolfCertBuffer* out_der, void* heap);
+    const WolfCertScepAttrs* attrs, WolfCertBuffer* out_der, int dev_id,
+    void* heap);
 WOLFCERT_TEST_VIS int wolfcert_scep_parse_pki_message(const uint8_t* pki_der,
     size_t pki_len, WolfCertBuffer* out_envelope, uint8_t** out_transaction_id,
     size_t* out_tid_len, uint8_t** out_sender_nonce,   size_t* out_snonce_len,
     uint8_t** out_recipient_nonce,size_t* out_rnonce_len, char** out_message_type,
     char** out_pki_status, uint8_t** out_signer_cert, size_t* out_signer_cert_len,
-    char** out_fail_info, void* heap);
+    char** out_fail_info, int dev_id, void* heap);
 
 /* GetNextCACert response (RFC 8894 section 4.7.1), signed by the current CA. */
 WOLFCERT_TEST_VIS int wolfcert_scep_build_next_ca_response(

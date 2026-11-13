@@ -17,7 +17,7 @@
  * along with wolfCert.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-/* Test-server CA: generation, persistence and issuance from a CSR. */
+/* Test-server CA: generation, loading and issuance from a CSR. */
 
 #define _POSIX_C_SOURCE 200809L
 #define _DEFAULT_SOURCE
@@ -51,7 +51,7 @@ static WolfCertKey* ca_as_key(WolfCertCa* ca, WolfCertKey* shim)
     memset(shim, 0, sizeof(*shim));
     shim->type   = ca->type;
     shim->heap   = ca->heap;
-    shim->dev_id = WOLFCERT_DEVID_SOFTWARE;
+    shim->dev_id = INVALID_DEVID;
     shim->impl   = ca->impl;
     return shim;
 }
@@ -59,6 +59,19 @@ static WolfCertKey* ca_as_key(WolfCertCa* ca, WolfCertKey* shim)
 static void ca_sync_from_shim(WolfCertCa* ca, const WolfCertKey* shim)
 {
     ca->impl = shim->impl;
+}
+
+/* Non-zero when wolfSSL copies the CA's subject key id unhashed to an AKID */
+int wolfcert_ca_skid_copies(const WolfCertCa* ca)
+{
+    DecodedCert dc;
+    int ok;
+
+    wc_InitDecodedCert(&dc, ca->cert_der, (word32)ca->cert_der_len, ca->heap);
+    ok = wc_ParseCert(&dc, CERT_TYPE, NO_VERIFY, NULL) == 0 &&
+         dc.extSubjKeyIdSet && dc.extSubjKeyIdSz == KEYID_SIZE;
+    wc_FreeDecodedCert(&dc);
+    return ok;
 }
 
 static int gen_self_signed_cert(WolfCertCa* ca)
@@ -71,7 +84,7 @@ static int gen_self_signed_cert(WolfCertCa* ca)
     if (cert == NULL)
         return WOLFCERT_ERR_MEMORY;
 
-    wc_InitCert_ex(cert, ca->heap, WOLFCERT_DEVID_SOFTWARE);
+    wc_InitCert_ex(cert, ca->heap, INVALID_DEVID);
 
     snprintf(cert->subject.commonName, sizeof(cert->subject.commonName),
              "%s", "wolfCert Test CA");
@@ -96,8 +109,16 @@ static int gen_self_signed_cert(WolfCertCa* ca)
         return WOLFCERT_ERR_WC(ku, "ca", "SetKeyUsage");
     }
 
+    /* Every generated CA has the same subject; the key id tells them apart. */
+    int kid = wc_SetSubjectKeyIdFromPublicKey_ex(cert, alg->wc_keytype_enum,
+                                                 ca->impl);
+    if (kid != 0) {
+        wc_CertFree(cert);
+        return WOLFCERT_ERR_WC(kid, "ca", "SetSubjectKeyId");
+    }
+
     WC_RNG rng;
-    if (wc_InitRng_ex(&rng, ca->heap, WOLFCERT_DEVID_SOFTWARE) != 0) {
+    if (wc_InitRng_ex(&rng, ca->heap, INVALID_DEVID) != 0) {
         wc_CertFree(cert);
         return WOLFCERT_ERR_CRYPTO;
     }
@@ -131,6 +152,7 @@ static int gen_self_signed_cert(WolfCertCa* ca)
 
     ca->cert_der     = der;
     ca->cert_der_len = (size_t)sz;
+    ca->skid_copies  = wolfcert_ca_skid_copies(ca);
     return WOLFCERT_OK;
 }
 
@@ -165,14 +187,14 @@ int wolfcert_ca_generate(WolfCertCa* ca, WolfCertKeyType type, int param, void* 
     ca_sync_from_shim(ca, &shim);
 
     WC_RNG rng;
-    if (wc_InitRng_ex(&rng, heap, WOLFCERT_DEVID_SOFTWARE) != 0) {
+    if (wc_InitRng_ex(&rng, heap, INVALID_DEVID) != 0) {
         alg->free_(&shim);
         ca->impl = NULL;
         return WOLFCERT_ERR_CRYPTO;
     }
 
     WolfCertKeyCfg cfg = { .type = ca->type, .param = p,
-                           .dev_id = WOLFCERT_DEVID_SOFTWARE, .heap = heap };
+                           .dev_id = INVALID_DEVID, .heap = heap };
 
     rc = alg->make(&shim, &cfg, &rng);
 
@@ -183,7 +205,7 @@ int wolfcert_ca_generate(WolfCertCa* ca, WolfCertKeyType type, int param, void* 
         return rc;
     }
 
-    /* Kept as DER for wolfcert_ca_save and the SCEP server's PKCS#7 calls. */
+    /* Kept as DER for wolfcert_ca_export and the SCEP server's PKCS#7 calls. */
     size_t kcap = alg->der_cap_hint + 2048;
     ca->key_der = (uint8_t*)WOLFCERT_XMALLOC(kcap, heap);
     if (ca->key_der == NULL) {
@@ -210,10 +232,9 @@ int wolfcert_ca_generate(WolfCertCa* ca, WolfCertKeyType type, int param, void* 
     return WOLFCERT_OK;
 }
 
-/* Check the stored cert is a CA holding the public half of the stored key. */
-static int ca_check_stored_pair(const WolfCertKeyAlg* alg, WolfCertKey* key,
-                                const uint8_t* cert_der, size_t cert_len,
-                                void* heap)
+/* Check the cert is a CA holding the public half of the key. */
+static int ca_check_pair(const WolfCertKeyAlg* alg, WolfCertKey* key,
+                         const uint8_t* cert_der, size_t cert_len, void* heap)
 {
     DecodedCert* dc = (DecodedCert*)WOLFCERT_XMALLOC(sizeof(*dc), heap);
     if (dc == NULL)
@@ -222,25 +243,28 @@ static int ca_check_stored_pair(const WolfCertKeyAlg* alg, WolfCertKey* key,
     wc_InitDecodedCert(dc, cert_der, (word32)cert_len, heap);
 
     int rc = wc_ParseCert(dc, CERT_TYPE, NO_VERIFY, NULL);
-    if (rc != 0) {
+    if (rc == MEMORY_E) {
+        rc = WOLFCERT_ERR_MEMORY;
+    }
+    else if (rc != 0) {
         rc = WOLFCERT_ERR(WOLFCERT_ERR_PARSE, "ca",
-                          "stored CA certificate does not parse");
+                          "CA certificate does not parse");
     }
     else if (!dc->isCA ||
              (dc->extKeyUsageSet && (dc->extKeyUsage & KEYUSE_KEY_CERT_SIGN) == 0)) {
         rc = WOLFCERT_ERR(WOLFCERT_ERR_PARSE, "ca",
-                          "stored CA certificate is not a CA "
+                          "CA certificate is not a CA "
                           "(basicConstraints/keyUsage)");
     }
     else if (dc->keyOID != (word32)alg->key_oid || dc->publicKey == NULL) {
         rc = WOLFCERT_ERR(WOLFCERT_ERR_PARSE, "ca",
-                          "stored CA certificate and key use different algorithms");
+                          "CA certificate and key use different algorithms");
     }
     else {
         rc = alg->pub_check(key, dc->publicKey, dc->pubKeySize);
-        if (rc != WOLFCERT_OK)
+        if (rc != WOLFCERT_OK && rc != WOLFCERT_ERR_MEMORY)
             rc = WOLFCERT_ERR(rc, "ca",
-                              "stored CA certificate does not match the stored key");
+                              "CA certificate does not match the CA key");
     }
 
     wc_FreeDecodedCert(dc);
@@ -248,103 +272,152 @@ static int ca_check_stored_pair(const WolfCertKeyAlg* alg, WolfCertKey* key,
     return rc;
 }
 
-int wolfcert_ca_load(WolfCertCa* ca, WolfCertStoreOps* store, void* heap)
+static int ca_copy(const uint8_t* in, size_t in_len, WolfCertBuffer* out,
+                   void* heap)
 {
-    if (ca == NULL || store == NULL)
+    out->data = (uint8_t*)WOLFCERT_XMALLOC(in_len, heap);
+    if (out->data == NULL)
+        return WOLFCERT_ERR_MEMORY;
+
+    memcpy(out->data, in, in_len);
+    out->len  = in_len;
+    out->heap = heap;
+    return WOLFCERT_OK;
+}
+
+/* 1 when in is exactly one DER element. */
+static int ca_der_single(const uint8_t* in, size_t in_len)
+{
+    word32 idx = 1;
+    int len = 0;
+
+    return (size_t)(word32)in_len == in_len &&
+           GetLength(in, &idx, &len, (word32)in_len) >= 0 &&
+           (size_t)idx + (size_t)len == in_len;
+}
+
+/* Copy a certificate given as PEM or DER into a DER buffer. */
+static int ca_cert_der(const uint8_t* in, size_t in_len, WolfCertBuffer* out,
+                       void* heap)
+{
+    if (!wolfcert_buffer_is_der(in, in_len))
+        return wolfcert_pem_cert_to_der(in, in_len, out, heap);
+
+    if (!ca_der_single(in, in_len))
+        return WOLFCERT_ERR_PARSE;
+
+    return ca_copy(in, in_len, out, heap);
+}
+
+int wolfcert_ca_load(WolfCertCa* ca, const uint8_t* cert, size_t cert_len,
+                     const uint8_t* key, size_t key_len, void* heap)
+{
+    if (ca == NULL || cert == NULL || cert_len == 0 || key == NULL ||
+            key_len == 0)
         return WOLFCERT_ERR_BAD_ARG;
+
+    if (heap == NULL)
+        heap = wolfcert_default_heap();
 
     memset(ca, 0, sizeof(*ca));
     ca->heap = heap;
 
     WolfCertBuffer cert_buf = { .heap = heap };
     WolfCertBuffer key_buf  = { .heap = heap };
+    WolfCertKey* k = NULL;
+    const WolfCertKeyAlg* alg = NULL;
 
-    int cert_rc = store->read(store->ctx, "ca.cert.der", &cert_buf);
-    int key_rc  = store->read(store->ctx, "ca.key.der", &key_buf);
-    int rc;
+    int rc = ca_cert_der(cert, cert_len, &cert_buf, heap);
+    if (rc != WOLFCERT_OK && rc != WOLFCERT_ERR_MEMORY)
+        rc = WOLFCERT_ERR(rc, "ca", "ca_cert is not a PEM or DER certificate");
 
-    if (cert_rc != WOLFCERT_OK || key_rc != WOLFCERT_OK) {
-        wolfcert_buffer_free(&cert_buf);
-        wolfcert_buffer_free_secure(&key_buf);
-
-        if (cert_rc == WOLFCERT_ERR_NOT_FOUND && key_rc == WOLFCERT_ERR_NOT_FOUND)
-            return WOLFCERT_ERR_NOT_FOUND;
-
-        /* An absent half is only damage once the other half read back. */
-        if (cert_rc != WOLFCERT_OK && cert_rc != WOLFCERT_ERR_NOT_FOUND)
-            return WOLFCERT_ERR(cert_rc, "ca", "CA store read failed");
-        if (key_rc != WOLFCERT_OK && key_rc != WOLFCERT_ERR_NOT_FOUND)
-            return WOLFCERT_ERR(key_rc, "ca", "CA store read failed");
-
-        /* Reporting NOT_FOUND for half a pair would let the caller mint a
-         * new CA over the survivor. */
-        return WOLFCERT_ERR(WOLFCERT_ERR_PARSE, "ca",
-            "CA store is incomplete: %s is missing",
-            cert_rc == WOLFCERT_ERR_NOT_FOUND ? "ca.cert.der" : "ca.key.der");
+    if (rc == WOLFCERT_OK) {
+        if (wolfcert_buffer_is_der(key, key_len) &&
+                !ca_der_single(key, key_len))
+            rc = WOLFCERT_ERR_PARSE;
+        else
+            rc = wolfcert_key_from_pem(key, key_len, heap, &k);
+        if (rc != WOLFCERT_OK && rc != WOLFCERT_ERR_MEMORY)
+            rc = WOLFCERT_ERR(rc, "ca", "ca_key is not a supported PEM or "
+                              "DER private key");
     }
 
-    /* Find the algorithm whose private-key decoder accepts the stored key. */
-    const WolfCertKeyAlg* const* list = wolfcert_key_algs_all();
-
-    for (; *list != NULL; ++list) {
-        const WolfCertKeyAlg* a = *list;
-        WolfCertKey shim;
-
-        memset(&shim, 0, sizeof(shim));
-        shim.type = a->type;
-        shim.heap = heap;
-        shim.dev_id = WOLFCERT_DEVID_SOFTWARE;
-
-        if (a->alloc_init(&shim) != WOLFCERT_OK)
-            continue;
-
-        if (a->priv_decode(&shim, key_buf.data, (word32)key_buf.len) == WOLFCERT_OK) {
-            rc = ca_check_stored_pair(a, &shim, cert_buf.data, cert_buf.len, heap);
-            if (rc != WOLFCERT_OK) {
-                a->free_(&shim);
-                wolfcert_buffer_free(&cert_buf);
-                wolfcert_buffer_free_secure(&key_buf);
-                return rc;
-            }
-
-            ca->type = a->type;
-            ca->impl = shim.impl;
-            ca->cert_der     = cert_buf.data;
-            ca->cert_der_len = cert_buf.len;
-            ca->key_der      = key_buf.data;
-            ca->key_der_len  = key_buf.len;
-            cert_buf.data = NULL;
-            key_buf.data = NULL;
-            return WOLFCERT_OK;
-        }
-        a->free_(&shim);
+    /* The pair check restores an ECC public point that the re-encode needs. */
+    if (rc == WOLFCERT_OK) {
+        alg = wolfcert_key_alg(k->type);
+        rc = (alg == NULL) ? WOLFCERT_ERR_UNSUPPORTED
+                           : ca_check_pair(alg, k, cert_buf.data, cert_buf.len,
+                                           heap);
     }
 
+    /* Re-encoding stores RSA and ECC keys in the form their PEM label names. */
+    if (rc == WOLFCERT_OK)
+        rc = wolfcert_key_to_der(k, &key_buf);
+
+    if (rc == WOLFCERT_OK) {
+        ca->type         = k->type;
+        ca->impl         = k->impl;
+        ca->cert_der     = cert_buf.data;
+        ca->cert_der_len = cert_buf.len;
+        ca->key_der      = key_buf.data;
+        ca->key_der_len  = key_buf.len;
+        ca->skid_copies  = wolfcert_ca_skid_copies(ca);
+        k->impl       = NULL;
+        cert_buf.data = NULL;
+        key_buf.data  = NULL;
+    }
+
+    wolfcert_key_free(k);
     wolfcert_buffer_free(&cert_buf);
     wolfcert_buffer_free_secure(&key_buf);
-    return WOLFCERT_ERR(WOLFCERT_ERR_PARSE, "ca",
-        "stored CA key does not decode as any supported algorithm");
+    return rc;
 }
 
-int wolfcert_ca_save(const WolfCertCa* ca, WolfCertStoreOps* store)
+/* Copy der into out, as PEM of pem_type unless enc is DER. */
+static int ca_encode(const uint8_t* der, size_t der_len, WolfCertEncoding enc,
+                     int pem_type, WolfCertBuffer* out, void* heap)
 {
-    if (ca == NULL || store == NULL)
-        return WOLFCERT_ERR_BAD_ARG;
+    if (enc == WOLFCERT_ENCODING_DER)
+        return ca_copy(der, der_len, out, heap);
 
-    int rc = store->write(store->ctx, "ca.cert.der", ca->cert_der, ca->cert_der_len, 0);
-    if (rc != WOLFCERT_OK)
-        return rc;
+    size_t cap = der_len * 2 + 256;
+    uint8_t* pem = (uint8_t*)WOLFCERT_XMALLOC(cap, heap);
+    if (pem == NULL)
+        return WOLFCERT_ERR_MEMORY;
 
-    rc = store->write(store->ctx, "ca.key.der", ca->key_der, ca->key_der_len, 1);
-    if (rc == WOLFCERT_OK)
-        return rc;
+    int n = wc_DerToPem(der, (word32)der_len, pem, (word32)cap, pem_type);
+    if (n <= 0) {
+        wc_ForceZero(pem, (word32)cap);
+        WOLFCERT_XFREE(pem, heap);
+        return WOLFCERT_ERR_RC_WC(WOLFCERT_ERR_CRYPTO, n, "ca", "DerToPem");
+    }
 
-    /* A certificate without its key is a store every later load rejects. */
-    if (store->remove == NULL ||
-            store->remove(store->ctx, "ca.cert.der") != WOLFCERT_OK)
-        return WOLFCERT_ERR(rc, "ca",
-            "CA key write failed and ca.cert.der could not be rolled back: "
-            "the store is left incomplete and must be cleared before restart");
+    out->data = pem;
+    out->len  = (size_t)n;
+    out->heap = heap;
+    return WOLFCERT_OK;
+}
+
+int wolfcert_ca_export(const WolfCertCa* ca, WolfCertEncoding enc,
+                       WolfCertBuffer* out_cert, WolfCertBuffer* out_key)
+{
+    const WolfCertKeyAlg* alg = wolfcert_key_alg(ca->type);
+    int rc;
+
+    if (enc != WOLFCERT_ENCODING_PEM && enc != WOLFCERT_ENCODING_DER)
+        return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "ca", "bad encoding %d",
+                            (int)enc);
+    if (alg == NULL || ca->cert_der == NULL || ca->key_der == NULL)
+        return WOLFCERT_ERR(WOLFCERT_ERR_UNSUPPORTED, "ca", "no CA to export");
+
+    rc = ca_encode(ca->cert_der, ca->cert_der_len, enc, CERT_TYPE, out_cert,
+                   ca->heap);
+    if (rc == WOLFCERT_OK && out_key != NULL) {
+        rc = ca_encode(ca->key_der, ca->key_der_len, enc, alg->pem_type,
+                       out_key, ca->heap);
+        if (rc != WOLFCERT_OK)
+            wolfcert_buffer_free(out_cert);
+    }
 
     return rc;
 }
@@ -421,7 +494,7 @@ static int decode_subject_pubkey(word32 keyOID,
         if (rk == NULL)
             return WOLFCERT_ERR_MEMORY;
 
-        if (wc_InitRsaKey_ex(rk, heap, WOLFCERT_DEVID_SOFTWARE) != 0) {
+        if (wc_InitRsaKey_ex(rk, heap, INVALID_DEVID) != 0) {
             WOLFCERT_XFREE(rk, heap);
             return WOLFCERT_ERR_CRYPTO;
         }
@@ -444,7 +517,7 @@ static int decode_subject_pubkey(word32 keyOID,
         if (ek == NULL)
             return WOLFCERT_ERR_MEMORY;
 
-        if (wc_ecc_init_ex(ek, heap, WOLFCERT_DEVID_SOFTWARE) != 0) {
+        if (wc_ecc_init_ex(ek, heap, INVALID_DEVID) != 0) {
             WOLFCERT_XFREE(ek, heap);
             return WOLFCERT_ERR_CRYPTO;
         }
@@ -467,7 +540,7 @@ static int decode_subject_pubkey(word32 keyOID,
         if (ek == NULL)
             return WOLFCERT_ERR_MEMORY;
 
-        if (wc_ed25519_init_ex(ek, heap, WOLFCERT_DEVID_SOFTWARE) != 0) {
+        if (wc_ed25519_init_ex(ek, heap, INVALID_DEVID) != 0) {
             WOLFCERT_XFREE(ek, heap);
             return WOLFCERT_ERR_CRYPTO;
         }
@@ -490,7 +563,7 @@ static int decode_subject_pubkey(word32 keyOID,
         if (ek == NULL)
             return WOLFCERT_ERR_MEMORY;
 
-        if (wc_ed448_init_ex(ek, heap, WOLFCERT_DEVID_SOFTWARE) != 0) {
+        if (wc_ed448_init_ex(ek, heap, INVALID_DEVID) != 0) {
             WOLFCERT_XFREE(ek, heap);
             return WOLFCERT_ERR_CRYPTO;
         }
@@ -522,7 +595,7 @@ static int decode_subject_pubkey(word32 keyOID,
         if (dk == NULL)
             return WOLFCERT_ERR_MEMORY;
 
-        if (wc_MlDsaKey_Init(dk, heap, WOLFCERT_DEVID_SOFTWARE) != 0) {
+        if (wc_MlDsaKey_Init(dk, heap, INVALID_DEVID) != 0) {
             WOLFCERT_XFREE(dk, heap);
             return WOLFCERT_ERR_CRYPTO;
         }
@@ -771,12 +844,19 @@ int wolfcert_ca_issue(WolfCertCa* ca,
     }
 
     if (rc == 0) {
-        wc_InitCert_ex(nc, heap, WOLFCERT_DEVID_SOFTWARE);
+        wc_InitCert_ex(nc, heap, INVALID_DEVID);
 
         rc = wolfcert_copy_csr_subject(&dc, nc);
         if (rc == WOLFCERT_OK &&
                 wc_SetIssuerBuffer(nc, ca->cert_der, (int)ca->cert_der_len) != 0)
             rc = WOLFCERT_ERR_CRYPTO;
+    }
+
+    if (rc == 0 && ca->skid_copies) {
+        int akid = wc_SetAuthKeyIdFromCert(nc, ca->cert_der,
+                                           (int)ca->cert_der_len);
+        if (akid != 0)
+            rc = WOLFCERT_ERR_WC(akid, "ca", "SetAuthKeyIdFromCert");
     }
 
     if (rc == 0) {
@@ -800,7 +880,7 @@ int wolfcert_ca_issue(WolfCertCa* ca,
     }
 
     if (rc == 0) {
-        if (wc_InitRng_ex(&rng, heap, WOLFCERT_DEVID_SOFTWARE) != 0)
+        if (wc_InitRng_ex(&rng, heap, INVALID_DEVID) != 0)
             rc = WOLFCERT_ERR_CRYPTO;
         else
             rng_ok = 1;

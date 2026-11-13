@@ -96,7 +96,7 @@ static int make_csr(const char* subject, WolfCertKey** out_key,
                     WolfCertBuffer* out_csr)
 {
     WolfCertKeyCfg kcfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
-                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                            .dev_id = INVALID_DEVID };
     if (wolfcert_key_generate(&kcfg, out_key) != WOLFCERT_OK)
         return 1;
     WolfCertCertMeta meta = { .subject_dn = subject };
@@ -222,7 +222,7 @@ static int pending_path(WolfCertServer* s)
     WolfCertClient* client = NULL;
     REQUIRE(wolfcert_client_new(&client) == WOLFCERT_OK);
     WolfCertKeyCfg kcfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
-                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                            .dev_id = INVALID_DEVID };
     WolfCertCertMeta meta = { .subject_dn = "CN=device-est-pending-client" };
     WolfCertKey* key = NULL;
     WolfCertBuffer cert = { 0 };
@@ -461,7 +461,7 @@ int main(void)
     WolfCertServerCfgSrv cfg = {
         .protocol               = WOLFCERT_PROTO_EST,
         .bind_host              = "127.0.0.1", .bind_port = 0,
-        .ca_store               = test_ca_store(),
+        TEST_CA_CFG,
         .est_require_approval   = 1,
         .est_retry_after_sec    = 1,
         .tls_cert_pem           = tls_cert, .tls_cert_pem_len = tls_cert_len,
@@ -479,7 +479,7 @@ int main(void)
 
     free(tls_cert);
     free(tls_key);
-    test_ca_store_close();
+    test_ca_close();
     wolfcert_cleanup();
     if (rc != 0)
         return rc;

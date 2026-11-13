@@ -198,7 +198,7 @@ static int bootstrap(const WolfCertServerCfg* cli, const char* cn,
     }
 
     WolfCertKeyCfg kcfg = { .type = WOLFCERT_KEY_RSA, .param = 2048,
-                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                            .dev_id = INVALID_DEVID };
     if (wolfcert_key_generate(&kcfg, key) != WOLFCERT_OK) {
         wc_FreeDer(ca_der);
         wolfcert_buffer_free(ca_pem);
@@ -255,7 +255,7 @@ static int async_enroll_path(WolfCertServer* s)
     WolfCertScepResult r = { 0 };
     WolfCertScepSession* bsess = NULL;
     WolfCertKeyCfg kcfg2 = { .type = WOLFCERT_KEY_RSA, .param = 2048,
-                             .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                             .dev_id = INVALID_DEVID };
     WolfCertKey* dk2 = NULL;
     WolfCertCertMeta meta2 = { .subject_dn = "CN=sync-scep-1" };
     WolfCertBuffer csr2 = { 0 };
@@ -733,7 +733,7 @@ static int non_rsa_reject_path(WolfCertServer* s)
     WolfCertKey* dk = NULL;
     WolfCertBuffer csr = { 0 };
     WolfCertKeyCfg ecfg = { .type = WOLFCERT_KEY_ED25519, .param = 0,
-                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                            .dev_id = INVALID_DEVID };
     WolfCertKey* ek = NULL;
     WolfCertScepSession* sess = NULL;
     WolfCertScepResult r = { 0 };
@@ -791,7 +791,7 @@ static int blocking_renewal_poll_path(WolfCertServer* s)
     WolfCertScepResult r3 = { 0 };
     WolfCertScepResult r4 = { 0 };
     WolfCertKeyCfg nkcfg = { .type = WOLFCERT_KEY_RSA, .param = 2048,
-                             .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                             .dev_id = INVALID_DEVID };
     WolfCertCertMeta nmeta = { .subject_dn = "CN=sync-renew-poll" };
     WolfCertKey* nk = NULL;
     WolfCertBuffer ncsr = { 0 };
@@ -1223,7 +1223,7 @@ int main(void)
     /* Scenario A: auto-approve server. */
     WolfCertServerCfgSrv cfg = { .protocol = WOLFCERT_PROTO_SCEP,
                                  .bind_host = "127.0.0.1", .bind_port = 0,
-                                 .ca_store = test_ca_store() };
+                                 TEST_CA_CFG };
     WolfCertServer* s1 = NULL;
     REQUIRE(wolfcert_server_start(&cfg, &s1) == WOLFCERT_OK);
     pthread_t t1;
@@ -1238,7 +1238,7 @@ int main(void)
     /* Scenario B: approval-required server (PENDING -> poll). */
     WolfCertServerCfgSrv cfg_pending = { .protocol = WOLFCERT_PROTO_SCEP,
                                          .bind_host = "127.0.0.1", .bind_port = 0,
-                                         .ca_store = test_ca_store(),
+                                         TEST_CA_CFG,
                                          .scep_require_approval = 1 };
     WolfCertServer* s2 = NULL;
     REQUIRE(wolfcert_server_start(&cfg_pending, &s2) == WOLFCERT_OK);
@@ -1254,7 +1254,7 @@ int main(void)
     /* Scenario C: auto-approve server, async enroll -> async RenewalReq. */
     WolfCertServerCfgSrv cfg_renew = { .protocol = WOLFCERT_PROTO_SCEP,
                                        .bind_host = "127.0.0.1", .bind_port = 0,
-                                       .ca_store = test_ca_store() };
+                                       TEST_CA_CFG };
     WolfCertServer* s3 = NULL;
     REQUIRE(wolfcert_server_start(&cfg_renew, &s3) == WOLFCERT_OK);
     pthread_t t3;
@@ -1269,7 +1269,7 @@ int main(void)
     /* Scenario D: auto-approve server, session misuse guards. */
     WolfCertServerCfgSrv cfg_guard = { .protocol = WOLFCERT_PROTO_SCEP,
                                        .bind_host = "127.0.0.1", .bind_port = 0,
-                                       .ca_store = test_ca_store() };
+                                       TEST_CA_CFG };
     WolfCertServer* s4 = NULL;
     REQUIRE(wolfcert_server_start(&cfg_guard, &s4) == WOLFCERT_OK);
     pthread_t t4;
@@ -1284,7 +1284,7 @@ int main(void)
     /* Scenario E: approval-required server, blocking PENDING -> poll. */
     WolfCertServerCfgSrv cfg_bpoll = { .protocol = WOLFCERT_PROTO_SCEP,
                                        .bind_host = "127.0.0.1", .bind_port = 0,
-                                       .ca_store = test_ca_store(),
+                                       TEST_CA_CFG,
                                        .scep_require_approval = 1 };
     WolfCertServer* s5 = NULL;
     REQUIRE(wolfcert_server_start(&cfg_bpoll, &s5) == WOLFCERT_OK);
@@ -1300,7 +1300,7 @@ int main(void)
     /* Scenario F: auto-approve server, session over base64 GET. */
     WolfCertServerCfgSrv cfg_get = { .protocol = WOLFCERT_PROTO_SCEP,
                                      .bind_host = "127.0.0.1", .bind_port = 0,
-                                     .ca_store = test_ca_store() };
+                                     TEST_CA_CFG };
     WolfCertServer* s6 = NULL;
     REQUIRE(wolfcert_server_start(&cfg_get, &s6) == WOLFCERT_OK);
     pthread_t t6;
@@ -1320,7 +1320,7 @@ int main(void)
     /* Scenario H: auto-approve server, non-RSA signer rejection. */
     WolfCertServerCfgSrv cfg_nonrsa = { .protocol = WOLFCERT_PROTO_SCEP,
                                         .bind_host = "127.0.0.1", .bind_port = 0,
-                                        .ca_store = test_ca_store() };
+                                        TEST_CA_CFG };
     WolfCertServer* s7 = NULL;
     REQUIRE(wolfcert_server_start(&cfg_nonrsa, &s7) == WOLFCERT_OK);
     pthread_t t7;
@@ -1336,7 +1336,7 @@ int main(void)
     /* Scenario I: approval-required server, renewal poll with signer_cert. */
     WolfCertServerCfgSrv cfg_rpoll = { .protocol = WOLFCERT_PROTO_SCEP,
                                        .bind_host = "127.0.0.1", .bind_port = 0,
-                                       .ca_store = test_ca_store(),
+                                       TEST_CA_CFG,
                                        .scep_require_approval = 1 };
     WolfCertServer* s8 = NULL;
     REQUIRE(wolfcert_server_start(&cfg_rpoll, &s8) == WOLFCERT_OK);
@@ -1352,7 +1352,7 @@ int main(void)
     /* Scenario J: auto-approve server for bootstrap, then the 500 stub. */
     WolfCertServerCfgSrv cfg_500 = { .protocol = WOLFCERT_PROTO_SCEP,
                                      .bind_host = "127.0.0.1", .bind_port = 0,
-                                     .ca_store = test_ca_store() };
+                                     TEST_CA_CFG };
     WolfCertServer* s9 = NULL;
     REQUIRE(wolfcert_server_start(&cfg_500, &s9) == WOLFCERT_OK);
     pthread_t t9;
@@ -1367,7 +1367,7 @@ int main(void)
     /* Scenario K: auto-approve server, argument-validation guards. */
     WolfCertServerCfgSrv cfg_neg = { .protocol = WOLFCERT_PROTO_SCEP,
                                      .bind_host = "127.0.0.1", .bind_port = 0,
-                                     .ca_store = test_ca_store() };
+                                     TEST_CA_CFG };
     WolfCertServer* s10 = NULL;
     REQUIRE(wolfcert_server_start(&cfg_neg, &s10) == WOLFCERT_OK);
     pthread_t t10;
@@ -1383,7 +1383,7 @@ int main(void)
      * GetCert over a session. */
     WolfCertServerCfgSrv cfg_get_ops = { .protocol = WOLFCERT_PROTO_SCEP,
                                          .bind_host = "127.0.0.1", .bind_port = 0,
-                                         .ca_store = test_ca_store(),
+                                         TEST_CA_CFG,
                                          .scep_enable_next_ca = 1,
                                          .scep_enable_get_cert = 1 };
     WolfCertServer* s11 = NULL;
@@ -1397,7 +1397,7 @@ int main(void)
     if (rc != 0)
         return rc;
 
-    test_ca_store_close();
+    test_ca_close();
     wolfcert_cleanup();
     printf("OK\n");
     return 0;

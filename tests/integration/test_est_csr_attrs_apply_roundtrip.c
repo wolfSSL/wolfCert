@@ -142,7 +142,7 @@ static int auto_apply_pins_everything(WolfCertServer* s)
     WolfCertClient* cli = NULL;
     REQUIRE(wolfcert_client_new(&cli) == WOLFCERT_OK);
 
-    WolfCertKeyCfg key_cfg = { .dev_id = WOLFCERT_DEVID_SOFTWARE };
+    WolfCertKeyCfg key_cfg = { .dev_id = INVALID_DEVID };
     WolfCertCertMeta meta = {
         .subject_dn = "CN=csrattrs-auto-1",
         .challenge_password = "hunter2",
@@ -193,7 +193,7 @@ static int explicit_caller_wins(WolfCertServer* s)
 
     WolfCertKeyCfg key_cfg = {
         .type = WOLFCERT_KEY_RSA, .param = 2048,
-        .dev_id = WOLFCERT_DEVID_SOFTWARE,
+        .dev_id = INVALID_DEVID,
     };
     WolfCertCertMeta meta = {
         .subject_dn = "CN=csrattrs-auto-2",
@@ -260,7 +260,7 @@ int main(void)
     WolfCertServerCfgSrv cfg = {
         .protocol = WOLFCERT_PROTO_EST,
         .bind_host = "127.0.0.1", .bind_port = 0,
-        .ca_store = test_ca_store(),
+        TEST_CA_CFG,
         .csr_attributes_der = policy.data,
         .csr_attributes_len = policy.len,
         .tls_cert_pem = tls_cert, .tls_cert_pem_len = tls_cert_len,
@@ -293,7 +293,7 @@ int main(void)
     if (rc != 0)
         return rc;
 
-    test_ca_store_close();
+    test_ca_close();
     wolfcert_cleanup();
     printf("OK\n");
     return 0;

@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # Fail on library or test source drift between CMake and autoconf, Zephyr
-# module sources that differ from the client set, or a version mismatch.
+# module sources that differ from the client set, or a version or shared
+# library version mismatch.
 
 set -euo pipefail
 
@@ -84,10 +85,25 @@ if [ -z "$am_ver" ] || [ "$am_ver" != "$cmake_ver" ] || \
     status=1
 fi
 
+# Libtool's -version-info C:R:A installs libwolfcert.so.<C-A>.<A>.<R>.
+lt="$(sed -n 's/.*-version-info \([0-9]*:[0-9]*:[0-9]*\).*/\1/p' "$ROOT/Makefile.am")"
+IFS=: read -r lt_c lt_r lt_a <<<"$lt"
+lt_so=$((lt_c - lt_a))
+lt_ver="$lt_so.$lt_a.$lt_r"
+props="$(sed -n '/^set_target_properties(wolfcert PROPERTIES/,/)/p' \
+    "$ROOT/CMakeLists.txt")"
+cm_ver="$(sed -n 's/^ *VERSION *\([^ ]*\)$/\1/p' <<<"$props")"
+cm_so="$(sed -n 's/^ *SOVERSION *\([^ ]*\)$/\1/p' <<<"$props")"
+if [ -z "$lt" ] || [ "$cm_ver" != "$lt_ver" ] || [ "$cm_so" != "$lt_so" ]; then
+    echo "ERROR: CMakeLists.txt VERSION ${cm_ver:-?} SOVERSION ${cm_so:-?} does"\
+         "not match Makefile.am -version-info ${lt:-?}"
+    status=1
+fi
+
 if [ "$status" -eq 0 ]; then
     echo "build-system parity OK: $(echo "$cmake_srcs" | wc -l | tr -d ' ') library"\
          "sources, $(echo "$zephyr_srcs" | wc -l | tr -d ' ') of them in the Zephyr"\
-         "module, $(echo "$cmake_tests" | wc -l | tr -d ' ') test sources and the"\
-         "version ($am_ver) match."
+         "module, $(echo "$cmake_tests" | wc -l | tr -d ' ') test sources, the"\
+         "version ($am_ver) and the library version $lt_ver match."
 fi
 exit "$status"

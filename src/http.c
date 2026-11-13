@@ -919,14 +919,15 @@ int wolfcert_http_chunked_decode(const uint8_t* in, size_t in_len,
 }
 
 typedef struct {
-    const uint8_t* trust_anchors;
-    size_t         trust_anchors_len;
-    int            verify_server;
-    const uint8_t* client_cert;
-    size_t         client_cert_len;
-    const uint8_t* client_key;
-    size_t         client_key_len;
-    int            allow_post_handshake_auth;
+    const uint8_t*       trust_anchors;
+    size_t               trust_anchors_len;
+    int                  verify_server;
+    const uint8_t*       client_cert;
+    size_t               client_cert_len;
+    const uint8_t*       client_key;
+    size_t               client_key_len;
+    const WolfCertKey*   client_key_obj;
+    int                  allow_post_handshake_auth;
 } TlsDials;
 
 static int buf_filetype(const uint8_t* buf, size_t len)
@@ -935,12 +936,79 @@ static int buf_filetype(const uint8_t* buf, size_t len)
                                             : WOLFSSL_FILETYPE_PEM;
 }
 
+static int check_client_key(const uint8_t* cert, size_t cert_len,
+                            const uint8_t* key, const WolfCertKey* key_obj)
+{
+    if (key_obj == NULL)
+        return WOLFCERT_OK;
+    if (key != NULL)
+        return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "http",
+                            "set client_key or client_key_obj, not both");
+    if (cert == NULL || cert_len == 0)
+        return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "http",
+                            "client_key_obj needs client_cert");
+    return WOLFCERT_OK;
+}
+
+/* A key with an id signs in its device; any other key loads as DER. */
+static int use_client_key_obj(WOLFSSL_CTX* ctx, const WolfCertKey* k)
+{
+    WolfCertBuffer der = { 0 };
+    int rc;
+
+    if (k->id_len > 0) {
+#ifdef WOLFCERT_USE_KEY_ID
+        rc = wolfSSL_CTX_use_PrivateKey_Id(ctx, k->id, (long)k->id_len,
+                                           k->dev_id);
+#else
+        rc = WOLFSSL_FAILURE;
+#endif
+    }
+    else {
+        rc = wolfcert_key_to_der(k, &der);
+        if (rc != WOLFCERT_OK)
+            return rc;
+        rc = wolfSSL_CTX_use_PrivateKey_buffer(ctx, der.data, (long)der.len,
+                                               WOLFSSL_FILETYPE_ASN1);
+        wolfcert_buffer_free_secure(&der);
+    }
+
+    if (rc != WOLFSSL_SUCCESS)
+        return WOLFCERT_ERR(WOLFCERT_ERR_TLS, "http",
+                            "loading client_key_obj failed (%d)", rc);
+    return WOLFCERT_OK;
+}
+
+static int use_client_key(WOLFSSL_CTX* ctx, const TlsDials* d)
+{
+    int rc;
+
+    if (d->client_key_obj != NULL)
+        return use_client_key_obj(ctx, d->client_key_obj);
+
+    rc = wolfSSL_CTX_use_PrivateKey_buffer(ctx, d->client_key,
+            (long)d->client_key_len,
+            buf_filetype(d->client_key, d->client_key_len));
+    if (rc != WOLFSSL_SUCCESS)
+        return WOLFCERT_ERR(WOLFCERT_ERR_TLS, "http",
+                            "loading the client key failed (%d)", rc);
+    return WOLFCERT_OK;
+}
+
 static int setup_tls_ex(WolfCertConn* c, const TlsDials* dials,
                         const char* sni_host, WOLFSSL_CTX** out_ctx)
 {
     WOLFSSL_CTX* ctx = wolfSSL_CTX_new(wolfTLS_client_method());
+    int dev_id = wolfcert_default_dev_id();
+
     if (ctx == NULL)
         return WOLFCERT_ERR_TLS;
+    /* Keeps the devId wolfSSL_CTX_new picks itself, such as CAAM's. */
+    if (dev_id != INVALID_DEVID &&
+            wolfSSL_CTX_SetDevId(ctx, dev_id) != WOLFSSL_SUCCESS) {
+        wolfSSL_CTX_free(ctx);
+        return WOLFCERT_ERR_TLS;
+    }
 
 #ifdef WOLFSSL_NO_TLS12
     (void)wolfSSL_CTX_SetMinVersion(ctx, WOLFSSL_TLSV1_3);
@@ -975,7 +1043,8 @@ static int setup_tls_ex(WolfCertConn* c, const TlsDials* dials,
     wolfSSL_CTX_set_verify(ctx,
         dials->verify_server ? WOLFSSL_VERIFY_PEER : WOLFSSL_VERIFY_NONE, NULL);
 
-    if (dials->client_cert != NULL && dials->client_key != NULL) {
+    if (dials->client_cert != NULL &&
+            (dials->client_key != NULL || dials->client_key_obj != NULL)) {
         /* Load the identity on the CTX so a PHA request can still use it. */
         int rc = wolfSSL_CTX_use_certificate_buffer(ctx, dials->client_cert,
                 (long)dials->client_cert_len,
@@ -985,12 +1054,10 @@ static int setup_tls_ex(WolfCertConn* c, const TlsDials* dials,
             return WOLFCERT_ERR_TLS;
         }
 
-        rc = wolfSSL_CTX_use_PrivateKey_buffer(ctx, dials->client_key,
-                (long)dials->client_key_len,
-                buf_filetype(dials->client_key, dials->client_key_len));
-        if (rc != WOLFSSL_SUCCESS) {
+        rc = use_client_key(ctx, dials);
+        if (rc != WOLFCERT_OK) {
             wolfSSL_CTX_free(ctx);
-            return WOLFCERT_ERR_TLS;
+            return rc;
         }
     }
 
@@ -1041,6 +1108,11 @@ int wolfcert_http_session_open(const WolfCertHttpSessionCfg* cfg,
     if (cfg == NULL || cfg->base_url == NULL || out == NULL)
         return WOLFCERT_ERR_BAD_ARG;
 
+    int rc = check_client_key(cfg->client_cert, cfg->client_cert_len,
+                              cfg->client_key, cfg->client_key_obj);
+    if (rc != WOLFCERT_OK)
+        return rc;
+
     void* heap = cfg->heap ? cfg->heap : wolfcert_default_heap();
 
     WolfCertHttpSession* s = (WolfCertHttpSession*)WOLFCERT_XMALLOC(sizeof(*s), heap);
@@ -1053,10 +1125,16 @@ int wolfcert_http_session_open(const WolfCertHttpSessionCfg* cfg,
     s->max_body   = cfg->max_response_bytes
                   ? cfg->max_response_bytes : WOLFCERT_HTTP_DEFAULT_MAX_BODY;
 
-    int rc = wolfcert_http_url_parse(cfg->base_url, &s->base, heap);
+    rc = wolfcert_http_url_parse(cfg->base_url, &s->base, heap);
     if (rc != WOLFCERT_OK) {
         WOLFCERT_XFREE(s, heap);
         return rc;
+    }
+    if (cfg->client_key_obj != NULL && !s->base.tls) {
+        wolfcert_http_url_free(&s->base);
+        WOLFCERT_XFREE(s, heap);
+        return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "http",
+                            "client_key_obj needs an https:// URL");
     }
 
     rc = dial(&s->conn, s->base.host, s->base.port, cfg->timeout_ms,
@@ -1075,6 +1153,7 @@ int wolfcert_http_session_open(const WolfCertHttpSessionCfg* cfg,
             .client_cert_len           = cfg->client_cert_len,
             .client_key                = cfg->client_key,
             .client_key_len            = cfg->client_key_len,
+            .client_key_obj            = cfg->client_key_obj,
             .allow_post_handshake_auth = cfg->allow_post_handshake_auth,
         };
 
@@ -1878,6 +1957,7 @@ int wolfcert_http_request(const WolfCertHttpRequest* req, WolfCertHttpResponse* 
     cfg.client_cert_len    = req->client_cert_len;
     cfg.client_key         = req->client_key;
     cfg.client_key_len     = req->client_key_len;
+    cfg.client_key_obj     = req->client_key_obj;
     cfg.heap               = req->heap;
     cfg.transport          = req->transport;
 

@@ -163,10 +163,10 @@ static int test_scep_envelop_alg(void)
     REQUIRE(csr_len > 0);
 
     REQUIRE(wolfcert_scep_self_signed_rsa(&key, csr_der, (size_t)csr_len,
-                                          &ra_der, &ra_len, NULL) == WOLFCERT_OK);
+                                          &ra_der, &ra_len, INVALID_DEVID, NULL) == WOLFCERT_OK);
 
     REQUIRE(wolfcert_scep_envelop(ra_der, ra_len, payload, sizeof(payload),
-                                  AES128CBCb, &env, NULL) == WOLFCERT_OK);
+                                  AES128CBCb, &env, INVALID_DEVID, NULL) == WOLFCERT_OK);
 
     REQUIRE(oid_present(env.data, env.len,
                         OID_AES128_CBC, sizeof(OID_AES128_CBC)));
@@ -177,7 +177,7 @@ static int test_scep_envelop_alg(void)
 
 #ifndef NO_DES3
     REQUIRE(wolfcert_scep_envelop(ra_der, ra_len, payload, sizeof(payload),
-                                  DES3b, &env, NULL) == WOLFCERT_OK);
+                                  DES3b, &env, INVALID_DEVID, NULL) == WOLFCERT_OK);
 
     REQUIRE(oid_present(env.data, env.len,
                         OID_DES3_CBC, sizeof(OID_DES3_CBC)));

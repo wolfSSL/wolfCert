@@ -56,9 +56,6 @@
     !defined(WOLFCERT_NO_BUILTIN_TRANSPORT)
 #error "Define WOLFCERT_HAVE_BUILTIN_TRANSPORT for the built-in POSIX socket transport, or WOLFCERT_NO_BUILTIN_TRANSPORT to confirm every config supplies its own WolfCertTransport."
 #endif
-#if !defined(WOLFCERT_HAVE_POSIX_STORE) && !defined(WOLFCERT_NO_POSIX_STORE)
-#error "Define WOLFCERT_HAVE_POSIX_STORE for the POSIX file store, or WOLFCERT_NO_POSIX_STORE to confirm you supply your own WolfCertStoreOps."
-#endif
 
 /* Required wolfSSL feature set */
 
@@ -83,9 +80,6 @@
 #endif
 #ifndef WOLFSSL_KEY_GEN
 #error "wolfSSL is missing WOLFSSL_KEY_GEN; rebuild wolfSSL with --enable-keygen."
-#endif
-#ifndef WOLF_CRYPTO_CB
-#error "wolfSSL is missing WOLF_CRYPTO_CB; rebuild wolfSSL with --enable-cryptocb."
 #endif
 #ifndef WOLFSSL_BASE64_ENCODE
 #error "wolfSSL is missing WOLFSSL_BASE64_ENCODE; rebuild wolfSSL with --enable-base64encode."

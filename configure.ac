@@ -79,12 +79,6 @@ cannot supply a custom one])])
 round-trip tests drive the client over real sockets])])
 ])
 
-# Only the POSIX backend inside store.c is gated, so no AM_CONDITIONAL.
-AC_ARG_ENABLE([posix-store],
-    [AS_HELP_STRING([--disable-posix-store],
-        [do not build the POSIX file storage backend])],
-    [enable_posix_store=$enableval], [enable_posix_store=yes])
-
 AC_ARG_ENABLE([tests],
     [AS_HELP_STRING([--enable-tests], [build unit and integration tests])],
     [enable_tests=$enableval], [enable_tests=no])
@@ -138,9 +132,8 @@ PKG_CHECK_MODULES([WOLFSSL], [wolfssl >= 5.9.4],
     [AC_MSG_ERROR([wolfssl >= 5.9.4 not found via pkg-config. wolfCert
       requires a wolfSSL build with HAVE_PKCS7, WOLFSSL_CERT_GEN,
       WOLFSSL_CERT_REQ, WOLFSSL_CERT_EXT, WOLFSSL_KEY_GEN, HAVE_ECC,
-      WOLF_CRYPTO_CB, WOLFSSL_BASE64_ENCODE, WOLFSSL_ALT_NAMES,
-      WOLFSSL_CERT_NAME_ALL; a shared wolfSSL also needs
-      WOLFSSL_PUBLIC_ASN.])])
+      WOLFSSL_BASE64_ENCODE, WOLFSSL_ALT_NAMES, WOLFSSL_CERT_NAME_ALL;
+      a shared wolfSSL also needs WOLFSSL_PUBLIC_ASN.])])
 AM_CONDITIONAL([HAVE_WOLFSSL], [test "x$have_wolfssl" = "xyes"])
 
 # Probe wolfSSL's feature set the way wolfcert/check_config.h resolves it, so
@@ -182,10 +175,10 @@ AC_DEFUN([WOLFCERT_PLAT],
 save_CPPFLAGS="$CPPFLAGS"
 CPPFLAGS="$CPPFLAGS $WOLFSSL_CFLAGS"
 AC_CHECK_DECLS([HAVE_PKCS7, WOLFSSL_CERT_GEN, WOLFSSL_CERT_REQ, WOLFSSL_CERT_EXT,
-                WOLFSSL_KEY_GEN, WOLF_CRYPTO_CB, WOLFSSL_BASE64_ENCODE,
+                WOLFSSL_KEY_GEN, WOLFSSL_BASE64_ENCODE,
                 WOLFSSL_ALT_NAMES, WOLFSSL_CERT_NAME_ALL],
     [], [AC_MSG_ERROR([wolfSSL is missing a required feature (see above).
-      Rebuild wolfSSL with --enable-pkcs7 --enable-ecc --enable-cryptocb
+      Rebuild wolfSSL with --enable-pkcs7 --enable-ecc
       --enable-certgen --enable-certreq --enable-certext --enable-keygen
       --enable-base64encode CPPFLAGS="-DWOLFSSL_ALT_NAMES
       -DWOLFSSL_CERT_NAME_ALL".])],
@@ -307,8 +300,6 @@ AS_IF([test "x$have_rsa" = "xno" && test "x$have_ecc" = "xno" \
 WOLFCERT_OPT([WOLFCERT_OPT_EST],     [$enable_est],    [WOLFCERT_HAVE_EST])
 WOLFCERT_OPT([WOLFCERT_OPT_SCEP],    [$enable_scep],   [WOLFCERT_HAVE_SCEP])
 WOLFCERT_OPT([WOLFCERT_OPT_SERVER],  [$enable_server], [WOLFCERT_HAVE_SERVER])
-WOLFCERT_PLAT([WOLFCERT_OPT_POSIX_STORE], [$enable_posix_store],
-              [WOLFCERT_HAVE_POSIX_STORE], [WOLFCERT_NO_POSIX_STORE])
 WOLFCERT_PLAT([WOLFCERT_OPT_BUILTIN_TRANSPORT], [$enable_builtin_transport],
               [WOLFCERT_HAVE_BUILTIN_TRANSPORT], [WOLFCERT_NO_BUILTIN_TRANSPORT])
 WOLFCERT_OPT([WOLFCERT_OPT_RSA],     [$have_rsa],      [WOLFCERT_HAVE_RSA])
@@ -363,7 +354,6 @@ AC_MSG_NOTICE([
                     Ed448=$have_ed448 ML-DSA=$have_mldsa
     TLS 1.2/1.3   : $have_tls12 / $have_tls13
     Test server   : $enable_server
-    POSIX store   : $enable_posix_store
     Builtin transp: $enable_builtin_transport
     User settings : $enable_user_settings
     CLI tools     : $enable_cli

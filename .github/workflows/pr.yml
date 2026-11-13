@@ -34,7 +34,7 @@ jobs:
             os: ubuntu-latest
             build: cmake
             wolfssl: full
-            cmake_extra: -DWOLFCERT_WERROR=ON
+            cmake_extra: -DWOLFCERT_WERROR=ON -DWOLFCERT_ENABLE_EXAMPLES=ON
           - name: cmake-full-opensslextra
             os: ubuntu-latest
             build: cmake
@@ -94,6 +94,11 @@ jobs:
             os: ubuntu-latest
             build: cmake
             wolfssl: rsa-min
+          - name: cmake-no-cryptocb
+            os: ubuntu-latest
+            build: cmake
+            wolfssl: no-cryptocb
+            cmake_extra: -DWOLFCERT_WERROR=ON -DWOLFCERT_ENABLE_EXAMPLES=ON
           - name: cmake-no-des3
             os: ubuntu-latest
             build: cmake
@@ -115,7 +120,7 @@ jobs:
             os: ubuntu-latest
             build: cmake
             wolfssl: mldsa-87off
-          # Platform pieces compiled out (the transport/store gates)
+          # Platform pieces compiled out (the transport gate)
           - name: cmake-no-builtin-transport
             os: ubuntu-latest
             build: cmake
@@ -124,7 +129,6 @@ jobs:
             # skip themselves.
             cmake_extra: >-
               -DWOLFCERT_ENABLE_BUILTIN_TRANSPORT=OFF
-              -DWOLFCERT_ENABLE_POSIX_STORE=OFF
               -DWOLFCERT_ENABLE_CLI=OFF
               -DWOLFCERT_ENABLE_SERVER=OFF
           # Constrained builds (unit tests only: single-thread / no-malloc)
@@ -285,3 +289,15 @@ jobs:
         run: |
           scripts/ci/assert-configure-fails.sh \
             --wolfssl-base "${{ github.workspace }}/.wolfssl-install"
+
+  tpm-interop:
+    name: wolfTPM fwTPM interop (pinned wolfTPM)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/tpm-interop
+        with:
+          wolfssl-ref: ${{ env.WOLFSSL_REF }}
+          # Merge of wolfTPM #638 (key ids); no release has it before v4.3.0.
+          wolftpm-ref: fe01b8ee096c862897c7efb4aa963c312e2bcc46

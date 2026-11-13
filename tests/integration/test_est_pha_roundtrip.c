@@ -74,7 +74,7 @@ static int expect_enroll_refused(const WolfCertServerCfg* cli, const char* cn)
     wolfcert_buffer_free(&ca_pem);
 
     WolfCertKeyCfg kcfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
-                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                            .dev_id = INVALID_DEVID };
     WolfCertKey* dk = NULL;
     REQUIRE(wolfcert_key_generate(&kcfg, &dk) == WOLFCERT_OK);
     WolfCertCertMeta meta = { .subject_dn = cn };
@@ -114,7 +114,7 @@ int main(void)
         .protocol                = WOLFCERT_PROTO_EST,
         .bind_host               = "127.0.0.1",
         .bind_port               = 0,
-        .ca_store                = test_ca_store(),
+        TEST_CA_CFG,
         .tls_cert_pem            = tls_cert,
         .tls_cert_pem_len        = tls_cert_len,
         .tls_key_pem             = tls_key,
@@ -145,7 +145,7 @@ int main(void)
         free(tls_key);
         free(cli_cert);
         free(cli_key);
-        test_ca_store_close();
+        test_ca_close();
         wolfcert_cleanup();
         return 77;
     }
@@ -182,7 +182,7 @@ int main(void)
 
         /* /simpleenroll triggers the server's CertificateRequest. */
         WolfCertKeyCfg kcfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
-                                .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                                .dev_id = INVALID_DEVID };
         WolfCertKey* dk = NULL;
         REQUIRE(wolfcert_key_generate(&kcfg, &dk) == WOLFCERT_OK);
         WolfCertCertMeta meta = { .subject_dn = "CN=pha-enrollee" };
@@ -258,7 +258,7 @@ int main(void)
             .proto_opts.est    = { .allow_post_handshake_auth = 1 },
         };
         WolfCertKeyCfg kcfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
-                                .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                                .dev_id = INVALID_DEVID };
         WolfCertCertMeta meta = { .subject_dn = "CN=factory-bootstrap" };
         WolfCertKey* dk = NULL;
         WolfCertBuffer csr = { 0 };
@@ -342,7 +342,7 @@ int main(void)
     free(tls_key);
     free(cli_cert);
     free(cli_key);
-    test_ca_store_close();
+    test_ca_close();
     wolfcert_cleanup();
     printf("OK\n");
     return 0;

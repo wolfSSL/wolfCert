@@ -99,7 +99,11 @@ Start the bundled test server (issues from an auto-generated local CA):
 # listen address; SCEP authenticates at the pkiMessage layer instead.
 # EST also needs --basic USER:PASS, --tls-client-ca PEM, or
 # --est-allow-anonymous to issue to any client; /simplereenroll
-# also needs --tls-client-ca and the KEEP_PEER_CERT build above.
+# also needs --tls-client-ca or --tls-trust-issued (accept certificates
+# this CA issued; --ca-dir DIR keeps the CA across restarts) and the
+# KEEP_PEER_CERT build above. --tls-trust-issued with a --ca-dir that
+# already holds the CA, and no other option, gives a server that only
+# renews.
 ./wolfcert-server --proto est  --listen 127.0.0.1:8443 \
     --tls-cert server.crt --tls-key server.key --est-allow-anonymous
 ./wolfcert-server --proto scep --listen 127.0.0.1:8088
@@ -193,7 +197,7 @@ wolfcert_init(my_static_heap_hint);
 
 /* Per-object override (here: force a specific pool for a device key): */
 WolfCertKeyCfg cfg = { .type = WOLFCERT_KEY_ECC, .param = 256,
-                       .dev_id = WOLFCERT_DEVID_SOFTWARE,
+                       .dev_id = INVALID_DEVID,
                        .heap = slow_path_pool };
 wolfcert_key_generate(&cfg, &key);
 ```
@@ -219,8 +223,9 @@ All `WolfCertBuffer` outputs remember which heap they came from, so the same
   included, so a non-BSD-sockets stack (FreeRTOS+TCP, NetX, lwIP, wolfIP)
   needs one small glue file and no wolfCert change; the POSIX transport is the
   default instance and can be compiled out.
-- **Storage:** file-based cert/key store with atomic writes and 0600 key-file
-  mode; pluggable via the `WolfCertStoreOps` vtable.
+- **Storage is the application's:** keys export as PEM or DER
+  (`wolfcert_key_to_pem` / `_to_der`) and certificates come back as buffers,
+  to keep in a file, flash slot or secure element as the device requires.
 - **Test servers + CLIs** for Linux/macOS (`wolfcert-server`,
   `wolfcert-client`). The servers are for development and interop testing,
   not production CA use.

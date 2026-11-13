@@ -11,12 +11,12 @@ set skips the wolfSSL build entirely.
 
 | Workflow | Trigger | What it does |
 |----------|---------|--------------|
-| `pr.yml` | PR + push | Merge gate: CMake (`-Werror`) + autoconf + ASan/UBSan on the canonical config, the same config against the minimum wolfSSL release (`cmake-full-floor`), plus per-PR feature/config gating — EST-only, SCEP-only, server-off, the key-alg variants (NO_RSA, ECC-only, RSA-only, no-3DES), TLS 1.3-only, the three ML-DSA per-level builds, the static-memory and no-malloc constrained builds, the platform-pieces-off build (`cmake-no-builtin-transport`), the freestanding ARM compile and config-resolution check (`no-posix-arm`), the header-only (`WOLFCERT_USER_SETTINGS`) build, a macOS build, and the two cheapest configure-must-fail assertions. |
-| `lint.yml` | PR + push | GPL license-header check and CMake↔autoconf parity of both the library and test source lists, plus the Zephyr module's library list and the version in `configure.ac`, `CMakeLists.txt` and `wolfcert/version.h` (`scripts/ci/check-buildsystem-parity.sh`). No wolfSSL build, so it fails in seconds. |
+| `pr.yml` | PR + push | Merge gate: CMake (`-Werror`) + autoconf + ASan/UBSan on the canonical config, the same config against the minimum wolfSSL release (`cmake-full-floor`), plus per-PR feature/config gating - EST-only, SCEP-only, server-off, the key-alg variants (NO_RSA, ECC-only, RSA-only, no-3DES), TLS 1.3-only, the three ML-DSA per-level builds, the static-memory and no-malloc constrained builds, the platform-pieces-off build (`cmake-no-builtin-transport`), the freestanding ARM compile and config-resolution check (`no-posix-arm`), the header-only (`WOLFCERT_USER_SETTINGS`) build, a macOS build, the two cheapest configure-must-fail assertions, and `tests/interop/tpm_wolftpm.sh` against wolfTPM's fwTPM at a pinned wolfTPM commit. |
+| `lint.yml` | PR + push | GPL license-header check and CMake↔autoconf parity of both the library and test source lists and of the shared library version, plus the Zephyr module's library list and the version in `configure.ac`, `CMakeLists.txt` and `wolfcert/version.h` (`scripts/ci/check-buildsystem-parity.sh`). No wolfSSL build, so it fails in seconds. |
 | `sbom.yml` | PR + push | Generates the SBOM with `make sbom` and `cmake --build --target sbom` against the `full` wolfSSL config, from `options.h` and from `examples/user_settings.h.example`, checks each with `tools/sbom/validate_sbom.py`, `pyspdxtools` and `scripts/ci/check-sbom.py` (identity, license, hash source, that the library hash matches a real `make install` / `cmake --install`, the `options.h` feature set, the wolfSSL dependency version, no host paths), checks that a second run is byte-identical and that both build systems and both configuration modes record the same configuration, and checks `tools/sbom/` against its pinned wolfssl-compliance-tooling commit. See [`SBOM.md`](SBOM.md). |
 | `nightly.yml` | schedule + dispatch | Re-runs the wolfSSL-variant build matrix against fresh wolfSSL `master`, the macOS extras, and the full negative-config set. Also **reseeds the wolfSSL prefix caches** so the next day's PRs restore instead of build. The feature/config gating itself now runs per-PR (see `pr.yml`). |
 | `sanitizers.yml` | schedule + dispatch | ASan+UBSan over the full test suite, ThreadSanitizer over the threaded integration roundtrips (against a TSAN-instrumented wolfSSL), and valgrind over a representative subset. |
-| `interop.yml` | schedule + dispatch | Third-party EST/SCEP interop (openssl, micromdm/scep, globalsign/est, cisco/libest, smallstep/step-ca). Best-effort: a dependency that fails to install makes its script exit 77, which is treated as a neutral skip; a real interop regression fails. |
+| `interop.yml` | schedule + dispatch | Third-party EST/SCEP interop (openssl, micromdm/scep, globalsign/est, cisco/libest, smallstep/step-ca), and `tpm_wolftpm.sh` against wolfTPM `master`, which also reseeds the `wolftpm` wolfSSL cache the PR job restores. Best-effort: a dependency that fails to install makes its script exit 77, which is treated as a neutral skip; a real interop regression fails. |
 | `zephyr.yml` | PR + push, schedule + dispatch | Two jobs sharing the west workspace setup (`.github/actions/zephyr-workspace`). The `qemu_x86` job runs the Zephyr module on `qemu_x86`: the unit suites, build-only rows for off-default Kconfig combinations, and an EST enrollment gate plus the sample against a host `wolfcert-server`, including a build of the sample with a custom trust anchor. The `mcxn` job builds the EST sample for `frdm_mcxn947/mcxn947/cpu0` with the SDK's `arm-zephyr-eabi` toolchain and checks the sample's `wolfcert-sbom` output; [`zephyr/README.md`](../zephyr/README.md#est-client-sample) lists what CI covers per board. `scripts/ci/twister-assert-ran.py` checks that each step's suites actually ran. |
 
 ## wolfSSL configurations
@@ -37,8 +37,9 @@ Config names include `full` (all algorithms), `full-tsan`, `full-opensslextra`
 setups stay covered), `full-all` (`full` plus `--enable-all`, which brings
 `OPENSSL_ALL` and its compatible defaults), `est-only-nonrsa` (NO_RSA),
 `rsa-min`, `ecc-only-est`, `no-des3`, `tls13-only`, `mldsa-{44,65,87}off`,
-`static-mem`, `no-malloc`, and the `neg-*` configs used by the negative-config
-gate.
+`static-mem`, `no-malloc`, `no-cryptocb` (no `WOLF_CRYPTO_CB`), `wolftpm`
+(`full` plus what wolfTPM's fwTPM needs), and the `neg-*` configs used by the
+negative-config gate.
 
 ## Reproducing a CI job locally
 

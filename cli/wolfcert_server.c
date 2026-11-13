@@ -19,8 +19,8 @@
 
 /*
  * wolfcert-server - minimal EST/SCEP test server. Issues certificates
- * against a local CA generated on startup. EST needs --tls-cert/--tls-key
- * (RFC 7030); SCEP may be served over plaintext HTTP.
+ * against a local CA generated on startup or kept in --ca-dir. EST needs
+ * --tls-cert/--tls-key (RFC 7030); SCEP may be served over plaintext HTTP.
  */
 
 #define _POSIX_C_SOURCE 200809L
@@ -47,12 +47,16 @@
 #  define SCEP_FAULT_USAGE ""
 #endif
 
+#include <errno.h>
+#include <fcntl.h>
 #include <getopt.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 static WolfCertServer* g_server = NULL;
 
@@ -79,11 +83,13 @@ static void print_usage(FILE* out)
         "                       [--tls-cert PEM --tls-key PEM [--tls-client-ca PEM]]\n"
         "                       [--scep-require-approval] [--scep-enable-next-ca]\n"
         "                       [--scep-enable-get-cert] [--scep-split-ra]\n"
-        "                       [--est-allow-anonymous]\n"
+        "                       [--est-allow-anonymous] [--ca-dir DIR]\n"
+        "                       [--tls-trust-issued]\n"
         "\n"
         "Options:\n"
         "  --proto est|scep         Protocol to serve (required)\n"
-        "  --listen ADDR:PORT       Numeric IPv4 bind address (default 0.0.0.0:8080)\n"
+        "  --listen ADDR:PORT       Numeric IPv4 bind address (default 0.0.0.0:8080);\n"
+        "                           port 0 picks a free one\n"
         "  --basic USER:PASS        Require HTTP Basic auth (EST enroll); both non-empty\n"
         "  --challenge PASS         Require this SCEP challengePassword in the CSR\n"
         "  --tls-cert PEMFILE       Terminate TLS with this server certificate (PEM);\n"
@@ -91,9 +97,16 @@ static void print_usage(FILE* out)
         "  --tls-key  PEMFILE       Private key for --tls-cert (PEM)\n"
         "  --tls-client-ca PEMFILE  Require mutual TLS; verify clients against this CA\n"
         "  --est-allow-anonymous    Issue EST certificates to any client; --proto est\n"
-        "                           needs this, --basic or --tls-client-ca.\n"
-        "                           /simplereenroll also needs --tls-client-ca and a\n"
-        "                           KEEP_PEER_CERT wolfSSL\n"
+        "                           needs this, --basic, --tls-client-ca or\n"
+        "                           --tls-trust-issued with --ca-dir (renewal only).\n"
+        "                           /simplereenroll also needs --tls-client-ca or\n"
+        "                           --tls-trust-issued, and a KEEP_PEER_CERT wolfSSL\n"
+        "  --ca-dir DIR             Keep the CA in DIR, an existing directory, across\n"
+        "                           restarts\n"
+        "  --tls-trust-issued       Accept a TLS client certificate this server's CA\n"
+        "                           issued, to renew it (EST); it enrolls only with\n"
+        "                           --basic or --est-allow-anonymous, and any other\n"
+        "                           client certificate must chain to --tls-client-ca\n"
         "  --scep-require-approval  Defer SCEP PKCSReq/RenewalReq (pkiStatus=PENDING); issue\n"
         "                           on the first accepted GetCertInitial\n"
         "  --scep-enable-next-ca    Advertise + answer GetNextCACert (RFC 8894 section 4.7),\n"
@@ -136,8 +149,9 @@ static int parse_listen(const char* arg, char** host, uint16_t* port)
         return 0;
     }
 
-    long p = strtol(colon + 1, NULL, 10);
-    if (p <= 0 || p > 65535)
+    char* end = NULL;
+    long p = strtol(colon + 1, &end, 10);
+    if (end == colon + 1 || *end != '\0' || p < 0 || p > 65535)
         return -1;
 
     *host = strndup(arg, (size_t)(colon - arg));
@@ -198,6 +212,119 @@ static uint8_t* slurp(const char* path, size_t* len)
     return b;
 }
 
+/* DIR/name, or with tmp a mkstemp template next to it. */
+static int ca_dir_path(char* path, size_t cap, const char* dir,
+                       const char* name, int tmp)
+{
+    int n = tmp ? snprintf(path, cap, "%s/.%s.XXXXXX", dir, name)
+                : snprintf(path, cap, "%s/%s", dir, name);
+
+    return (n < 0 || (size_t)n >= cap) ? -1 : 0;
+}
+
+/* Read DIR/name, a regular file of this user's with no `deny` mode bits; 1
+ * when it does not exist, -2 for another owner, type or mode. */
+static int ca_dir_read(const char* dir, const char* name, mode_t deny,
+                       uint8_t** out, size_t* len)
+{
+    char path[4096];
+    struct stat st;
+    uint8_t* b = NULL;
+    size_t off = 0;
+    int fd;
+
+    if (ca_dir_path(path, sizeof(path), dir, name, 0) != 0)
+        return -1;
+    fd = open(path, O_RDONLY);
+    if (fd < 0)
+        return errno == ENOENT ? 1 : -1;
+    if (fstat(fd, &st) != 0) {
+        close(fd);
+        return -1;
+    }
+    if (!S_ISREG(st.st_mode) || st.st_uid != geteuid() ||
+            (st.st_mode & deny) != 0) {
+        close(fd);
+        return -2;
+    }
+    if (st.st_size > 0)
+        b = malloc((size_t)st.st_size);
+    while (b != NULL && off < (size_t)st.st_size) {
+        ssize_t n = read(fd, b + off, (size_t)st.st_size - off);
+        if (n < 0 && errno == EINTR)
+            continue;
+        if (n <= 0)
+            break;
+        off += (size_t)n;
+    }
+    close(fd);
+    if (b == NULL || off != (size_t)st.st_size) {
+        if (b != NULL)
+            wc_ForceZero(b, (word32)off);
+        free(b);
+        return -1;
+    }
+    *out = b;
+    *len = off;
+    return 0;
+}
+
+/* Replace DIR/name with data through a temporary file and a rename. */
+static int ca_dir_write(const char* dir, const char* name, const uint8_t* data,
+                        size_t len, mode_t mode)
+{
+    char path[4096];
+    char tmp[4096];
+    size_t off = 0;
+    int ok;
+    int fd;
+
+    if (ca_dir_path(path, sizeof(path), dir, name, 0) != 0 ||
+            ca_dir_path(tmp, sizeof(tmp), dir, name, 1) != 0)
+        return -1;
+    fd = mkstemp(tmp);
+    if (fd < 0)
+        return -1;
+    ok = fchmod(fd, mode) == 0;
+    while (ok && off < len) {
+        ssize_t n = write(fd, data + off, len - off);
+        if (n < 0 && errno == EINTR)
+            continue;
+        ok = n > 0;
+        if (ok)
+            off += (size_t)n;
+    }
+    ok = ok && fsync(fd) == 0;
+    ok = close(fd) == 0 && ok;
+    if (ok && rename(tmp, path) == 0)
+        return 0;
+    unlink(tmp);
+    return -1;
+}
+
+/* Keep a CA the server generated in DIR, key first. */
+static int ca_dir_save(const char* dir, WolfCertServer* srv)
+{
+    WolfCertBuffer cert = { 0 };
+    WolfCertBuffer key  = { 0 };
+    int rc = wolfcert_server_get_ca(srv, WOLFCERT_ENCODING_DER, &cert, &key);
+
+    if (rc == WOLFCERT_OK &&
+            ca_dir_write(dir, "ca.key.der", key.data, key.len, 0600) != 0)
+        rc = WOLFCERT_ERR_IO;
+    if (rc == WOLFCERT_OK &&
+            ca_dir_write(dir, "ca.cert.der", cert.data, cert.len, 0644) != 0) {
+        char path[4096];
+
+        if (ca_dir_path(path, sizeof(path), dir, "ca.key.der", 0) == 0)
+            unlink(path);
+        rc = WOLFCERT_ERR_IO;
+    }
+    wolfcert_buffer_free(&cert);
+    wolfcert_buffer_free_secure(&key);
+    return rc;
+}
+
 int main(int argc, char** argv)
 {
     static const struct option opts[] = {
@@ -222,6 +349,8 @@ int main(int argc, char** argv)
         { "csrattrs-file",            required_argument, NULL, 'F' },
         { "est-require-csrattrs",    no_argument,       NULL, 'Q' },
         { "est-allow-anonymous",     no_argument,       NULL, 'Y' },
+        { "ca-dir",                  required_argument, NULL, 'D' },
+        { "tls-trust-issued",        no_argument,       NULL, 'I' },
         { "help",                    no_argument,       NULL, 'h' },
         { "version",                 no_argument,       NULL, 'V' },
         { 0 }
@@ -254,6 +383,8 @@ int main(int argc, char** argv)
     size_t csr_attrs_blob_len = 0;
     int est_require_csr_attrs = 0;
     int est_allow_anonymous   = 0;
+    const char* ca_dir        = NULL;
+    int tls_trust_issued      = 0;
     int basic_rc;
     int c;
 
@@ -380,6 +511,12 @@ int main(int argc, char** argv)
             case 'Y':
                 est_allow_anonymous   = 1;
                 break;
+            case 'D':
+                ca_dir                = optarg;
+                break;
+            case 'I':
+                tls_trust_issued      = 1;
+                break;
             case 'V':
                 printf("wolfcert-server %s\n", wolfcert_version_string());
                 return 0;
@@ -417,10 +554,32 @@ int main(int argc, char** argv)
     }
 
     if (sel == WOLFCERT_PROTO_EST && user == NULL && tls_ca == NULL &&
-            !est_allow_anonymous) {
+            !est_allow_anonymous && !tls_trust_issued) {
         fprintf(stderr, "wolfcert-server: --proto est requires --basic, "
-                "--tls-client-ca or --est-allow-anonymous\n");
+                "--tls-client-ca, --est-allow-anonymous or "
+                "--tls-trust-issued\n");
         return 1;
+    }
+
+    /* DIR holds the CA private key. */
+    if (ca_dir != NULL) {
+        struct stat st;
+
+        if (stat(ca_dir, &st) != 0) {
+            fprintf(stderr, "wolfcert-server: --ca-dir %s: %s\n", ca_dir,
+                    strerror(errno));
+            return 1;
+        }
+        if (!S_ISDIR(st.st_mode)) {
+            fprintf(stderr, "wolfcert-server: --ca-dir %s is not a directory\n",
+                    ca_dir);
+            return 1;
+        }
+        if (st.st_uid != geteuid() || (st.st_mode & (S_IWGRP | S_IWOTH)) != 0) {
+            fprintf(stderr, "wolfcert-server: --ca-dir %s must be owned by this "
+                    "user and not writable by others\n", ca_dir);
+            return 1;
+        }
     }
 
     if (host == NULL)
@@ -484,15 +643,59 @@ int main(int argc, char** argv)
         .csr_attributes_len         = csr_attrs_blob_len,
         .est_require_csr_attributes = est_require_csr_attrs,
         .est_allow_anonymous_enroll = est_allow_anonymous,
+        .tls_client_trust_issued    = tls_trust_issued,
     };
 
-    int rc = wolfcert_server_start(&cfg, &g_server);
+    int rc = WOLFCERT_OK;
+    uint8_t* ca_cert = NULL;
+    uint8_t* ca_key  = NULL;
+    size_t ca_cert_len = 0;
+    size_t ca_key_len  = 0;
+    int ca_new = 0;
+
+    if (ca_dir != NULL) {
+        int cr = ca_dir_read(ca_dir, "ca.cert.der", S_IWGRP | S_IWOTH,
+                             &ca_cert, &ca_cert_len);
+        int kr = ca_dir_read(ca_dir, "ca.key.der", S_IRWXG | S_IRWXO,
+                             &ca_key, &ca_key_len);
+
+        if (cr == -2 || kr == -2) {
+            fprintf(stderr, "wolfcert-server: --ca-dir %s: %s must be a "
+                    "regular file owned by this user and not %s by others\n",
+                    ca_dir, cr == -2 ? "ca.cert.der" : "ca.key.der",
+                    cr == -2 ? "writable" : "accessible");
+            rc = WOLFCERT_ERR_IO;
+            goto out;
+        }
+        if (cr < 0 || kr < 0 || cr != kr) {
+            fprintf(stderr, "wolfcert-server: --ca-dir %s: %s is missing or "
+                    "unreadable\n", ca_dir,
+                    cr != 0 ? "ca.cert.der" : "ca.key.der");
+            rc = WOLFCERT_ERR_IO;
+            goto out;
+        }
+        ca_new = (cr == 1);
+        cfg.ca_cert     = ca_cert;
+        cfg.ca_cert_len = ca_cert_len;
+        cfg.ca_key      = ca_key;
+        cfg.ca_key_len  = ca_key_len;
+    }
+
+    rc = wolfcert_server_start(&cfg, &g_server);
     if (rc != WOLFCERT_OK) {
         const char* m = wolfcert_last_error_message();
         fprintf(stderr, "wolfcert-server: start failed (%s)\n", wolfcert_strerror(rc));
         if (m != NULL && *m != '\0')
             fprintf(stderr, "wolfcert-server: %s\n", m);
         goto out;
+    }
+    if (ca_new) {
+        rc = ca_dir_save(ca_dir, g_server);
+        if (rc != WOLFCERT_OK) {
+            fprintf(stderr, "wolfcert-server: cannot save the CA in --ca-dir "
+                    "%s\n", ca_dir);
+            goto out;
+        }
     }
 #ifdef CLI_SCEP_FAULTS
     if (sel == WOLFCERT_PROTO_SCEP)
@@ -521,6 +724,11 @@ int main(int argc, char** argv)
 out:
     wolfcert_server_free(g_server);
     g_server = NULL;
+    free(ca_cert);
+    if (ca_key != NULL) {
+        wc_ForceZero(ca_key, (word32)ca_key_len);
+        free(ca_key);
+    }
     free(host);
     free(user);
     free_secret(pass);

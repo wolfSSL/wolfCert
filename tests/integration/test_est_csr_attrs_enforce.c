@@ -116,7 +116,7 @@ static int enroll_with_challenge(WolfCertServer* s)
     REQUIRE(wolfcert_client_new(&cli) == WOLFCERT_OK);
 
     WolfCertKeyCfg  key_cfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
-                                .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                                .dev_id = INVALID_DEVID };
     WolfCertCertMeta meta = {
         .subject_dn = "CN=enforce-ok",
         .challenge_password = "hunter2",
@@ -150,7 +150,7 @@ static int enroll_without_challenge(WolfCertServer* s)
     REQUIRE(wolfcert_client_new(&cli) == WOLFCERT_OK);
 
     WolfCertKeyCfg  key_cfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
-                                .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                                .dev_id = INVALID_DEVID };
     WolfCertCertMeta meta = {
         .subject_dn = "CN=enforce-reject",
     };
@@ -204,7 +204,7 @@ static int reject_body_names_missing_oid(uint16_t port)
     /* OID_CHALLENGE_PASSWORD in dotted form. */
     static const char EXPECT_OID[] = "1.2.840.113549.1.9.7";
     WolfCertKeyCfg key_cfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
-                               .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                               .dev_id = INVALID_DEVID };
     WolfCertCertMeta meta = { .subject_dn = "CN=raw-enforce" };
     WolfCertKey* key = NULL;
     WolfCertBuffer csr_der = { 0 };
@@ -334,7 +334,7 @@ static int values_only_policy_does_not_block(WolfCertServer* s)
     REQUIRE(wolfcert_client_new(&cli) == WOLFCERT_OK);
 
     WolfCertKeyCfg  key_cfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
-                                .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                                .dev_id = INVALID_DEVID };
     WolfCertCertMeta meta = { .subject_dn = "CN=enforce-values-advisory" };
 
     WolfCertKey* key = NULL;
@@ -367,7 +367,7 @@ int main(void)
     WolfCertServerCfgSrv cfg = {
         .protocol = WOLFCERT_PROTO_EST,
         .bind_host = "127.0.0.1", .bind_port = 0,
-        .ca_store = test_ca_store(),
+        TEST_CA_CFG,
         .csr_attributes_der = policy.data,
         .csr_attributes_len = policy.len,
         .est_require_csr_attributes = 1,
@@ -396,7 +396,7 @@ int main(void)
     WolfCertServerCfgSrv cfg2 = {
         .protocol = WOLFCERT_PROTO_EST,
         .bind_host = "127.0.0.1", .bind_port = 0,
-        .ca_store = test_ca_store(),
+        TEST_CA_CFG,
         .csr_attributes_der = policy2.data,
         .csr_attributes_len = policy2.len,
         .est_require_csr_attributes = 1,
@@ -424,7 +424,7 @@ int main(void)
     WolfCertServerCfgSrv cfg_raw = {
         .protocol = WOLFCERT_PROTO_EST,
         .bind_host = "127.0.0.1", .bind_port = 0,
-        .ca_store = test_ca_store(),
+        TEST_CA_CFG,
         .csr_attributes_der = policy_raw.data,
         .csr_attributes_len = policy_raw.len,
         .est_require_csr_attributes = 1,
@@ -452,7 +452,7 @@ int main(void)
     WolfCertServerCfgSrv cfg_bare = {
         .protocol = WOLFCERT_PROTO_EST,
         .bind_host = "127.0.0.1", .bind_port = 0,
-        .ca_store = test_ca_store(),
+        TEST_CA_CFG,
         .http_basic_user = "alice", .http_basic_pass = "secret",
         .tls_cert_pem = tls_cert, .tls_cert_pem_len = tls_cert_len,
         .tls_key_pem  = tls_key,  .tls_key_pem_len  = tls_key_len,
@@ -472,7 +472,7 @@ int main(void)
     if (rc != 0)
         return rc;
 
-    test_ca_store_close();
+    test_ca_close();
     wolfcert_cleanup();
     printf("OK\n");
     return 0;

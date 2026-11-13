@@ -77,6 +77,7 @@ static int post_signed(const char* url, WolfCertKey* dk,
 
     REQUIRE(wolfcert_scep_self_signed_rsa((RsaKey*)dk->impl, csr->data,
                                           csr->len, &signer, &signer_len,
+                                          INVALID_DEVID,
                                           NULL) == WOLFCERT_OK);
     key_len = wc_RsaKeyToDer((RsaKey*)dk->impl, key_der, sizeof(key_der));
     REQUIRE(key_len > 0);
@@ -91,7 +92,7 @@ static int post_signed(const char* url, WolfCertKey* dk,
     REQUIRE(wolfcert_scep_build_pki_message(content, content_len,
                                             signer, signer_len,
                                             key_der, (size_t)key_len, 0,
-                                            &attrs, &pki, NULL) == WOLFCERT_OK);
+                                            &attrs, &pki, INVALID_DEVID, NULL) == WOLFCERT_OK);
 
     snprintf(pki_url, sizeof(pki_url), "%s?operation=PKIOperation", url);
     WolfCertHttpRequest req = { .method = "POST", .url = pki_url,
@@ -101,7 +102,7 @@ static int post_signed(const char* url, WolfCertKey* dk,
     REQUIRE(resp.status_code == 200);
     REQUIRE(wolfcert_scep_parse_pki_message(resp.body, resp.body_len, &env,
                 NULL, NULL, NULL, NULL, NULL, NULL, NULL, out_status,
-                NULL, NULL, out_fail_info, NULL) == WOLFCERT_OK);
+                NULL, NULL, out_fail_info, INVALID_DEVID, NULL) == WOLFCERT_OK);
 
     wolfcert_buffer_free(&env);
     wolfcert_http_response_free(&resp);
@@ -124,6 +125,7 @@ static int poll_ias_refused(const char* url, WolfCertKey* dk,
     int refused = 0;
 
     if (wolfcert_scep_envelop(ca_der, ca_len, ias, ias_len, AES128CBCb, &env,
+                              INVALID_DEVID,
                               NULL) == WOLFCERT_OK &&
             post_signed(url, dk, csr, "20", tid, tid_len, env.data, env.len,
                         &status, &fail_info) == 0) {
@@ -184,7 +186,7 @@ static int poll_path(WolfCertServer* s)
                         &ca_der, NULL, NULL, NULL) == 0);
 
     WolfCertKeyCfg kcfg = { .type = WOLFCERT_KEY_RSA, .param = 2048,
-                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                            .dev_id = INVALID_DEVID };
     WolfCertKey* dk = NULL;
     REQUIRE(wolfcert_key_generate(&kcfg, &dk) == WOLFCERT_OK);
     WolfCertCertMeta meta = { .subject_dn = "CN=device-poll-1" };
@@ -251,6 +253,7 @@ static int poll_path(WolfCertServer* s)
                              junk_ias, sizeof(junk_ias)) == 0);
     REQUIRE(wolfcert_scep_self_signed_rsa((RsaKey*)dk->impl, csr.data,
                                           csr.len, &self, &self_len,
+                                          INVALID_DEVID,
                                           NULL) == WOLFCERT_OK);
     REQUIRE(wolfcert_scep_issuer_and_subject(self, self_len, csr.data,
                                              csr.len, &ias, NULL)
@@ -276,7 +279,7 @@ static int poll_path(WolfCertServer* s)
     char* tk_fail_info = NULL;
     REQUIRE(wolfcert_scep_envelop(ca_der->buffer, ca_der->length,
                                   other_csr.data, other_csr.len, AES128CBCb,
-                                  &other_env, NULL) == WOLFCERT_OK);
+                                  &other_env, INVALID_DEVID, NULL) == WOLFCERT_OK);
     REQUIRE(post_signed(url, other, &other_csr, "19", r1.transaction_id,
                         r1.transaction_id_len, other_env.data, other_env.len,
                         &tk_status, &tk_fail_info) == 0);
@@ -521,7 +524,7 @@ static int empty_subject_path(WolfCertServer* s)
                         &ca_der, NULL, NULL, NULL) == 0);
 
     WolfCertKeyCfg kcfg = { .type = WOLFCERT_KEY_RSA, .param = 2048,
-                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                            .dev_id = INVALID_DEVID };
     WolfCertKey* dk = NULL;
     REQUIRE(wolfcert_key_generate(&kcfg, &dk) == WOLFCERT_OK);
     static const char* const dns[] = { "empty-subject.example" };
@@ -630,7 +633,7 @@ static int next_ca_disabled_path(void)
     /* GetNextCACert is not advertised and answers WOLFCERT_ERR_NOT_FOUND. */
     WolfCertServerCfgSrv cfg = { .protocol = WOLFCERT_PROTO_SCEP,
                                  .bind_host = "127.0.0.1", .bind_port = 0,
-                                 .ca_store = test_ca_store() };
+                                 TEST_CA_CFG };
     WolfCertServer* s = NULL;
     REQUIRE(wolfcert_server_start(&cfg, &s) == WOLFCERT_OK);
     pthread_t tid;
@@ -672,7 +675,7 @@ int main(void)
     WolfCertServerCfgSrv cfg_pending = {
         .protocol = WOLFCERT_PROTO_SCEP,
         .bind_host = "127.0.0.1", .bind_port = 0,
-        .ca_store = test_ca_store(),
+        TEST_CA_CFG,
         .scep_require_approval = 1,
     };
     WolfCertServer* s1 = NULL;
@@ -691,7 +694,7 @@ int main(void)
     WolfCertServerCfgSrv cfg_next = {
         .protocol = WOLFCERT_PROTO_SCEP,
         .bind_host = "127.0.0.1", .bind_port = 0,
-        .ca_store = test_ca_store(),
+        TEST_CA_CFG,
         .scep_enable_next_ca = 1,
     };
     WolfCertServer* s2 = NULL;
@@ -709,7 +712,7 @@ int main(void)
     if (rc != 0)
         return rc;
 
-    test_ca_store_close();
+    test_ca_close();
     wolfcert_cleanup();
     printf("OK\n");
     return 0;

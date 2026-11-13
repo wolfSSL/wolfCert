@@ -21,7 +21,6 @@
 #define WOLFCERT_SERVER_H
 
 #include <wolfcert/types.h>
-#include <wolfcert/store.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -37,22 +36,21 @@ typedef struct {
     const char*      bind_host;          /* numeric IPv4, NULL = all
                                           * interfaces */
     uint16_t         bind_port;
-    WolfCertStoreOps* ca_store;          /* optional CA persistence; NULL =
-                                            new CA on each start. A store
-                                            error fails the start. */
     const char*      challenge_password; /* SCEP challengePassword to accept; NULL disables */
     const char*      http_basic_user;    /* EST HTTP Basic credentials to accept; NULL disables */
     const char*      http_basic_pass;    /* must be non-empty when http_basic_user is set */
 
-    /* CA configuration. NULL/zero values fall back to library defaults. */
+    /* Key for each CA the server generates: at start without ca_cert, and for
+     * GetNextCACert. NULL/zero values fall back to library defaults. */
     WolfCertKeyType  ca_key_type;        /* WOLFCERT_KEY_RSA default */
     int              ca_key_param;       /* 2048 default for RSA, 256 for ECC */
 
     /* TLS identity, required for EST (wolfcert_server_start() returns
      * WOLFCERT_ERR_TLS without it) and optional for SCEP. tls_client_ca_pem
-     * enables mutual TLS; EST /simplereenroll needs it (else 403) and a
-     * wolfSSL built with KEEP_PEER_CERT (else 500). All three PEM buffers
-     * are copied by wolfcert_server_start(). */
+     * enables mutual TLS; EST /simplereenroll needs it or
+     * tls_client_trust_issued (else 403) and a wolfSSL built with
+     * KEEP_PEER_CERT (else 500). All three PEM buffers are copied by
+     * wolfcert_server_start(). */
     const uint8_t*   tls_cert_pem;
     size_t           tls_cert_pem_len;
     const uint8_t*   tls_key_pem;
@@ -104,9 +102,21 @@ typedef struct {
     /* Lets EST start with neither Basic nor tls_client_ca_pem. */
     int              est_allow_anonymous_enroll;
 
-    /* SCEP split CA/RA: the CA issues a new RA certificate at every start and
-     * ca_store does not keep it; the RA decrypts and signs SCEP messages. */
+    /* SCEP split CA/RA: the CA issues a new RA certificate at every start to
+     * decrypt and sign SCEP messages; wolfcert_server_get_ca() omits it. */
     int              scep_split_ra;
+
+    /* CA to issue from: one certificate and its key, PEM or DER, copied at
+     * start. Both NULL generates a CA; one alone is WOLFCERT_ERR_BAD_ARG. */
+    const uint8_t*   ca_cert;
+    size_t           ca_cert_len;
+    const uint8_t*   ca_key;
+    size_t           ca_key_len;
+
+    /* EST: accept client certificates this CA issued, for /simplereenroll
+     * only, so with tls_client_ca_pem naming this CA /simpleenroll needs
+     * Basic. Needs KEEP_PEER_CERT, else start returns UNSUPPORTED. */
+    int              tls_client_trust_issued;
 } WolfCertServerCfgSrv;
 
 WOLFCERT_API int  wolfcert_server_start(const WolfCertServerCfgSrv* cfg, WolfCertServer** out);
@@ -118,6 +128,13 @@ WOLFCERT_API void wolfcert_server_free(WolfCertServer* srv);
 
 /* Returns the port the server is bound to. Useful after binding on port 0. */
 WOLFCERT_API uint16_t wolfcert_server_port(const WolfCertServer* srv);
+
+/* Copies out the CA the server issues from, e.g. to keep a generated one.
+ * out_key may be NULL; free the key with wolfcert_buffer_free_secure(). */
+WOLFCERT_API int wolfcert_server_get_ca(const WolfCertServer* srv,
+                                        WolfCertEncoding enc,
+                                        WolfCertBuffer* out_cert,
+                                        WolfCertBuffer* out_key);
 
 /* Service exactly one request on an already-accepted connection; the caller
  * closes fd. WOLFCERT_SERVER_REQUEST_TIMEOUT_MS does not apply. The fd carries

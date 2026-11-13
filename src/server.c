@@ -327,7 +327,6 @@ static int tls_setup(WolfCertServer* s, const WolfCertServerCfgSrv* cfg)
     if (cfg->tls_cert_pem_len == 0 || cfg->tls_key_pem_len == 0) {
         return WOLFCERT_ERR_BAD_ARG;
     }
-
     WOLFSSL_CTX* ctx = wolfSSL_CTX_new(wolfTLS_server_method());
     if (ctx == NULL)
         return WOLFCERT_ERR_CRYPTO;
@@ -372,6 +371,18 @@ static int tls_setup(WolfCertServer* s, const WolfCertServerCfgSrv* cfg)
 
         wolfSSL_CTX_set_verify(ctx, verify, NULL);
     }
+    if (cfg->tls_client_trust_issued) {
+        rc = wolfSSL_CTX_load_verify_buffer(ctx, s->ca.cert_der,
+                                            (long)s->ca.cert_der_len,
+                                            WOLFSSL_FILETYPE_ASN1);
+        if (rc != WOLFSSL_SUCCESS) {
+            wolfSSL_CTX_free(ctx);
+            return WOLFCERT_ERR(WOLFCERT_ERR_CRYPTO, "server",
+                                "TLS: load_verify_buffer (issuing CA) failed");
+        }
+        if (cfg->tls_client_ca_pem == NULL || cfg->tls_client_ca_pem_len == 0)
+            wolfSSL_CTX_set_verify(ctx, WOLFSSL_VERIFY_PEER, NULL);
+    }
     /* Grouped messages would hold back the PHA CertificateRequest. */
     if (cfg->tls_post_handshake_auth)
         (void)wolfSSL_CTX_clear_group_messages(ctx);
@@ -391,6 +402,23 @@ static int tls_setup(WolfCertServer* s, const WolfCertServerCfgSrv* cfg)
             "CPPFLAGS=\"-DWOLFSSL_HAVE_TLS_UNIQUE -DKEEP_PEER_CERT\"");
     }
 #endif
+
+    if (cfg->tls_client_trust_issued && cfg->tls_client_ca_pem != NULL &&
+            cfg->tls_client_ca_pem_len > 0) {
+        s->issued_cm = wolfSSL_CertManagerNew_ex(s->heap);
+        rc = WOLFSSL_FAILURE;
+        if (s->issued_cm != NULL)
+            rc = wolfSSL_CertManagerLoadCABuffer(s->issued_cm, s->ca.cert_der,
+                                                 (long)s->ca.cert_der_len,
+                                                 WOLFSSL_FILETYPE_ASN1);
+        if (rc != WOLFSSL_SUCCESS) {
+            wolfSSL_CertManagerFree(s->issued_cm);
+            s->issued_cm = NULL;
+            wolfSSL_CTX_free(ctx);
+            return WOLFCERT_ERR(WOLFCERT_ERR_CRYPTO, "server",
+                                "TLS: cannot load the issuing CA");
+        }
+    }
 
     s->tls_ctx = ctx;
     return WOLFCERT_OK;
@@ -412,10 +440,27 @@ static const WolfCertServerOps* lookup_ops(WolfCertProtocol p)
     }
 }
 
+/* Basic, a client CA or the anonymous opt-in admits a /simpleenroll. */
+static int cfg_enroll_auth(const WolfCertServerCfgSrv* cfg)
+{
+    return cfg->http_basic_user != NULL ||
+           (cfg->tls_client_ca_pem != NULL && cfg->tls_client_ca_pem_len > 0) ||
+           cfg->est_allow_anonymous_enroll;
+}
+
 int wolfcert_server_start(const WolfCertServerCfgSrv* cfg, WolfCertServer** out)
 {
     if (cfg == NULL || out == NULL)
         return WOLFCERT_ERR_BAD_ARG;
+
+    if (cfg->protocol != WOLFCERT_PROTO_EST && cfg->tls_client_trust_issued)
+        return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "server",
+            "tls_client_trust_issued is supported only for EST");
+#ifndef KEEP_PEER_CERT
+    if (cfg->tls_client_trust_issued)
+        return WOLFCERT_ERR(WOLFCERT_ERR_UNSUPPORTED, "server",
+            "tls_client_trust_issued needs wolfSSL built with KEEP_PEER_CERT");
+#endif
 
     const WolfCertServerOps* ops = lookup_ops(cfg->protocol);
     if (ops == NULL)
@@ -432,18 +477,31 @@ int wolfcert_server_start(const WolfCertServerCfgSrv* cfg, WolfCertServer** out)
         return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "server",
             "http_basic_user and http_basic_pass must both be non-empty");
 
-    if (cfg->protocol == WOLFCERT_PROTO_EST && cfg->http_basic_user == NULL &&
-            (cfg->tls_client_ca_pem == NULL ||
-             cfg->tls_client_ca_pem_len == 0) &&
-            !cfg->est_allow_anonymous_enroll)
+    int renew_only = cfg->protocol == WOLFCERT_PROTO_EST &&
+                     !cfg_enroll_auth(cfg) && cfg->tls_client_trust_issued;
+
+    if (cfg->protocol == WOLFCERT_PROTO_EST && !cfg_enroll_auth(cfg) &&
+            !cfg->tls_client_trust_issued)
         return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "server",
             "EST enrollment needs http_basic_user or tls_client_ca_pem, "
-            "or est_allow_anonymous_enroll");
+            "or est_allow_anonymous_enroll, or tls_client_trust_issued to "
+            "only renew");
+
+    if (renew_only && cfg->ca_cert == NULL)
+        return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "server",
+            "a renewal-only server needs ca_cert and ca_key; a new CA has "
+            "issued nothing to renew");
 
     /* Only EST requests the certificate that PHA defers past the handshake. */
     if (cfg->protocol != WOLFCERT_PROTO_EST && cfg->tls_post_handshake_auth)
         return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "server",
             "post-handshake auth is supported only for EST");
+
+    if ((cfg->ca_cert == NULL) != (cfg->ca_key == NULL) ||
+            (cfg->ca_cert == NULL) != (cfg->ca_cert_len == 0) ||
+            (cfg->ca_key == NULL) != (cfg->ca_key_len == 0))
+        return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "server",
+            "ca_cert and ca_key must both be set, or both NULL");
 
     struct in_addr bind_addr = { .s_addr = htonl(INADDR_ANY) };
     if (cfg->bind_host != NULL &&
@@ -458,9 +516,14 @@ int wolfcert_server_start(const WolfCertServerCfgSrv* cfg, WolfCertServer** out)
 
     memset(s, 0, sizeof(*s));
     s->cfg       = *cfg;
+    s->cfg.ca_cert     = NULL;
+    s->cfg.ca_cert_len = 0;
+    s->cfg.ca_key      = NULL;
+    s->cfg.ca_key_len  = 0;
     s->listen_fd = -1;
     s->ops       = ops;
     s->heap      = heap;
+    s->renew_only = renew_only;
 
     if (cfg->challenge_password)
         s->cfg_challenge = wolfcert_strdup(cfg->challenge_password, heap);
@@ -490,19 +553,14 @@ int wolfcert_server_start(const WolfCertServerCfgSrv* cfg, WolfCertServer** out)
     }
 
     int rc;
-    int have_ca = 0;
 
-    if (cfg->ca_store != NULL) {
-        rc = wolfcert_ca_load(&s->ca, cfg->ca_store, heap);
-        if (rc == WOLFCERT_OK)
-            have_ca = 1;
-        /* Only an empty store means no CA yet; any other failure must not
-         * replace the stored CA. */
-        else if (rc != WOLFCERT_ERR_NOT_FOUND)
+    if (cfg->ca_cert != NULL) {
+        rc = wolfcert_ca_load(&s->ca, cfg->ca_cert, cfg->ca_cert_len,
+                              cfg->ca_key, cfg->ca_key_len, heap);
+        if (rc != WOLFCERT_OK)
             goto fail;
     }
-
-    if (!have_ca) {
+    else {
         WolfCertKeyType kt = cfg->ca_key_type ? cfg->ca_key_type
                                               : WOLFCERT_DEFAULT_KEY_TYPE;
         int kp = cfg->ca_key_param;
@@ -510,13 +568,6 @@ int wolfcert_server_start(const WolfCertServerCfgSrv* cfg, WolfCertServer** out)
         rc = wolfcert_ca_generate(&s->ca, kt, kp, heap);
         if (rc != WOLFCERT_OK)
             goto fail;
-
-        if (cfg->ca_store != NULL) {
-            /* Not re-wrapped: it would lose ca_save's rollback diagnostic. */
-            rc = wolfcert_ca_save(&s->ca, cfg->ca_store);
-            if (rc != WOLFCERT_OK)
-                goto fail;
-        }
     }
 
     rc = ops->start(cfg, s);
@@ -701,6 +752,8 @@ void wolfcert_server_free(WolfCertServer* srv)
         wolfSSL_CTX_free(srv->tls_ctx);
         srv->tls_ctx = NULL;
     }
+    wolfSSL_CertManagerFree(srv->issued_cm);
+    srv->issued_cm = NULL;
 
     if (srv->listen_fd >= 0)
         close(srv->listen_fd);
@@ -720,6 +773,15 @@ void wolfcert_server_free(WolfCertServer* srv)
 uint16_t wolfcert_server_port(const WolfCertServer* srv)
 {
     return srv ? srv->cfg.bind_port : 0;
+}
+
+int wolfcert_server_get_ca(const WolfCertServer* srv, WolfCertEncoding enc,
+                           WolfCertBuffer* out_cert, WolfCertBuffer* out_key)
+{
+    if (srv == NULL || out_cert == NULL)
+        return WOLFCERT_ERR_BAD_ARG;
+
+    return wolfcert_ca_export(&srv->ca, enc, out_cert, out_key);
 }
 
 #if defined(WOLFCERT_BUILD_TESTING)

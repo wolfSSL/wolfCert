@@ -1205,12 +1205,57 @@ static int test_chunked_complete_resume(void)
     return 0;
 }
 
+/* A client_key_obj is checked before any connection. */
+static int test_client_key_checks(void)
+{
+    static const uint8_t cert[] = "-----BEGIN CERTIFICATE-----";
+    static const uint8_t pem[] = "-----BEGIN PRIVATE KEY-----";
+    WolfCertKey key;
+    WolfCertHttpRequest req = {
+        .method         = "GET",
+        .url            = "https://127.0.0.1:1/x",
+        .client_key_obj = &key,
+    };
+    WolfCertHttpSessionCfg scfg = {
+        .base_url       = "https://127.0.0.1:1",
+        .client_key_obj = &key,
+    };
+    WolfCertHttpResponse resp;
+    WolfCertHttpSession* s = NULL;
+
+    memset(&key, 0, sizeof(key));
+    REQUIRE(wolfcert_http_request(&req, &resp) == WOLFCERT_ERR_BAD_ARG);
+    REQUIRE(strstr(wolfcert_last_error_message(), "client_cert") != NULL);
+    REQUIRE(wolfcert_http_session_open(&scfg, &s) == WOLFCERT_ERR_BAD_ARG);
+    scfg.client_cert     = cert;
+    scfg.client_cert_len = sizeof(cert);
+    scfg.client_key      = pem;
+    scfg.client_key_len  = sizeof(pem);
+    REQUIRE(wolfcert_http_session_open(&scfg, &s) == WOLFCERT_ERR_BAD_ARG);
+    REQUIRE(strstr(wolfcert_last_error_message(), "not both") != NULL);
+    scfg.client_key     = NULL;
+    scfg.client_key_len = 0;
+    scfg.base_url       = "http://127.0.0.1:1";
+    REQUIRE(wolfcert_http_session_open(&scfg, &s) == WOLFCERT_ERR_BAD_ARG);
+    REQUIRE(strstr(wolfcert_last_error_message(), "https://") != NULL);
+    REQUIRE(s == NULL);
+
+    req.client_cert     = cert;
+    req.client_cert_len = sizeof(cert);
+    req.client_key      = pem;
+    req.client_key_len  = sizeof(pem);
+    REQUIRE(wolfcert_http_request(&req, &resp) == WOLFCERT_ERR_BAD_ARG);
+    return 0;
+}
+
 int main(void)
 {
     /* make check has no per-test timeout, and a framing bug shows as a hang. */
     alarm(25);
 
     REQUIRE(wolfcert_init(NULL) == WOLFCERT_OK);
+    /* A WC_USE_DEVID build starts on a device; these checks expect none. */
+    REQUIRE(wolfcert_set_default_dev_id(INVALID_DEVID) == WOLFCERT_OK);
     if (test_url_parser())
         return 1;
 #ifdef WOLFCERT_HAVE_SERVER
@@ -1292,6 +1337,8 @@ int main(void)
     if (test_chunked_trailer_leading_colon())
         return 1;
     if (test_chunked_uppercase_hex_size())
+        return 1;
+    if (test_client_key_checks())
         return 1;
     wolfcert_cleanup();
     printf("OK\n");

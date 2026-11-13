@@ -6,6 +6,7 @@ target_link_libraries(test_smoke PRIVATE wolfcert Threads::Threads)
 add_test(NAME smoke COMMAND test_smoke)
 
 add_executable(test_keygen unit/test_keygen.c)
+target_include_directories(test_keygen PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(test_keygen PRIVATE wolfcert)
 add_test(NAME keygen COMMAND test_keygen)
 
@@ -13,10 +14,6 @@ add_executable(test_csr unit/test_csr.c)
 target_include_directories(test_csr PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(test_csr PRIVATE wolfcert)
 add_test(NAME csr COMMAND test_csr)
-
-add_executable(test_store unit/test_store.c)
-target_link_libraries(test_store PRIVATE wolfcert)
-add_test(NAME store COMMAND test_store)
 
 if(WOLFCERT_ENABLE_BUILTIN_TRANSPORT)
     add_executable(test_net unit/test_net.c)
@@ -73,6 +70,11 @@ if(WOLFCERT_ENABLE_EST)
         target_link_libraries(test_est_mtls_roundtrip PRIVATE wolfcert Threads::Threads)
         add_test(NAME est_mtls_roundtrip COMMAND test_est_mtls_roundtrip)
 
+        add_executable(test_est_devid_roundtrip integration/test_est_devid_roundtrip.c)
+        target_link_libraries(test_est_devid_roundtrip PRIVATE wolfcert Threads::Threads)
+        add_test(NAME est_devid_roundtrip COMMAND test_est_devid_roundtrip)
+        set_tests_properties(est_devid_roundtrip PROPERTIES SKIP_RETURN_CODE 77)
+
         add_executable(test_est_pha_roundtrip integration/test_est_pha_roundtrip.c)
         target_link_libraries(test_est_pha_roundtrip PRIVATE wolfcert Threads::Threads)
         add_test(NAME est_pha_roundtrip COMMAND test_est_pha_roundtrip)
@@ -119,10 +121,10 @@ if(WOLFCERT_ENABLE_SERVER)
     # A stop that cannot interrupt an idle peer hangs the serving thread.
     set_tests_properties(server_stop_idle PROPERTIES TIMEOUT 90)
 
-    add_executable(test_server_ca_store unit/test_server_ca_store.c)
-    target_include_directories(test_server_ca_store PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(test_server_ca_store PRIVATE wolfcert Threads::Threads)
-    add_test(NAME server_ca_store COMMAND test_server_ca_store)
+    add_executable(test_server_ca unit/test_server_ca.c)
+    target_include_directories(test_server_ca PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_server_ca PRIVATE wolfcert Threads::Threads)
+    add_test(NAME server_ca COMMAND test_server_ca)
 endif()
 
 if(WOLFCERT_ENABLE_SCEP)

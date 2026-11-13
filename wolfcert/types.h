@@ -31,12 +31,15 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <wolfssl/wolfcrypt/types.h>
 
 #include <wolfcert/api.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+typedef struct WolfCertKey WolfCertKey;
 
 typedef enum {
     WOLFCERT_PROTO_EST  = 1,
@@ -77,17 +80,40 @@ typedef enum {
     WOLFCERT_KEY_MLDSA87 = 7
 } WolfCertKeyType;
 
-/* Keys are offloaded through a wolfSSL CryptoCb devId that the application
- * registers; WOLFCERT_DEVID_SOFTWARE selects software. */
-#define WOLFCERT_DEVID_SOFTWARE (-1)
+/* Defaults to wolfSSL's default ECC_MAX_ID_LEN / RSA_MAX_ID_LEN. */
+#ifndef WOLFCERT_KEY_ID_MAX_LEN
+#define WOLFCERT_KEY_ID_MAX_LEN 32
+#endif
 
 typedef struct {
     WolfCertKeyType type;
     int             param;       /* RSA 2048/3072/4096 or ECC 256/384/521 bits */
-    int             dev_id;      /* wolfSSL CryptoCb devId; -1 for software */
-    const char*     key_label;   /* optional backend identifier for persistent keys */
+    int             dev_id;      /* devId as given; INVALID_DEVID = software */
     void*           heap;        /* optional heap hint; NULL = default */
+    /* Backend key id, opaque to wolfCert; needs a devId. Up to
+     * WOLFCERT_KEY_ID_MAX_LEN bytes. */
+    const uint8_t*  key_id;
+    size_t          key_id_len;
 } WolfCertKeyCfg;
+
+/* Start value of the default devId; user_settings.h may override it. */
+#ifndef WOLFCERT_DEFAULT_DEVID
+    #if defined(WC_USE_DEVID) && defined(WOLF_CRYPTO_CB)
+        #define WOLFCERT_DEFAULT_DEVID WC_USE_DEVID
+    #else
+        #define WOLFCERT_DEFAULT_DEVID INVALID_DEVID
+    #endif
+#endif
+#if !defined(WOLF_CRYPTO_CB) && WOLFCERT_DEFAULT_DEVID != INVALID_DEVID
+    #error "WOLFCERT_DEFAULT_DEVID needs wolfSSL built with WOLF_CRYPTO_CB"
+#endif
+
+/* Registered devId for the TLS contexts and SCEP PKCS#7 objects wolfCert
+ * creates; keys, their keygen and CSRs use their own. BAD_ARG for an
+ * unregistered devId, UNSUPPORTED without WOLF_CRYPTO_CB. Set it before
+ * threads use wolfCert. */
+WOLFCERT_API int  wolfcert_set_default_dev_id(int dev_id);
+WOLFCERT_API int  wolfcert_default_dev_id(void);
 
 /* Called by wolfcert_csr_build() once the standard fields are set, with the
  * wolfSSL Cert* to add what wolfCert does not expose; any error aborts.
@@ -233,6 +259,10 @@ typedef struct {
     void*            heap;
 
     WolfCertTransport transport;
+
+    /* Instead of client_key: the TLS client key as a key handle, borrowed
+     * while an https:// connection opens; a key_id key signs in its device. */
+    const WolfCertKey* client_key_obj;
 } WolfCertServerCfg;
 
 /* Caller-owned byte buffer filled by the library. wolfcert_buffer_free()
@@ -244,6 +274,8 @@ typedef struct {
 } WolfCertBuffer;
 
 WOLFCERT_API void wolfcert_buffer_free(WolfCertBuffer* buf);
+/* wolfcert_buffer_free() after wiping data, for a buffer holding a key. */
+WOLFCERT_API void wolfcert_buffer_free_secure(WolfCertBuffer* buf);
 
 #ifdef __cplusplus
 }

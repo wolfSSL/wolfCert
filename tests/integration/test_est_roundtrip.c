@@ -172,7 +172,7 @@ static int rdn_is(const char* p, int len, const char* want)
 static int enroll_check_subject_rdns(const WolfCertServerCfg* client_cfg)
 {
     WolfCertKeyCfg kcfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
-                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                            .dev_id = INVALID_DEVID };
     WolfCertKey* dk = NULL;
     REQUIRE(wolfcert_key_generate(&kcfg, &dk) == WOLFCERT_OK);
 
@@ -238,7 +238,7 @@ int main(void)
         .protocol        = WOLFCERT_PROTO_EST,
         .bind_host       = "127.0.0.1",
         .bind_port       = 0,
-        .ca_store        = test_ca_store(),
+        TEST_CA_CFG,
         .http_basic_user = "alice",
         .http_basic_pass = "hunter2",
         .tls_cert_pem    = tls_cert, .tls_cert_pem_len = tls_cert_len,
@@ -324,7 +324,7 @@ int main(void)
     /* A flipped signature bit keeps the CSR parseable and the credentials are
      * valid, so only the proof-of-possession check can reject it. */
     WolfCertKeyCfg pop_kcfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
-                                .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                                .dev_id = INVALID_DEVID };
     WolfCertKey* pop_dk = NULL;
     REQUIRE(wolfcert_key_generate(&pop_kcfg, &pop_dk) == WOLFCERT_OK);
     WolfCertCertMeta pop_meta = { .subject_dn = "CN=pop-tamper" };
@@ -342,7 +342,7 @@ int main(void)
     wolfcert_key_free(pop_dk);
 
     WolfCertKeyCfg kcfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
-                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                            .dev_id = INVALID_DEVID };
     WolfCertKey* dk = NULL;
     REQUIRE(wolfcert_key_generate(&kcfg, &dk) == WOLFCERT_OK);
     WolfCertCertMeta meta = { .subject_dn = "CN=auth-fail" };
@@ -363,7 +363,7 @@ int main(void)
     WolfCertServerCfgSrv acfg = {
         .protocol        = WOLFCERT_PROTO_EST,
         .bind_host       = "127.0.0.1", .bind_port = 0,
-        .ca_store        = test_ca_store(),
+        TEST_CA_CFG,
         .http_basic_user = "alice", .http_basic_pass = "hunter",
         .tls_cert_pem    = tls_cert, .tls_cert_pem_len = tls_cert_len,
         .tls_key_pem     = tls_key,  .tls_key_pem_len  = tls_key_len,
@@ -384,7 +384,7 @@ int main(void)
                                                    .password = "hunter" } };
 
     WolfCertKeyCfg akcfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
-                             .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                             .dev_id = INVALID_DEVID };
     WolfCertKey* adk = NULL;
     REQUIRE(wolfcert_key_generate(&akcfg, &adk) == WOLFCERT_OK);
     WolfCertCertMeta ameta = { .subject_dn = "CN=auth-exact" };
@@ -416,7 +416,7 @@ int main(void)
     wolfcert_buffer_free(&ca_pem);
     free(tls_cert);
     free(tls_key);
-    test_ca_store_close();
+    test_ca_close();
     wolfcert_cleanup();
     printf("OK (%d transport connects)\n", g_connect_calls);
     return 0;

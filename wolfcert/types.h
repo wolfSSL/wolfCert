@@ -244,6 +244,8 @@ typedef struct {
 } WolfCertBuffer;
 
 WOLFCERT_API void wolfcert_buffer_free(WolfCertBuffer* buf);
+/* wolfcert_buffer_free() after wiping data, for a buffer holding a key. */
+WOLFCERT_API void wolfcert_buffer_free_secure(WolfCertBuffer* buf);
 
 #ifdef __cplusplus
 }

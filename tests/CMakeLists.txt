@@ -14,10 +14,6 @@ target_include_directories(test_csr PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(test_csr PRIVATE wolfcert)
 add_test(NAME csr COMMAND test_csr)
 
-add_executable(test_store unit/test_store.c)
-target_link_libraries(test_store PRIVATE wolfcert)
-add_test(NAME store COMMAND test_store)
-
 if(WOLFCERT_ENABLE_BUILTIN_TRANSPORT)
     add_executable(test_net unit/test_net.c)
     target_include_directories(test_net PRIVATE ${CMAKE_SOURCE_DIR}/src)
@@ -119,10 +115,10 @@ if(WOLFCERT_ENABLE_SERVER)
     # A stop that cannot interrupt an idle peer hangs the serving thread.
     set_tests_properties(server_stop_idle PROPERTIES TIMEOUT 90)
 
-    add_executable(test_server_ca_store unit/test_server_ca_store.c)
-    target_include_directories(test_server_ca_store PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(test_server_ca_store PRIVATE wolfcert Threads::Threads)
-    add_test(NAME server_ca_store COMMAND test_server_ca_store)
+    add_executable(test_server_ca unit/test_server_ca.c)
+    target_include_directories(test_server_ca PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_server_ca PRIVATE wolfcert Threads::Threads)
+    add_test(NAME server_ca COMMAND test_server_ca)
 endif()
 
 if(WOLFCERT_ENABLE_SCEP)

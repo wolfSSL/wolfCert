@@ -219,8 +219,9 @@ All `WolfCertBuffer` outputs remember which heap they came from, so the same
   included, so a non-BSD-sockets stack (FreeRTOS+TCP, NetX, lwIP, wolfIP)
   needs one small glue file and no wolfCert change; the POSIX transport is the
   default instance and can be compiled out.
-- **Storage:** file-based cert/key store with atomic writes and 0600 key-file
-  mode; pluggable via the `WolfCertStoreOps` vtable.
+- **Storage is the application's:** keys export as PEM or DER
+  (`wolfcert_key_to_pem` / `_to_der`) and certificates come back as buffers,
+  to keep in a file, flash slot or secure element as the device requires.
 - **Test servers + CLIs** for Linux/macOS (`wolfcert-server`,
   `wolfcert-client`). The servers are for development and interop testing,
   not production CA use.

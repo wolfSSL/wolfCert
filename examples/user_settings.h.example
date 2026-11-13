@@ -38,9 +38,8 @@
 #define WOLFCERT_HAVE_SCEP   1   /* SCEP (RFC 8894) - requires WOLFCERT_HAVE_RSA */
 #define WOLFCERT_HAVE_SERVER 1   /* built-in EST/SCEP test server */
 
-/* Platform: each needs its HAVE or WOLFCERT_NO_* form; NO_* compiles the
- * backend out and the application supplies its own transport / store ops. */
-#define WOLFCERT_HAVE_POSIX_STORE 1
+/* Platform: needs its HAVE or WOLFCERT_NO_* form; NO_* compiles the
+ * transport out and the application supplies its own. */
 #define WOLFCERT_HAVE_BUILTIN_TRANSPORT 1
 
 /* Key algorithms (at least one) */

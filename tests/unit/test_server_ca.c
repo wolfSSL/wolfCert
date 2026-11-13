@@ -49,25 +49,27 @@
 
 /* SCEP is absent from NO_RSA builds, and EST needs a server identity. */
 #if defined(WOLFCERT_HAVE_EST)
-    #define CA_STORE_PROTO WOLFCERT_PROTO_EST
-    #define CA_STORE_NEEDS_TLS 1
+    #define CA_TEST_PROTO WOLFCERT_PROTO_EST
+    #define CA_TEST_NEEDS_TLS 1
 #else
-    #define CA_STORE_PROTO WOLFCERT_PROTO_SCEP
-    #define CA_STORE_NEEDS_TLS 0
+    #define CA_TEST_PROTO WOLFCERT_PROTO_SCEP
+    #define CA_TEST_NEEDS_TLS 0
 #endif
 
-#if CA_STORE_NEEDS_TLS
+#if CA_TEST_NEEDS_TLS
 static uint8_t* srv_cert_pem;
 static size_t   srv_cert_pem_len;
 static uint8_t* srv_key_pem;
 static size_t   srv_key_pem_len;
 #endif
 
-static void ca_store_cfg(WolfCertServerCfgSrv* cfg, WolfCertStoreOps* store)
+/* A server config issuing from cert and key; both NULL generates a CA. */
+static void ca_cfg(WolfCertServerCfgSrv* cfg, const WolfCertBuffer* cert,
+                   const WolfCertBuffer* key)
 {
     memset(cfg, 0, sizeof(*cfg));
-    cfg->protocol     = CA_STORE_PROTO;
-#if CA_STORE_NEEDS_TLS
+    cfg->protocol     = CA_TEST_PROTO;
+#if CA_TEST_NEEDS_TLS
     cfg->tls_cert_pem     = srv_cert_pem;
     cfg->tls_cert_pem_len = srv_cert_pem_len;
     cfg->tls_key_pem      = srv_key_pem;
@@ -75,336 +77,181 @@ static void ca_store_cfg(WolfCertServerCfgSrv* cfg, WolfCertStoreOps* store)
     cfg->est_allow_anonymous_enroll = 1;
 #endif
     cfg->bind_host    = "127.0.0.1";
-    cfg->ca_store     = store;
     cfg->ca_key_type  = CA_KEY_TYPE;
     cfg->ca_key_param = CA_KEY_PARAM;
+    if (cert != NULL) {
+        cfg->ca_cert     = cert->data;
+        cfg->ca_cert_len = cert->len;
+    }
+    if (key != NULL) {
+        cfg->ca_key     = key->data;
+        cfg->ca_key_len = key->len;
+    }
 }
 
-/* Stub backend whose reads and writes all return the configured error. */
-typedef struct {
-    int read_rc;
-    int write_rc;
-} StubCtx;
-
-static int stub_read(void* ctx_, const char* key, WolfCertBuffer* out)
+static int ca_key_param(WolfCertKeyType t)
 {
-    (void)key;
-    (void)out;
-    return ((StubCtx*)ctx_)->read_rc;
+    if (t == WOLFCERT_KEY_RSA)
+        return 2048;
+    if (t == WOLFCERT_KEY_ECC)
+        return 256;
+    return 0;
 }
 
-static int stub_write(void* ctx_, const char* key, const uint8_t* data,
-                      size_t len, int sensitive)
+/* A server start generates a CA of type; the pair is copied out as enc. */
+static int generate_ca(WolfCertKeyType type, WolfCertEncoding enc,
+                       WolfCertBuffer* cert, WolfCertBuffer* key)
 {
-    (void)key;
-    (void)data;
-    (void)len;
-    (void)sensitive;
-    return ((StubCtx*)ctx_)->write_rc;
+    WolfCertServerCfgSrv cfg;
+    WolfCertServer* srv = NULL;
+    int rc;
+
+    ca_cfg(&cfg, NULL, NULL);
+    cfg.ca_key_type  = type;
+    cfg.ca_key_param = ca_key_param(type);
+    REQUIRE(wolfcert_server_start(&cfg, &srv) == WOLFCERT_OK);
+    rc = wolfcert_server_get_ca(srv, enc, cert, key);
+    wolfcert_server_free(srv);
+    REQUIRE(rc == WOLFCERT_OK);
+    return 0;
 }
 
-static int stub_remove(void* ctx_, const char* key)
+/* A server start with cert and key gets want and, on failure, no server. */
+static int start_gets(const WolfCertBuffer* cert, const WolfCertBuffer* key,
+                      int want)
 {
-    (void)ctx_;
-    (void)key;
-    return WOLFCERT_OK;
-}
+    WolfCertServerCfgSrv cfg;
+    WolfCertServer* srv = NULL;
 
-static void stub_store(WolfCertStoreOps* ops, StubCtx* ctx)
-{
-    memset(ops, 0, sizeof(*ops));
-    ops->read   = stub_read;
-    ops->write  = stub_write;
-    ops->remove = stub_remove;
-    ops->ctx    = ctx;
+    ca_cfg(&cfg, cert, key);
+    REQUIRE(wolfcert_server_start(&cfg, &srv) == want);
+    if (want != WOLFCERT_OK)
+        REQUIRE(srv == NULL);
+    wolfcert_server_free(srv);
+    return 0;
 }
 
 static int test_corrupt_ca_rejected(void)
 {
-    WolfCertStoreOps* store = wolfcert_store_memory_open(NULL);
-    REQUIRE(store != NULL);
+    uint8_t junk[] = { 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA };
+    WolfCertBuffer bad = { junk, sizeof(junk), NULL };
 
-    const uint8_t junk[] = { 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA };
-    REQUIRE(store->write(store->ctx, "ca.cert.der", junk, sizeof(junk), 0) == WOLFCERT_OK);
-    REQUIRE(store->write(store->ctx, "ca.key.der", junk, sizeof(junk), 1) == WOLFCERT_OK);
+    return start_gets(&bad, &bad, WOLFCERT_ERR_PARSE);
+}
 
+/* One half of the pair, or an empty half, is refused before any work. */
+static int test_half_ca_rejected(void)
+{
+    uint8_t der[] = { 0x30, 0x03, 0x02, 0x01, 0x01 };
+    WolfCertBuffer half  = { der, sizeof(der), NULL };
+    WolfCertBuffer empty = { der, 0, NULL };
     WolfCertServerCfgSrv cfg;
     WolfCertServer* srv = NULL;
 
-    ca_store_cfg(&cfg, store);
-    REQUIRE(wolfcert_server_start(&cfg, &srv) == WOLFCERT_ERR_PARSE);
-    REQUIRE(srv == NULL);
-
-    wolfcert_store_memory_close(store);
-    return 0;
-}
-
-static int test_load_io_error_rejected(void)
-{
-    StubCtx ctx = { WOLFCERT_ERR_IO, WOLFCERT_OK };
-    WolfCertStoreOps store;
-    WolfCertServerCfgSrv cfg;
-    WolfCertServer* srv = NULL;
-
-    stub_store(&store, &ctx);
-    ca_store_cfg(&cfg, &store);
-    REQUIRE(wolfcert_server_start(&cfg, &srv) == WOLFCERT_ERR_IO);
-    REQUIRE(srv == NULL);
-    return 0;
-}
-
-static int test_save_failure_rejected(void)
-{
-    StubCtx ctx = { WOLFCERT_ERR_NOT_FOUND, WOLFCERT_ERR_IO };
-    WolfCertStoreOps store;
-    WolfCertServerCfgSrv cfg;
-    WolfCertServer* srv = NULL;
-
-    stub_store(&store, &ctx);
-    ca_store_cfg(&cfg, &store);
-    REQUIRE(wolfcert_server_start(&cfg, &srv) == WOLFCERT_ERR_IO);
-    REQUIRE(srv == NULL);
-    return 0;
-}
-
-/* Stub backend whose certificate and key reads fail differently. */
-typedef struct {
-    int cert_rc;
-    int key_rc;
-} SplitCtx;
-
-static int split_read(void* ctx_, const char* key, WolfCertBuffer* out)
-{
-    SplitCtx* ctx = (SplitCtx*)ctx_;
-
-    (void)out;
-    return strcmp(key, "ca.cert.der") == 0 ? ctx->cert_rc : ctx->key_rc;
-}
-
-/* wolfcert_server_start with cert and key reads returning cert_rc and key_rc
- * gets want and no server. */
-static int mixed_read_failure(int cert_rc, int key_rc, int want)
-{
-    SplitCtx ctx = { cert_rc, key_rc };
-    WolfCertStoreOps store;
-    WolfCertServerCfgSrv cfg;
-    WolfCertServer* srv = NULL;
-
-    memset(&store, 0, sizeof(store));
-    store.read   = split_read;
-    store.write  = stub_write;
-    store.remove = stub_remove;
-    store.ctx    = &ctx;
-
-    ca_store_cfg(&cfg, &store);
-    REQUIRE(wolfcert_server_start(&cfg, &srv) == want);
-    REQUIRE(srv == NULL);
-    return 0;
-}
-
-static int test_mixed_read_failure(void)
-{
-    if (mixed_read_failure(WOLFCERT_ERR_NOT_FOUND, WOLFCERT_ERR_IO,
-                           WOLFCERT_ERR_IO))
+    if (start_gets(&half, NULL, WOLFCERT_ERR_BAD_ARG))
         return 1;
-    if (mixed_read_failure(WOLFCERT_ERR_IO, WOLFCERT_ERR_NOT_FOUND,
-                           WOLFCERT_ERR_IO))
+    if (start_gets(NULL, &half, WOLFCERT_ERR_BAD_ARG))
         return 1;
-    if (mixed_read_failure(WOLFCERT_ERR_NOT_FOUND, WOLFCERT_ERR_MEMORY,
-                           WOLFCERT_ERR_MEMORY))
+    if (start_gets(&half, &empty, WOLFCERT_ERR_BAD_ARG))
+        return 1;
+    if (start_gets(&empty, &half, WOLFCERT_ERR_BAD_ARG))
         return 1;
 
-    /* Cert NOT_FOUND beside a good key read: start gets PARSE. */
-    return mixed_read_failure(WOLFCERT_ERR_NOT_FOUND, WOLFCERT_OK,
-                              WOLFCERT_ERR_PARSE);
+    /* A length without its pointer is not a request to generate a CA. */
+    ca_cfg(&cfg, NULL, NULL);
+    cfg.ca_cert_len = sizeof(der);
+    cfg.ca_key_len  = sizeof(der);
+    REQUIRE(wolfcert_server_start(&cfg, &srv) == WOLFCERT_ERR_BAD_ARG);
+    REQUIRE(srv == NULL);
+    return 0;
 }
 
-/* Backend that forwards to a real store but fails the nth write. */
-typedef struct {
-    WolfCertStoreOps* inner;
-    int               writes;
-    int               fail_at;
-} FlakyCtx;
-
-static int flaky_read(void* ctx_, const char* key, WolfCertBuffer* out)
+/* A generated CA handed back in, as DER or PEM, is the one the server uses. */
+static int test_ca_round_trip(void)
 {
-    WolfCertStoreOps* in = ((FlakyCtx*)ctx_)->inner;
-
-    return in->read(in->ctx, key, out);
-}
-
-static int flaky_write(void* ctx_, const char* key, const uint8_t* data,
-                       size_t len, int sensitive)
-{
-    FlakyCtx* ctx = (FlakyCtx*)ctx_;
-
-    if (++ctx->writes == ctx->fail_at)
-        return WOLFCERT_ERR_IO;
-
-    return ctx->inner->write(ctx->inner->ctx, key, data, len, sensitive);
-}
-
-static int flaky_remove(void* ctx_, const char* key)
-{
-    WolfCertStoreOps* in = ((FlakyCtx*)ctx_)->inner;
-
-    return in->remove(in->ctx, key);
-}
-
-static int failing_remove(void* ctx_, const char* key)
-{
-    (void)ctx_;
-    (void)key;
-    return WOLFCERT_ERR_IO;
-}
-
-/* A failed key write removes the certificate already written. */
-static int test_save_rollback(void)
-{
-    WolfCertStoreOps* mem = wolfcert_store_memory_open(NULL);
-    FlakyCtx fctx;
-    WolfCertStoreOps store;
+    WolfCertBuffer der_cert = { 0 };
+    WolfCertBuffer der_key  = { 0 };
+    WolfCertBuffer pem_cert = { 0 };
+    WolfCertBuffer pem_key  = { 0 };
+    WolfCertBuffer again    = { 0 };
     WolfCertServerCfgSrv cfg;
     WolfCertServer* srv = NULL;
-    WolfCertBuffer left = { 0 };
+    int rc;
 
-    REQUIRE(mem != NULL);
-
-    memset(&fctx, 0, sizeof(fctx));
-    fctx.inner   = mem;
-    fctx.fail_at = 2;
-
-    memset(&store, 0, sizeof(store));
-    store.read   = flaky_read;
-    store.write  = flaky_write;
-    store.remove = flaky_remove;
-    store.ctx    = &fctx;
-
-    ca_store_cfg(&cfg, &store);
-    REQUIRE(wolfcert_server_start(&cfg, &srv) == WOLFCERT_ERR_IO);
-    REQUIRE(srv == NULL);
-    REQUIRE(mem->read(mem->ctx, "ca.cert.der", &left) == WOLFCERT_ERR_NOT_FOUND);
-
-    /* The store is still empty, so the next start bootstraps normally. */
-    fctx.fail_at = 0;
+    ca_cfg(&cfg, NULL, NULL);
     REQUIRE(wolfcert_server_start(&cfg, &srv) == WOLFCERT_OK);
-    wolfcert_server_free(srv);
-    REQUIRE(mem->read(mem->ctx, "ca.cert.der", &left) == WOLFCERT_OK);
-
-    wolfcert_buffer_free(&left);
-    wolfcert_store_memory_close(mem);
-    return 0;
-}
-
-/* Key write fails with remove absent or failing: IO, a "rolled back"
- * message, and the next start gets PARSE. */
-static int rollback_unavailable(int have_remove)
-{
-    WolfCertStoreOps* mem = wolfcert_store_memory_open(NULL);
-    FlakyCtx fctx;
-    WolfCertStoreOps store;
-    WolfCertServerCfgSrv cfg;
-    WolfCertServer* srv = NULL;
-    WolfCertBuffer left = { 0 };
-
-    REQUIRE(mem != NULL);
-
-    memset(&fctx, 0, sizeof(fctx));
-    fctx.inner   = mem;
-    fctx.fail_at = 2;
-
-    memset(&store, 0, sizeof(store));
-    store.read   = flaky_read;
-    store.write  = flaky_write;
-    store.remove = have_remove ? failing_remove : NULL;
-    store.ctx    = &fctx;
-
-    ca_store_cfg(&cfg, &store);
-    REQUIRE(wolfcert_server_start(&cfg, &srv) == WOLFCERT_ERR_IO);
-    REQUIRE(srv == NULL);
-    REQUIRE(strstr(wolfcert_last_error_message(), "rolled back") != NULL);
-
-    /* The certificate really is still there, and the next start refuses it. */
-    REQUIRE(mem->read(mem->ctx, "ca.cert.der", &left) == WOLFCERT_OK);
-    wolfcert_buffer_free(&left);
-
-    fctx.fail_at = 0;
-    REQUIRE(wolfcert_server_start(&cfg, &srv) == WOLFCERT_ERR_PARSE);
-    REQUIRE(srv == NULL);
-
-    wolfcert_store_memory_close(mem);
-    return 0;
-}
-
-static int test_rollback_unavailable(void)
-{
-    if (rollback_unavailable(0))
-        return 1;
-
-    return rollback_unavailable(1);
-}
-
-/* A store holding one half of the pair fails to start. */
-static int partial_store_rejected(const char* present)
-{
-    WolfCertStoreOps* store = wolfcert_store_memory_open(NULL);
-    const uint8_t stored[] = { 0x30, 0x03, 0x02, 0x01, 0x01 };
-    WolfCertBuffer left = { 0 };
-    WolfCertServerCfgSrv cfg;
-    WolfCertServer* srv = NULL;
-
-    REQUIRE(store != NULL);
-    REQUIRE(store->write(store->ctx, present, stored, sizeof(stored), 0)
-            == WOLFCERT_OK);
-
-    ca_store_cfg(&cfg, store);
-    REQUIRE(wolfcert_server_start(&cfg, &srv) == WOLFCERT_ERR_PARSE);
-    REQUIRE(srv == NULL);
-
-    /* The survivor is still exactly what was stored. */
-    REQUIRE(store->read(store->ctx, present, &left) == WOLFCERT_OK);
-    REQUIRE(left.len == sizeof(stored));
-    REQUIRE(memcmp(left.data, stored, left.len) == 0);
-
-    wolfcert_buffer_free(&left);
-    wolfcert_store_memory_close(store);
-    return 0;
-}
-
-static int test_partial_store_rejected(void)
-{
-    if (partial_store_rejected("ca.cert.der"))
-        return 1;
-
-    return partial_store_rejected("ca.key.der");
-}
-
-static int test_ca_persists_across_starts(void)
-{
-    WolfCertStoreOps* store = wolfcert_store_memory_open(NULL);
-    REQUIRE(store != NULL);
-
-    WolfCertServerCfgSrv cfg;
-    WolfCertServer* srv = NULL;
-    WolfCertBuffer first = { 0 };
-    WolfCertBuffer second = { 0 };
-
-    ca_store_cfg(&cfg, store);
-    REQUIRE(wolfcert_server_start(&cfg, &srv) == WOLFCERT_OK);
+    REQUIRE(wolfcert_server_get_ca(srv, WOLFCERT_ENCODING_DER, &der_cert,
+                                   &der_key) == WOLFCERT_OK);
+    REQUIRE(wolfcert_server_get_ca(srv, WOLFCERT_ENCODING_PEM, &pem_cert,
+                                   &pem_key) == WOLFCERT_OK);
     wolfcert_server_free(srv);
     srv = NULL;
-    REQUIRE(store->read(store->ctx, "ca.cert.der", &first) == WOLFCERT_OK);
+    REQUIRE(der_cert.data[0] == 0x30 && der_key.data[0] == 0x30);
+    REQUIRE(memcmp(pem_cert.data, "-----BEGIN CERTIFICATE-----", 27) == 0);
+    REQUIRE(memcmp(pem_key.data, "-----BEGIN ", 11) == 0);
 
+    ca_cfg(&cfg, &pem_cert, &pem_key);
     REQUIRE(wolfcert_server_start(&cfg, &srv) == WOLFCERT_OK);
+    rc = wolfcert_server_get_ca(srv, WOLFCERT_ENCODING_DER, &again, NULL);
     wolfcert_server_free(srv);
-    REQUIRE(store->read(store->ctx, "ca.cert.der", &second) == WOLFCERT_OK);
+    srv = NULL;
+    REQUIRE(rc == WOLFCERT_OK);
+    REQUIRE(again.len == der_cert.len);
+    REQUIRE(memcmp(again.data, der_cert.data, der_cert.len) == 0);
+    wolfcert_buffer_free(&again);
 
-    REQUIRE(first.len == second.len);
-    REQUIRE(memcmp(first.data, second.data, first.len) == 0);
+    ca_cfg(&cfg, &der_cert, &der_key);
+    REQUIRE(wolfcert_server_start(&cfg, &srv) == WOLFCERT_OK);
+    rc = wolfcert_server_get_ca(srv, WOLFCERT_ENCODING_DER, &again, NULL);
+    wolfcert_server_free(srv);
+    srv = NULL;
+    REQUIRE(rc == WOLFCERT_OK);
+    REQUIRE(again.len == der_cert.len);
+    REQUIRE(memcmp(again.data, der_cert.data, der_cert.len) == 0);
+    wolfcert_buffer_free(&again);
 
-    wolfcert_buffer_free(&first);
-    wolfcert_buffer_free(&second);
-    wolfcert_store_memory_close(store);
+    /* Each half may use its own encoding. */
+    ca_cfg(&cfg, &pem_cert, &der_key);
+    REQUIRE(wolfcert_server_start(&cfg, &srv) == WOLFCERT_OK);
+    rc = wolfcert_server_get_ca(srv, WOLFCERT_ENCODING_DER, &again, NULL);
+    wolfcert_server_free(srv);
+    REQUIRE(rc == WOLFCERT_OK);
+    REQUIRE(again.len == der_cert.len);
+    REQUIRE(memcmp(again.data, der_cert.data, der_cert.len) == 0);
+
+    wolfcert_buffer_free(&again);
+    wolfcert_buffer_free(&der_cert);
+    wolfcert_buffer_free_secure(&der_key);
+    wolfcert_buffer_free(&pem_cert);
+    wolfcert_buffer_free_secure(&pem_key);
+    return 0;
+}
+
+static int test_get_ca_args(void)
+{
+    WolfCertServerCfgSrv cfg;
+    WolfCertServer* srv = NULL;
+    WolfCertBuffer cert = { 0 };
+    WolfCertBuffer key  = { 0 };
+
+    ca_cfg(&cfg, NULL, NULL);
+    REQUIRE(wolfcert_server_start(&cfg, &srv) == WOLFCERT_OK);
+
+    REQUIRE(wolfcert_server_get_ca(NULL, WOLFCERT_ENCODING_DER, &cert, &key)
+            == WOLFCERT_ERR_BAD_ARG);
+    REQUIRE(wolfcert_server_get_ca(srv, WOLFCERT_ENCODING_DER, NULL, &key)
+            == WOLFCERT_ERR_BAD_ARG);
+    REQUIRE(wolfcert_server_get_ca(srv, (WolfCertEncoding)7, &cert, &key)
+            == WOLFCERT_ERR_BAD_ARG);
+    REQUIRE(strstr(wolfcert_last_error_message(), "encoding") != NULL);
+    REQUIRE(cert.data == NULL && key.data == NULL);
+
+    REQUIRE(wolfcert_server_get_ca(srv, WOLFCERT_ENCODING_PEM, &cert, NULL)
+            == WOLFCERT_OK);
+    REQUIRE(cert.data != NULL && cert.len > 0);
+
+    wolfcert_buffer_free(&cert);
+    wolfcert_server_free(srv);
     return 0;
 }
 
@@ -432,7 +279,8 @@ static void* fail_one_realloc(void* ptr, size_t sz)
 /* A start that survives any single failed allocation keeps every credential. */
 static int test_start_oom_keeps_credentials(void)
 {
-    WolfCertStoreOps* store = wolfcert_store_memory_open(NULL);
+    WolfCertBuffer cert = { 0 };
+    WolfCertBuffer key  = { 0 };
     WolfCertServerCfgSrv cfg;
     WolfCertServer* srv = NULL;
     wolfSSL_Malloc_cb  mf;
@@ -441,25 +289,27 @@ static int test_start_oom_keeps_credentials(void)
     int fail_at;
     int rc;
 
-    REQUIRE(store != NULL);
-    ca_store_cfg(&cfg, store);
+    if (generate_ca(CA_KEY_TYPE, WOLFCERT_ENCODING_PEM, &cert, &key))
+        return 1;
+    ca_cfg(&cfg, &cert, &key);
     cfg.http_basic_user    = "alice";
     cfg.http_basic_pass    = "secret";
     cfg.challenge_password = "otp";
-    REQUIRE(wolfcert_server_start(&cfg, &srv) == WOLFCERT_OK);
-    wolfcert_server_free(srv);
 
     REQUIRE(wolfSSL_GetAllocators(&mf, &ff, &rf) == 0);
     for (fail_at = 0; ; fail_at++) {
         srv = NULL;
         g_fail_at = fail_at;
         g_allocs = 0;
+        wolfcert_clear_error();
         REQUIRE(wolfSSL_SetAllocators(fail_one_malloc, fail_one_free,
                                       fail_one_realloc) == 0);
         rc = wolfcert_server_start(&cfg, &srv);
         REQUIRE(wolfSSL_SetAllocators(mf, ff, rf) == 0);
         if (rc != WOLFCERT_OK) {
             REQUIRE(srv == NULL);
+            REQUIRE(strstr(wolfcert_last_error_message(), "does not match")
+                    == NULL);
             continue;
         }
         REQUIRE(srv->cfg_basic_user != NULL &&
@@ -475,7 +325,8 @@ static int test_start_oom_keeps_credentials(void)
     g_fail_at = -1;
     REQUIRE(fail_at > 4);
 
-    wolfcert_store_memory_close(store);
+    wolfcert_buffer_free(&cert);
+    wolfcert_buffer_free_secure(&key);
     return 0;
 }
 #endif
@@ -506,18 +357,8 @@ static const WolfCertKeyType CA_KEY_TYPES[] = {
 #endif
 };
 
-static int ca_key_param(WolfCertKeyType t)
-{
-    if (t == WOLFCERT_KEY_RSA)
-        return 2048;
-    if (t == WOLFCERT_KEY_ECC)
-        return 256;
-    return 0;
-}
-
-/* The CA reloaded from store issues a leaf that verifies against it; the
- * cert/key match on load alone passes a key with no public half. */
-static int reloaded_ca_signs(WolfCertStoreOps* store)
+/* The loaded CA issues a leaf that verifies against it. */
+static int loaded_ca_signs(const WolfCertBuffer* cert, const WolfCertBuffer* key)
 {
     /* Any compiled algorithm serves as the leaf; the first entry always is. */
     WolfCertKeyCfg kcfg = { .type = CA_KEY_TYPES[0],
@@ -536,7 +377,8 @@ static int reloaded_ca_signs(WolfCertStoreOps* store)
     REQUIRE(wolfcert_csr_build(leaf_key, &meta, &csr) == WOLFCERT_OK);
     wolfcert_key_free(leaf_key);
 
-    REQUIRE(wolfcert_ca_load(&ca, store, NULL) == WOLFCERT_OK);
+    REQUIRE(wolfcert_ca_load(&ca, cert->data, cert->len, key->data, key->len,
+                             NULL) == WOLFCERT_OK);
     rc = wolfcert_ca_issue(&ca, csr.data, csr.len, &issued, &issued_len);
     wolfcert_buffer_free(&csr);
     REQUIRE(rc == WOLFCERT_OK);
@@ -556,78 +398,132 @@ static int reloaded_ca_signs(WolfCertStoreOps* store)
     return 0;
 }
 
+/* Every algorithm's CA loads back from both encodings and still signs. */
 static int test_every_alg_reloads(void)
 {
     size_t i;
+    int e;
 
     for (i = 0; i < sizeof(CA_KEY_TYPES) / sizeof(CA_KEY_TYPES[0]); ++i) {
-        WolfCertStoreOps* store = wolfcert_store_memory_open(NULL);
+        WolfCertBuffer cert[2] = { { 0 }, { 0 } };
+        WolfCertBuffer key[2]  = { { 0 }, { 0 } };
         WolfCertServerCfgSrv cfg;
         WolfCertServer* srv = NULL;
+        int rc;
 
-        REQUIRE(store != NULL);
-        ca_store_cfg(&cfg, store);
+        ca_cfg(&cfg, NULL, NULL);
         cfg.ca_key_type  = CA_KEY_TYPES[i];
         cfg.ca_key_param = ca_key_param(CA_KEY_TYPES[i]);
         REQUIRE(wolfcert_server_start(&cfg, &srv) == WOLFCERT_OK);
+        rc = wolfcert_server_get_ca(srv, WOLFCERT_ENCODING_DER, &cert[0],
+                                    &key[0]);
+        if (rc == WOLFCERT_OK)
+            rc = wolfcert_server_get_ca(srv, WOLFCERT_ENCODING_PEM, &cert[1],
+                                        &key[1]);
         wolfcert_server_free(srv);
-        srv = NULL;
+        REQUIRE(rc == WOLFCERT_OK);
 
-        /* Second start reloads the saved pair and checks the cert/key match. */
-        REQUIRE(wolfcert_server_start(&cfg, &srv) == WOLFCERT_OK);
-        wolfcert_server_free(srv);
-
-        if (reloaded_ca_signs(store))
-            return 1;
-
-        wolfcert_store_memory_close(store);
+        for (e = 0; e < 2; ++e) {
+            if (start_gets(&cert[e], &key[e], WOLFCERT_OK))
+                return 1;
+            if (loaded_ca_signs(&cert[e], &key[e]))
+                return 1;
+            wolfcert_buffer_free(&cert[e]);
+            wolfcert_buffer_free_secure(&key[e]);
+        }
     }
     return 0;
 }
 
-/* A server start generates a CA into `store`; the pair is copied out. */
-static int generate_ca_into(WolfCertStoreOps* store, WolfCertKeyType type,
-                            WolfCertBuffer* cert, WolfCertBuffer* key)
+#ifdef WOLFCERT_HAVE_ECC
+/* A SEC1 CA key without its optional public point still loads. */
+static int test_ecc_key_without_public_point(void)
+{
+    WolfCertBuffer cert = { 0 };
+    WolfCertBuffer key  = { 0 };
+    WolfCertBuffer bare = { 0 };
+    ecc_key ek;
+    word32 idx = 0;
+    uint8_t der[256];
+    int n;
+
+    if (generate_ca(WOLFCERT_KEY_ECC, WOLFCERT_ENCODING_DER, &cert, &key))
+        return 1;
+    REQUIRE(wc_ecc_init(&ek) == 0);
+    REQUIRE(wc_EccPrivateKeyDecode(key.data, &idx, &ek, (word32)key.len) == 0);
+    n = wc_EccPrivateKeyToDer(&ek, der, sizeof(der));
+    wc_ecc_free(&ek);
+    REQUIRE(n > 0 && (size_t)n < key.len);
+
+    bare.data = der;
+    bare.len  = (size_t)n;
+    if (start_gets(&cert, &bare, WOLFCERT_OK))
+        return 1;
+
+    wc_ForceZero(der, sizeof(der));
+    wolfcert_buffer_free(&cert);
+    wolfcert_buffer_free_secure(&key);
+    return 0;
+}
+#endif
+
+#ifdef WOLFCERT_HAVE_SCEP
+/* With a split RA, get_ca returns the CA, not the RA certificate. */
+static int test_split_ra_get_ca_is_ca(void)
 {
     WolfCertServerCfgSrv cfg;
     WolfCertServer* srv = NULL;
+    WolfCertBuffer cert = { 0 };
+    DecodedCert dc;
+    int rc;
 
-    ca_store_cfg(&cfg, store);
-    cfg.ca_key_type  = type;
-    cfg.ca_key_param = ca_key_param(type);
+    ca_cfg(&cfg, NULL, NULL);
+    cfg.protocol      = WOLFCERT_PROTO_SCEP;
+    cfg.ca_key_type   = WOLFCERT_KEY_RSA;
+    cfg.ca_key_param  = 2048;
+    cfg.scep_split_ra = 1;
     REQUIRE(wolfcert_server_start(&cfg, &srv) == WOLFCERT_OK);
+    rc = wolfcert_server_get_ca(srv, WOLFCERT_ENCODING_DER, &cert, NULL);
     wolfcert_server_free(srv);
+    REQUIRE(rc == WOLFCERT_OK);
 
-    REQUIRE(store->read(store->ctx, "ca.cert.der", cert) == WOLFCERT_OK);
-    REQUIRE(store->read(store->ctx, "ca.key.der", key) == WOLFCERT_OK);
+    wc_InitDecodedCert(&dc, cert.data, (word32)cert.len, NULL);
+    rc = wc_ParseCert(&dc, CERT_TYPE, NO_VERIFY, NULL);
+    if (rc == 0 && !dc.isCA)
+        rc = -1;
+    wc_FreeDecodedCert(&dc);
+    wolfcert_buffer_free(&cert);
+    REQUIRE(rc == 0);
     return 0;
 }
+#endif
 
-/* Have the CA in store issue a CSR carrying san; *rc_out is the issue result. */
-static int issue_with_san(WolfCertStoreOps* store, const uint8_t* san,
-                          size_t san_len, int* rc_out, uint8_t** issued,
-                          size_t* issued_len)
+/* Have the CA in cert/key issue a CSR carrying san; *rc_out is the result. */
+static int issue_with_san(const WolfCertBuffer* cert, const WolfCertBuffer* key,
+                          const uint8_t* san, size_t san_len, int* rc_out,
+                          uint8_t** issued, size_t* issued_len)
 {
     WolfCertCa ca;
     WC_RNG rng;
-    test_signkey key;
+    test_signkey skey;
     Cert req;
     uint8_t csr[CTC_MAX_ALT_SIZE + 4096];
     int csr_len;
 
     REQUIRE(wc_InitRng(&rng) == 0);
-    REQUIRE(test_signkey_make(&key, &rng) == 0);
+    REQUIRE(test_signkey_make(&skey, &rng) == 0);
     REQUIRE(wc_InitCert(&req) == 0);
     strncpy(req.subject.commonName, "san-leaf", CTC_NAME_SIZE - 1);
     memcpy(req.altNames, san, san_len);
     req.altNamesSz = (int)san_len;
     req.sigType = TEST_CERT_SIGTYPE;
-    csr_len = test_sign_certreq(&req, csr, (int)sizeof(csr), &key, &rng);
-    test_signkey_free(&key);
+    csr_len = test_sign_certreq(&req, csr, (int)sizeof(csr), &skey, &rng);
+    test_signkey_free(&skey);
     wc_FreeRng(&rng);
     REQUIRE(csr_len > 0);
 
-    REQUIRE(wolfcert_ca_load(&ca, store, NULL) == WOLFCERT_OK);
+    REQUIRE(wolfcert_ca_load(&ca, cert->data, cert->len, key->data, key->len,
+                             NULL) == WOLFCERT_OK);
     *rc_out = wolfcert_ca_issue(&ca, csr, (size_t)csr_len, issued, issued_len);
     wolfcert_ca_free(&ca);
     return 0;
@@ -648,7 +544,6 @@ static int test_issued_san_verbatim(void)
         0xa4, 0x10, 0x30, 0x0e, 0x31, 0x0c, 0x30, 0x0a, 0x06, 0x03, 0x55, 0x04,
         0x03, 0x0c, 0x03, 'd', 'i', 'r'
     };
-    WolfCertStoreOps* store = wolfcert_store_memory_open(NULL);
     WolfCertBuffer ca_cert = { 0 };
     WolfCertBuffer ca_key = { 0 };
     uint8_t* issued = NULL;
@@ -660,13 +555,11 @@ static int test_issued_san_verbatim(void)
     size_t big_len = 4;
     int rc = -1;
 
-    REQUIRE(store != NULL);
-    REQUIRE(generate_ca_into(store, CA_KEY_TYPES[0], &ca_cert, &ca_key) == 0);
-    wolfcert_buffer_free(&ca_cert);
-    wolfcert_buffer_free(&ca_key);
+    if (generate_ca(CA_KEY_TYPES[0], WOLFCERT_ENCODING_DER, &ca_cert, &ca_key))
+        return 1;
 
-    REQUIRE(issue_with_san(store, dir_san, sizeof(dir_san), &rc, &issued,
-                           &issued_len) == 0);
+    REQUIRE(issue_with_san(&ca_cert, &ca_key, dir_san, sizeof(dir_san), &rc,
+                           &issued, &issued_len) == 0);
     REQUIRE(rc == WOLFCERT_ERR_UNSUPPORTED);
 
     /* Over 8 KB of SAN in few entries, so a static-memory pool can parse it. */
@@ -684,14 +577,15 @@ static int test_issued_san_verbatim(void)
     big_san[1] = 0x82;
     big_san[2] = (uint8_t)((big_len - 4) >> 8);
     big_san[3] = (uint8_t)(big_len - 4);
-    REQUIRE(issue_with_san(store, big_san, big_len, &rc, &issued,
+    REQUIRE(issue_with_san(&ca_cert, &ca_key, big_san, big_len, &rc, &issued,
                            &issued_len) == 0);
     REQUIRE(rc == WOLFCERT_OK);
-    WOLFCERT_XFREE(issued, NULL);
+    WOLFCERT_XFREE(issued, wolfcert_default_heap());
     issued = NULL;
-    REQUIRE(issue_with_san(store, san, sizeof(san), &rc, &issued,
+    REQUIRE(issue_with_san(&ca_cert, &ca_key, san, sizeof(san), &rc, &issued,
                            &issued_len) == 0);
-    wolfcert_store_memory_close(store);
+    wolfcert_buffer_free(&ca_cert);
+    wolfcert_buffer_free_secure(&ca_key);
     REQUIRE(rc == WOLFCERT_OK);
 
     wc_InitDecodedCert(&dc, issued, (word32)issued_len, NULL);
@@ -702,51 +596,31 @@ static int test_issued_san_verbatim(void)
                     memcmp(got, san, sizeof(san)) != 0))
         rc = -1;
     wc_FreeDecodedCert(&dc);
-    WOLFCERT_XFREE(issued, NULL);
+    WOLFCERT_XFREE(issued, wolfcert_default_heap());
     REQUIRE(rc == 0);
     return 0;
 }
 
 static int mismatched_ca_rejected(WolfCertKeyType type)
 {
-    WolfCertStoreOps* src_a = wolfcert_store_memory_open(NULL);
-    WolfCertStoreOps* src_b = wolfcert_store_memory_open(NULL);
-    WolfCertStoreOps* mixed = wolfcert_store_memory_open(NULL);
     WolfCertBuffer cert_a = { 0 };
     WolfCertBuffer key_a  = { 0 };
     WolfCertBuffer cert_b = { 0 };
     WolfCertBuffer key_b  = { 0 };
-    WolfCertServerCfgSrv cfg;
-    WolfCertServer* srv = NULL;
 
-    REQUIRE(src_a != NULL);
-    REQUIRE(src_b != NULL);
-    REQUIRE(mixed != NULL);
-
-    if (generate_ca_into(src_a, type, &cert_a, &key_a))
+    if (generate_ca(type, WOLFCERT_ENCODING_DER, &cert_a, &key_a))
         return 1;
-    if (generate_ca_into(src_b, type, &cert_b, &key_b))
+    if (generate_ca(type, WOLFCERT_ENCODING_DER, &cert_b, &key_b))
         return 1;
     REQUIRE(key_a.len != key_b.len || memcmp(key_a.data, key_b.data, key_a.len) != 0);
 
-    REQUIRE(mixed->write(mixed->ctx, "ca.cert.der", cert_a.data, cert_a.len, 0)
-            == WOLFCERT_OK);
-    REQUIRE(mixed->write(mixed->ctx, "ca.key.der", key_b.data, key_b.len, 1)
-            == WOLFCERT_OK);
-
-    ca_store_cfg(&cfg, mixed);
-    cfg.ca_key_type  = type;
-    cfg.ca_key_param = ca_key_param(type);
-    REQUIRE(wolfcert_server_start(&cfg, &srv) == WOLFCERT_ERR_PARSE);
-    REQUIRE(srv == NULL);
+    if (start_gets(&cert_a, &key_b, WOLFCERT_ERR_PARSE))
+        return 1;
 
     wolfcert_buffer_free(&cert_a);
-    wolfcert_buffer_free(&key_a);
+    wolfcert_buffer_free_secure(&key_a);
     wolfcert_buffer_free(&cert_b);
-    wolfcert_buffer_free(&key_b);
-    wolfcert_store_memory_close(src_a);
-    wolfcert_store_memory_close(src_b);
-    wolfcert_store_memory_close(mixed);
+    wolfcert_buffer_free_secure(&key_b);
     return 0;
 }
 
@@ -764,15 +638,12 @@ static int test_mismatched_ca_rejected(void)
 /* The generated CA's key usages and critical basicConstraints. */
 static int ca_key_usage_set(WolfCertKeyType type)
 {
-    WolfCertStoreOps* store = wolfcert_store_memory_open(NULL);
     WolfCertBuffer cert = { 0 };
     WolfCertBuffer key  = { 0 };
     DecodedCert dc;
     int rc = 0;
 
-    REQUIRE(store != NULL);
-
-    if (generate_ca_into(store, type, &cert, &key))
+    if (generate_ca(type, WOLFCERT_ENCODING_DER, &cert, &key))
         return 1;
 
     wc_InitDecodedCert(&dc, cert.data, (word32)cert.len, NULL);
@@ -795,8 +666,7 @@ static int ca_key_usage_set(WolfCertKeyType type)
 
     wc_FreeDecodedCert(&dc);
     wolfcert_buffer_free(&cert);
-    wolfcert_buffer_free(&key);
-    wolfcert_store_memory_close(store);
+    wolfcert_buffer_free_secure(&key);
 
     REQUIRE(rc == 0);
     return 0;
@@ -815,35 +685,120 @@ static int test_ca_key_usage(void)
 
 static int test_corrupt_ca_cert_rejected(void)
 {
-    WolfCertStoreOps* src   = wolfcert_store_memory_open(NULL);
-    WolfCertStoreOps* mixed = wolfcert_store_memory_open(NULL);
+    uint8_t junk[] = { 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA };
+    WolfCertBuffer bad  = { junk, sizeof(junk), NULL };
     WolfCertBuffer cert = { 0 };
     WolfCertBuffer key  = { 0 };
-    const uint8_t junk[] = { 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA };
-    WolfCertServerCfgSrv cfg;
-    WolfCertServer* srv = NULL;
+    WolfCertBuffer padded = { 0 };
 
-    REQUIRE(src != NULL);
-    REQUIRE(mixed != NULL);
+    if (generate_ca(CA_KEY_TYPE, WOLFCERT_ENCODING_DER, &cert, &key))
+        return 1;
+    if (start_gets(&bad, &key, WOLFCERT_ERR_PARSE))
+        return 1;
+    REQUIRE(strstr(wolfcert_last_error_message(), "ca_cert") != NULL);
+    if (start_gets(&cert, &bad, WOLFCERT_ERR_PARSE))
+        return 1;
+    REQUIRE(strstr(wolfcert_last_error_message(), "ca_key") != NULL);
 
-    if (generate_ca_into(src, CA_KEY_TYPE, &cert, &key))
+    /* DER that is not a certificate fails the same way. */
+    if (start_gets(&key, &key, WOLFCERT_ERR_PARSE))
         return 1;
 
-    REQUIRE(mixed->write(mixed->ctx, "ca.cert.der", junk, sizeof(junk), 0)
-            == WOLFCERT_OK);
-    REQUIRE(mixed->write(mixed->ctx, "ca.key.der", key.data, key.len, 1)
-            == WOLFCERT_OK);
+    /* So does a certificate with bytes after it. */
+    padded.data = (uint8_t*)malloc(cert.len + 1);
+    REQUIRE(padded.data != NULL);
+    memcpy(padded.data, cert.data, cert.len);
+    padded.data[cert.len] = 0;
+    padded.len = cert.len + 1;
+    if (start_gets(&padded, &key, WOLFCERT_ERR_PARSE))
+        return 1;
+    free(padded.data);
 
-    ca_store_cfg(&cfg, mixed);
-    REQUIRE(wolfcert_server_start(&cfg, &srv) == WOLFCERT_ERR_PARSE);
-    REQUIRE(srv == NULL);
+    /* And a DER key with bytes after it. */
+    padded.data = (uint8_t*)malloc(key.len + 1);
+    REQUIRE(padded.data != NULL);
+    memcpy(padded.data, key.data, key.len);
+    padded.data[key.len] = 0;
+    padded.len = key.len + 1;
+    if (start_gets(&cert, &padded, WOLFCERT_ERR_PARSE))
+        return 1;
+    REQUIRE(strstr(wolfcert_last_error_message(), "ca_key") != NULL);
+    wc_ForceZero(padded.data, (word32)padded.len);
+    free(padded.data);
 
     wolfcert_buffer_free(&cert);
-    wolfcert_buffer_free(&key);
-    wolfcert_store_memory_close(src);
-    wolfcert_store_memory_close(mixed);
+    wolfcert_buffer_free_secure(&key);
     return 0;
 }
+
+#if !defined(NO_PKCS8) && \
+    (defined(WOLFCERT_HAVE_RSA) || defined(WOLFCERT_HAVE_ECC))
+/* A PKCS#8 CA key comes back in the form its PEM label names. */
+static int test_pkcs8_ca_key_normalized(void)
+{
+#ifdef WOLFCERT_HAVE_RSA
+    const WolfCertKeyType type = WOLFCERT_KEY_RSA;
+    const int algo = RSAk;
+    const byte* curve = NULL;
+    word32 curve_sz = 0;
+    const char* label = "-----BEGIN RSA PRIVATE KEY-----";
+#else
+    const WolfCertKeyType type = WOLFCERT_KEY_ECC;
+    const int algo = ECDSAk;
+    const byte* curve = NULL;
+    word32 curve_sz = 0;
+    const char* label = "-----BEGIN EC PRIVATE KEY-----";
+#endif
+    WolfCertBuffer cert = { 0 };
+    WolfCertBuffer key  = { 0 };
+    WolfCertBuffer p8   = { 0 };
+    WolfCertBuffer out_cert = { 0 };
+    WolfCertBuffer out_key  = { 0 };
+    WolfCertServerCfgSrv cfg;
+    WolfCertServer* srv = NULL;
+    word32 p8_len = 0;
+    int rc;
+
+    if (generate_ca(type, WOLFCERT_ENCODING_DER, &cert, &key))
+        return 1;
+#ifndef WOLFCERT_HAVE_RSA
+    REQUIRE(wc_ecc_get_oid(ECC_SECP256R1_OID, &curve, &curve_sz) > 0);
+#endif
+    REQUIRE(wc_CreatePKCS8Key(NULL, &p8_len, key.data, (word32)key.len, algo,
+                              curve, curve_sz) == LENGTH_ONLY_E);
+    p8.data = (uint8_t*)malloc(p8_len);
+    REQUIRE(p8.data != NULL);
+    rc = wc_CreatePKCS8Key(p8.data, &p8_len, key.data, (word32)key.len, algo,
+                           curve, curve_sz);
+    REQUIRE(rc > 0);
+    p8.len = (size_t)rc;
+    REQUIRE(p8.len != key.len || memcmp(p8.data, key.data, key.len) != 0);
+
+    ca_cfg(&cfg, &cert, &p8);
+    REQUIRE(wolfcert_server_start(&cfg, &srv) == WOLFCERT_OK);
+    rc = wolfcert_server_get_ca(srv, WOLFCERT_ENCODING_DER, &out_cert,
+                                &out_key);
+    REQUIRE(rc == WOLFCERT_OK);
+    REQUIRE(out_key.len == key.len &&
+            memcmp(out_key.data, key.data, key.len) == 0);
+    wolfcert_buffer_free(&out_cert);
+    wolfcert_buffer_free_secure(&out_key);
+
+    rc = wolfcert_server_get_ca(srv, WOLFCERT_ENCODING_PEM, &out_cert,
+                                &out_key);
+    wolfcert_server_free(srv);
+    REQUIRE(rc == WOLFCERT_OK);
+    REQUIRE(out_key.len > strlen(label) &&
+            memcmp(out_key.data, label, strlen(label)) == 0);
+
+    wolfcert_buffer_free(&out_cert);
+    wolfcert_buffer_free_secure(&out_key);
+    free(p8.data);
+    wolfcert_buffer_free(&cert);
+    wolfcert_buffer_free_secure(&key);
+    return 0;
+}
+#endif
 
 #ifdef WOLFCERT_HAVE_ECC
 /* A self-signed non-CA certificate and its key. */
@@ -893,28 +848,16 @@ static int make_leaf_pair(WolfCertBuffer* cert_out, WolfCertBuffer* key_out)
 
 static int test_leaf_ca_rejected(void)
 {
-    WolfCertStoreOps* store = wolfcert_store_memory_open(NULL);
     WolfCertBuffer cert = { 0 };
     WolfCertBuffer key  = { 0 };
-    WolfCertServerCfgSrv cfg;
-    WolfCertServer* srv = NULL;
 
-    REQUIRE(store != NULL);
     if (make_leaf_pair(&cert, &key))
         return 1;
-
-    REQUIRE(store->write(store->ctx, "ca.cert.der", cert.data, cert.len, 0)
-            == WOLFCERT_OK);
-    REQUIRE(store->write(store->ctx, "ca.key.der", key.data, key.len, 1)
-            == WOLFCERT_OK);
-
-    ca_store_cfg(&cfg, store);
-    REQUIRE(wolfcert_server_start(&cfg, &srv) == WOLFCERT_ERR_PARSE);
-    REQUIRE(srv == NULL);
+    if (start_gets(&cert, &key, WOLFCERT_ERR_PARSE))
+        return 1;
 
     wolfcert_buffer_free(&cert);
-    wolfcert_buffer_free(&key);
-    wolfcert_store_memory_close(store);
+    wolfcert_buffer_free_secure(&key);
     return 0;
 }
 #endif /* WOLFCERT_HAVE_ECC */
@@ -926,26 +869,17 @@ static int test_bad_bind_host_rejected(void)
     };
     WolfCertServerCfgSrv cfg;
     WolfCertServer* srv = NULL;
-    WolfCertBuffer left = { 0 };
     size_t i;
 
     for (i = 0; i < sizeof(hosts) / sizeof(hosts[0]); i++) {
-        WolfCertStoreOps* mem = wolfcert_store_memory_open(NULL);
-        REQUIRE(mem != NULL);
-
-        ca_store_cfg(&cfg, mem);
+        ca_cfg(&cfg, NULL, NULL);
         cfg.bind_host = hosts[i];
         REQUIRE(wolfcert_server_start(&cfg, &srv) == WOLFCERT_ERR_BAD_ARG);
         REQUIRE(srv == NULL);
-        REQUIRE(mem->read(mem->ctx, "ca.cert.der", &left) ==
-                WOLFCERT_ERR_NOT_FOUND);
-        REQUIRE(mem->read(mem->ctx, "ca.key.der", &left) ==
-                WOLFCERT_ERR_NOT_FOUND);
-        wolfcert_store_memory_close(mem);
     }
 
     /* NULL binds every interface and must still start. */
-    ca_store_cfg(&cfg, NULL);
+    ca_cfg(&cfg, NULL, NULL);
     cfg.bind_host = NULL;
     REQUIRE(wolfcert_server_start(&cfg, &srv) == WOLFCERT_OK);
     REQUIRE(wolfcert_server_port(srv) != 0);
@@ -959,26 +893,18 @@ int main(void)
     REQUIRE(test_static_mem_init() == 0);
     REQUIRE(wolfcert_init(test_heap_hint()) == WOLFCERT_OK);
 
-#if CA_STORE_NEEDS_TLS
+#if CA_TEST_NEEDS_TLS
     REQUIRE(gen_server_identity(&srv_cert_pem, &srv_cert_pem_len,
                                 &srv_key_pem, &srv_key_pem_len) == 0);
 #endif
 
     if (test_corrupt_ca_rejected())
         return 1;
-    if (test_load_io_error_rejected())
+    if (test_half_ca_rejected())
         return 1;
-    if (test_save_failure_rejected())
+    if (test_ca_round_trip())
         return 1;
-    if (test_save_rollback())
-        return 1;
-    if (test_rollback_unavailable())
-        return 1;
-    if (test_mixed_read_failure())
-        return 1;
-    if (test_partial_store_rejected())
-        return 1;
-    if (test_ca_persists_across_starts())
+    if (test_get_ca_args())
         return 1;
 #if defined(USE_WOLFSSL_MEMORY) && !defined(WOLFSSL_STATIC_MEMORY) && \
     !defined(WOLFSSL_DEBUG_MEMORY)
@@ -987,10 +913,23 @@ int main(void)
 #endif
     if (test_every_alg_reloads())
         return 1;
+#ifdef WOLFCERT_HAVE_ECC
+    if (test_ecc_key_without_public_point())
+        return 1;
+#endif
+#ifdef WOLFCERT_HAVE_SCEP
+    if (test_split_ra_get_ca_is_ca())
+        return 1;
+#endif
     if (test_mismatched_ca_rejected())
         return 1;
     if (test_corrupt_ca_cert_rejected())
         return 1;
+#if !defined(NO_PKCS8) && \
+    (defined(WOLFCERT_HAVE_RSA) || defined(WOLFCERT_HAVE_ECC))
+    if (test_pkcs8_ca_key_normalized())
+        return 1;
+#endif
     if (test_issued_san_verbatim())
         return 1;
 #ifdef WOLFCERT_HAVE_ECC
@@ -1002,7 +941,7 @@ int main(void)
     if (test_bad_bind_host_rejected())
         return 1;
 
-#if CA_STORE_NEEDS_TLS
+#if CA_TEST_NEEDS_TLS
     free(srv_cert_pem);
     free(srv_key_pem);
 #endif

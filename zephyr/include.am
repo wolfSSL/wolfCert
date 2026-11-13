@@ -42,7 +42,4 @@ EXTRA_DIST += zephyr/tests/wolfcert_unit_scep_msg/testcase.yaml
 EXTRA_DIST += zephyr/tests/wolfcert_unit_smoke/CMakeLists.txt
 EXTRA_DIST += zephyr/tests/wolfcert_unit_smoke/prj.conf
 EXTRA_DIST += zephyr/tests/wolfcert_unit_smoke/testcase.yaml
-EXTRA_DIST += zephyr/tests/wolfcert_unit_store/CMakeLists.txt
-EXTRA_DIST += zephyr/tests/wolfcert_unit_store/prj.conf
-EXTRA_DIST += zephyr/tests/wolfcert_unit_store/testcase.yaml
 EXTRA_DIST += zephyr/wolfssl_user_settings.h

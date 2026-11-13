@@ -114,7 +114,7 @@ int main(void)
         .protocol                = WOLFCERT_PROTO_EST,
         .bind_host               = "127.0.0.1",
         .bind_port               = 0,
-        .ca_store                = test_ca_store(),
+        TEST_CA_CFG,
         .tls_cert_pem            = tls_cert,
         .tls_cert_pem_len        = tls_cert_len,
         .tls_key_pem             = tls_key,
@@ -145,7 +145,7 @@ int main(void)
         free(tls_key);
         free(cli_cert);
         free(cli_key);
-        test_ca_store_close();
+        test_ca_close();
         wolfcert_cleanup();
         return 77;
     }
@@ -342,7 +342,7 @@ int main(void)
     free(tls_key);
     free(cli_cert);
     free(cli_key);
-    test_ca_store_close();
+    test_ca_close();
     wolfcert_cleanup();
     printf("OK\n");
     return 0;

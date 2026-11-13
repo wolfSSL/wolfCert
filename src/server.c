@@ -445,6 +445,12 @@ int wolfcert_server_start(const WolfCertServerCfgSrv* cfg, WolfCertServer** out)
         return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "server",
             "post-handshake auth is supported only for EST");
 
+    if ((cfg->ca_cert == NULL) != (cfg->ca_key == NULL) ||
+            (cfg->ca_cert == NULL) != (cfg->ca_cert_len == 0) ||
+            (cfg->ca_key == NULL) != (cfg->ca_key_len == 0))
+        return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "server",
+            "ca_cert and ca_key must both be set, or both NULL");
+
     struct in_addr bind_addr = { .s_addr = htonl(INADDR_ANY) };
     if (cfg->bind_host != NULL &&
             inet_pton(AF_INET, cfg->bind_host, &bind_addr) != 1)
@@ -458,6 +464,10 @@ int wolfcert_server_start(const WolfCertServerCfgSrv* cfg, WolfCertServer** out)
 
     memset(s, 0, sizeof(*s));
     s->cfg       = *cfg;
+    s->cfg.ca_cert     = NULL;
+    s->cfg.ca_cert_len = 0;
+    s->cfg.ca_key      = NULL;
+    s->cfg.ca_key_len  = 0;
     s->listen_fd = -1;
     s->ops       = ops;
     s->heap      = heap;
@@ -490,19 +500,14 @@ int wolfcert_server_start(const WolfCertServerCfgSrv* cfg, WolfCertServer** out)
     }
 
     int rc;
-    int have_ca = 0;
 
-    if (cfg->ca_store != NULL) {
-        rc = wolfcert_ca_load(&s->ca, cfg->ca_store, heap);
-        if (rc == WOLFCERT_OK)
-            have_ca = 1;
-        /* Only an empty store means no CA yet; any other failure must not
-         * replace the stored CA. */
-        else if (rc != WOLFCERT_ERR_NOT_FOUND)
+    if (cfg->ca_cert != NULL) {
+        rc = wolfcert_ca_load(&s->ca, cfg->ca_cert, cfg->ca_cert_len,
+                              cfg->ca_key, cfg->ca_key_len, heap);
+        if (rc != WOLFCERT_OK)
             goto fail;
     }
-
-    if (!have_ca) {
+    else {
         WolfCertKeyType kt = cfg->ca_key_type ? cfg->ca_key_type
                                               : WOLFCERT_DEFAULT_KEY_TYPE;
         int kp = cfg->ca_key_param;
@@ -510,13 +515,6 @@ int wolfcert_server_start(const WolfCertServerCfgSrv* cfg, WolfCertServer** out)
         rc = wolfcert_ca_generate(&s->ca, kt, kp, heap);
         if (rc != WOLFCERT_OK)
             goto fail;
-
-        if (cfg->ca_store != NULL) {
-            /* Not re-wrapped: it would lose ca_save's rollback diagnostic. */
-            rc = wolfcert_ca_save(&s->ca, cfg->ca_store);
-            if (rc != WOLFCERT_OK)
-                goto fail;
-        }
     }
 
     rc = ops->start(cfg, s);
@@ -720,6 +718,15 @@ void wolfcert_server_free(WolfCertServer* srv)
 uint16_t wolfcert_server_port(const WolfCertServer* srv)
 {
     return srv ? srv->cfg.bind_port : 0;
+}
+
+int wolfcert_server_get_ca(const WolfCertServer* srv, WolfCertEncoding enc,
+                           WolfCertBuffer* out_cert, WolfCertBuffer* out_key)
+{
+    if (srv == NULL || out_cert == NULL)
+        return WOLFCERT_ERR_BAD_ARG;
+
+    return wolfcert_ca_export(&srv->ca, enc, out_cert, out_key);
 }
 
 #if defined(WOLFCERT_BUILD_TESTING)

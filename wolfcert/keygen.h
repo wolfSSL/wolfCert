@@ -26,15 +26,13 @@
 extern "C" {
 #endif
 
-typedef struct WolfCertKey WolfCertKey;
-
-/* Generate a key per cfg on CryptoCb device cfg->dev_id, or for INVALID_DEVID
- * on the default devId. With cfg->key_id the key also stays in the device and
- * the handle only references it, under the id wolfcert_key_id returns, which
- * the device may have changed. Allocated from cfg->heap or the default.
- * *out_key is NULL after a failure, except WOLFCERT_ERR_CRYPTO when the device
- * left an unusable id: *out_key then holds the key under the requested id so
- * the caller can delete it there. */
+/* Generate a key per cfg on CryptoCb device cfg->dev_id, or in software for
+ * INVALID_DEVID. An unregistered dev_id, or a key_id without one, is _BAD_ARG;
+ * either without wolfSSL's WOLF_CRYPTO_CB / WOLF_PRIVATE_KEY_ID is
+ * _UNSUPPORTED. With cfg->key_id the key stays in the device, under the id
+ * wolfcert_key_id returns, which the device may have changed. *out_key is NULL
+ * after a failure, except WOLFCERT_ERR_CRYPTO when the device left an unusable
+ * id: *out_key then holds the key under the requested id to delete it there. */
 WOLFCERT_API int wolfcert_key_generate(const WolfCertKeyCfg* cfg, WolfCertKey** out_key);
 
 /* Reference a key a CryptoCb device holds under cfg->key_id, its public half
@@ -45,13 +43,12 @@ WOLFCERT_API int wolfcert_key_from_id(const WolfCertKeyCfg* cfg,
                                       const uint8_t* cert, size_t cert_len,
                                       WolfCertKey** out_key);
 
-/* Load a key from PEM or DER, auto-detected, into host memory; its operations
- * run on the devId that is the default at the time of the call. */
+/* Load a software key from PEM or DER, auto-detected, into host memory. */
 WOLFCERT_API int wolfcert_key_from_pem(const uint8_t* data, size_t data_len,
                                        void* heap, WolfCertKey** out_key);
 
 /* Export a software key as PEM. Fails with WOLFCERT_ERR_UNSUPPORTED for a
- * key with a key_id. */
+ * key with a key_id or whose private half its device keeps. */
 WOLFCERT_API int wolfcert_key_to_pem(const WolfCertKey* key, WolfCertBuffer* out_pem);
 
 /* Export a software key as raw DER (same export constraints as

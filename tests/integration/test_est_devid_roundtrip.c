@@ -62,6 +62,7 @@ int main(void)
 
 #define MOCK_DEVID  0x6d6b
 #define ACCEL_DEVID 0x6163
+#define UNREGISTERED_DEVID 0x7a7a
 #define MOCK_SLOTS  4
 
 enum { MOCK_ECC = 1, MOCK_RSA, MOCK_MLDSA, MOCK_ED25519, MOCK_ED448 };
@@ -682,13 +683,12 @@ static int run_key_type(const char* url, WolfCertKeyType type, int param,
     REQUIRE(mock_private_ops >= ops + 2);
 #endif
 
-    /* The store key as the mTLS identity by id, one-shot and in a session. */
-    cli.client_cert       = issued.cert_pem.data;
-    cli.client_cert_len   = issued.cert_pem.len;
-    cli.client_key        = id;
-    cli.client_key_len    = sizeof(id) - 1;
-    cli.client_key_src    = WOLFCERT_CLIENT_KEY_ID;
-    cli.client_key_dev_id = MOCK_DEVID;
+    /* The store key as the mTLS identity, one-shot and in a session. */
+    cli.client_cert     = issued.cert_pem.data;
+    cli.client_cert_len = issued.cert_pem.len;
+    cli.client_key      = NULL;
+    cli.client_key_len  = 0;
+    cli.client_key_obj  = reloaded;
     REQUIRE(wolfcert_csr_build(reloaded, &meta, &csr) == WOLFCERT_OK);
     ops = mock_private_ops;
     rc = wolfcert_est_simple_enroll(&cli, csr.data, csr.len, &second);
@@ -720,8 +720,9 @@ static int run_key_type(const char* url, WolfCertKeyType type, int param,
     return 0;
 }
 
-/* A PEM client key signs in software even with a client_key_dev_id. */
-static int test_client_key_src(const char* url,
+/* A software key handle is an mTLS identity as PEM bytes are; it cannot come
+ * with client_key. */
+static int test_client_key_obj(const char* url,
                                const uint8_t* tls_cert, size_t tls_cert_len,
                                const uint8_t* boot_cert, size_t boot_cert_len,
                                const uint8_t* boot_key, size_t boot_key_len)
@@ -740,34 +741,43 @@ static int test_client_key_src(const char* url,
         .client_cert_len   = boot_cert_len,
         .client_key        = boot_key,
         .client_key_len    = boot_key_len,
-        .client_key_src    = WOLFCERT_CLIENT_KEY_BUFFER,
-        .client_key_dev_id = MOCK_DEVID,
     };
     WolfCertKey* key = NULL;
     WolfCertBuffer csr = { 0 };
     WolfCertEstResult cert = { 0 };
+    WolfCertEstResult again = { 0 };
     int requests;
 
     REQUIRE(wolfcert_key_generate(&kcfg, &key) == WOLFCERT_OK);
     REQUIRE(wolfcert_csr_build(key, &meta, &csr) == WOLFCERT_OK);
-
-    requests = mock_sign_requests;
     REQUIRE(wolfcert_est_simple_enroll(&cli, csr.data, csr.len, &cert) ==
             WOLFCERT_OK);
-    REQUIRE(mock_sign_requests == requests);
-    wolfcert_est_result_free(&cert);
 
-    cli.client_key_src = (WolfCertClientKeySrc)7;
-    REQUIRE(wolfcert_est_simple_enroll(&cli, csr.data, csr.len, &cert) ==
+    cli.client_key_obj = key;
+    REQUIRE(wolfcert_est_simple_enroll(&cli, csr.data, csr.len, &again) ==
             WOLFCERT_ERR_BAD_ARG);
-    cli.client_key_src = WOLFCERT_CLIENT_KEY_BUFFER;
+    cli.client_cert     = cert.cert_pem.data;
+    cli.client_cert_len = cert.cert_pem.len;
+    cli.client_key      = NULL;
+    cli.client_key_len  = 0;
+    requests = mock_sign_requests;
+    REQUIRE(wolfcert_est_simple_enroll(&cli, csr.data, csr.len, &again) ==
+            WOLFCERT_OK);
+    REQUIRE(mock_sign_requests == requests);
+    wolfcert_est_result_free(&again);
+    wolfcert_est_result_free(&cert);
     wolfcert_buffer_free(&csr);
     wolfcert_key_free(key);
     key = NULL;
+    cli.client_cert     = boot_cert;
+    cli.client_cert_len = boot_cert_len;
+    cli.client_key      = boot_key;
+    cli.client_key_len  = boot_key_len;
+    cli.client_key_obj  = NULL;
 
 #ifdef KEEP_PEER_CERT
-    /* A dev_id key without a key_id signs its CSR and the handshake on the
-     * device. */
+    /* A dev_id key without a key_id signs its CSR on the device and the
+     * handshake on the default devId. */
     const WolfCertCertMeta renew_meta = { 0 };
     WolfCertClient* client = NULL;
     WolfCertKey* unused = NULL;
@@ -788,7 +798,7 @@ static int test_client_key_src(const char* url,
         fprintf(stderr, "dev reenroll rc=%d (%s)\n", rc,
                 wolfcert_last_error_message());
     REQUIRE(rc == WOLFCERT_OK);
-    REQUIRE(mock_sign_requests >= requests + 2);
+    REQUIRE(mock_sign_requests == requests + 1);
     wolfcert_buffer_free(&renewed);
     wolfcert_est_result_free(&cert);
     wolfcert_buffer_free(&csr);
@@ -797,8 +807,8 @@ static int test_client_key_src(const char* url,
     return 0;
 }
 
-/* The default devId gets the client's TLS crypto, including a PEM client key's
- * signature, while a key_id key still signs in its own device. */
+/* The default devId gets the client's TLS crypto, including the signature of a
+ * PEM key or a software key handle, while a key_id key signs in its device. */
 static int test_default_dev_id(const char* url,
                                const uint8_t* tls_cert, size_t tls_cert_len,
                                const uint8_t* boot_cert, size_t boot_cert_len,
@@ -827,6 +837,8 @@ static int test_default_dev_id(const char* url,
     WolfCertBuffer csr = { 0 };
     WolfCertEstResult cert = { 0 };
     WolfCertEstResult issued = { 0 };
+    WolfCertEstResult soft = { 0 };
+    WolfCertKey* soft_key = NULL;
     int ops;
 
 #ifndef WC_USE_DEVID
@@ -854,8 +866,19 @@ static int test_default_dev_id(const char* url,
     wolfcert_key_free(key);
     key = NULL;
 
-    /* A key made with INVALID_DEVID now takes the default for its own work. */
+    /* A key made with INVALID_DEVID stays in software; the caller names the
+     * default device to use it. */
     accel_signs = 0;
+    REQUIRE(wolfcert_key_generate(&kcfg, &key) == WOLFCERT_OK);
+    REQUIRE(wolfcert_key_dev_id(key) == INVALID_DEVID);
+    REQUIRE(wolfcert_csr_build(key, &meta, &csr) == WOLFCERT_OK);
+    REQUIRE(accel_signs == 0);
+    REQUIRE(wolfcert_est_simple_enroll(&cli, csr.data, csr.len, &soft) ==
+            WOLFCERT_OK);
+    wolfcert_buffer_free(&csr);
+    soft_key = key;
+    accel_signs = 0;
+    kcfg.dev_id = wolfcert_default_dev_id();
     REQUIRE(wolfcert_key_generate(&kcfg, &key) == WOLFCERT_OK);
     REQUIRE(wolfcert_key_dev_id(key) == ACCEL_DEVID);
     REQUIRE(wolfcert_csr_build(key, &meta, &csr) == WOLFCERT_OK);
@@ -864,15 +887,21 @@ static int test_default_dev_id(const char* url,
     wolfcert_key_free(key);
     key = NULL;
 
-    /* A key_id with INVALID_DEVID goes to the default device too. */
-    REQUIRE(wolfcert_set_default_dev_id(MOCK_DEVID) == WOLFCERT_OK);
+    /* A key_id needs a device, and a dev_id a registered one. */
+    kcfg.dev_id     = INVALID_DEVID;
     kcfg.key_id     = dflt_id;
     kcfg.key_id_len = sizeof(dflt_id) - 1;
-    REQUIRE(wolfcert_key_generate(&kcfg, &key) == WOLFCERT_OK);
-    REQUIRE(wolfcert_key_dev_id(key) == MOCK_DEVID);
-    wolfcert_key_free(key);
-    key = NULL;
-    REQUIRE(wolfcert_set_default_dev_id(ACCEL_DEVID) == WOLFCERT_OK);
+    REQUIRE(wolfcert_key_generate(&kcfg, &key) == WOLFCERT_ERR_BAD_ARG);
+    REQUIRE(key == NULL);
+#ifndef WOLF_CRYPTO_CB_FIND
+    kcfg.dev_id = UNREGISTERED_DEVID;
+    REQUIRE(wolfcert_key_generate(&kcfg, &key) == WOLFCERT_ERR_BAD_ARG);
+    REQUIRE(key == NULL);
+    kcfg.key_id     = NULL;
+    kcfg.key_id_len = 0;
+    REQUIRE(wolfcert_key_generate(&kcfg, &key) == WOLFCERT_ERR_BAD_ARG);
+    REQUIRE(key == NULL);
+#endif
 
     kcfg.dev_id     = MOCK_DEVID;
     kcfg.key_id     = id;
@@ -882,12 +911,11 @@ static int test_default_dev_id(const char* url,
     REQUIRE(wolfcert_est_simple_enroll(&cli, csr.data, csr.len, &issued) ==
             WOLFCERT_OK);
 
-    cli.client_cert       = issued.cert_pem.data;
-    cli.client_cert_len   = issued.cert_pem.len;
-    cli.client_key        = id;
-    cli.client_key_len    = sizeof(id) - 1;
-    cli.client_key_src    = WOLFCERT_CLIENT_KEY_ID;
-    cli.client_key_dev_id = MOCK_DEVID;
+    cli.client_cert     = issued.cert_pem.data;
+    cli.client_cert_len = issued.cert_pem.len;
+    cli.client_key      = NULL;
+    cli.client_key_len  = 0;
+    cli.client_key_obj  = key;
     accel_calls = 0;
     accel_signs = 0;
     ops = mock_private_ops;
@@ -898,18 +926,21 @@ static int test_default_dev_id(const char* url,
     REQUIRE(mock_private_ops > ops);
     wolfcert_est_result_free(&cert);
 
-    /* client_key_dev_id = INVALID_DEVID names the default device. */
-    REQUIRE(wolfcert_set_default_dev_id(MOCK_DEVID) == WOLFCERT_OK);
-    cli.client_key_dev_id = INVALID_DEVID;
-    ops = mock_private_ops;
+    /* A software key handle signs its handshake on the default device. */
+    cli.client_cert     = soft.cert_pem.data;
+    cli.client_cert_len = soft.cert_pem.len;
+    cli.client_key_obj  = soft_key;
+    accel_signs = 0;
     REQUIRE(wolfcert_est_simple_enroll(&cli, csr.data, csr.len, &cert) ==
             WOLFCERT_OK);
-    REQUIRE(mock_private_ops > ops);
+    REQUIRE(accel_signs > 0);
 
     REQUIRE(wolfcert_set_default_dev_id(INVALID_DEVID) == WOLFCERT_OK);
     wolfcert_est_result_free(&cert);
+    wolfcert_est_result_free(&soft);
     wolfcert_est_result_free(&issued);
     wolfcert_buffer_free(&csr);
+    wolfcert_key_free(soft_key);
     wolfcert_key_free(key);
     mock_reset();
     return 0;
@@ -1098,7 +1129,7 @@ int main(void)
                          boot_cert, boot_cert_len, boot_key,
                          boot_key_len) == 0);
 #endif
-    REQUIRE(test_client_key_src(url, tls_cert, tls_cert_len, boot_cert,
+    REQUIRE(test_client_key_obj(url, tls_cert, tls_cert_len, boot_cert,
                                 boot_cert_len, boot_key, boot_key_len) == 0);
     REQUIRE(test_default_dev_id(url, tls_cert, tls_cert_len, boot_cert,
                                 boot_cert_len, boot_key, boot_key_len) == 0);

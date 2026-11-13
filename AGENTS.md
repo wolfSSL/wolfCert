@@ -206,9 +206,9 @@ contract, alone or in a group comment.
 | Static memory / custom heap | `wolfcert_init(heap)` sets the default heap hint; per-call `heap` fields override it, and the hint reaches every wolfSSL call | `wolfcert/memory.h`, README "Integrating with a wolfSSL static-memory pool" |
 | Network stack without BSD sockets (lwIP, NetX, FreeRTOS+TCP, wolfIP) | Fill `WolfCertServerCfg.transport` (`WolfCertTransport`); TLS records go through it too | `wolfcert/types.h`, `docs/EMBEDDED.md` section 7 |
 | Persistence in flash / NVM | Store the buffers from `wolfcert_key_to_pem` / `_to_der` and the enroll result; wolfCert does no storage | `wolfcert/keygen.h` |
-| Keys in a TPM, HSM, PKCS#11 token or secure element | Register a backend with `wc_CryptoCb_RegisterDevice`, pass its id as `WolfCertKeyCfg.dev_id`, and the key's backend id as `key_id`; `WolfCertServerCfg.client_key_src` selects such a key for mTLS | `docs/ARCHITECTURE.md` section 4.2, `examples/enroll_cryptocb.c` |
+| Keys in a TPM, HSM, PKCS#11 token or secure element | Register a backend with `wc_CryptoCb_RegisterDevice`, pass its id as `WolfCertKeyCfg.dev_id`, and the key's backend id as `key_id`; a key handle in `WolfCertServerCfg.client_key_obj` uses such a key for mTLS | `docs/ARCHITECTURE.md` section 4.2, `examples/enroll_cryptocb.c` |
 | Event loop / no blocking | `wolfcert_est_session_open` / `wolfcert_scep_session_open`, then the `_nb` calls until they stop returning `WOLFCERT_ERR_WANT_READ` / `_WANT_WRITE`; `*_session_fd` gives the descriptor to poll | `wolfcert/est.h`, `wolfcert/scep.h` |
-| Crypto accelerator for TLS, PKCS#7 and software keys | `wolfcert_set_default_dev_id`; defaults to wolfSSL's `WC_USE_DEVID` when set | `wolfcert/types.h`, `docs/ARCHITECTURE.md` section 4.2 |
+| Crypto accelerator for TLS and PKCS#7 | `wolfcert_set_default_dev_id`, starting at `WOLFCERT_DEFAULT_DEVID` (wolfSSL's `WC_USE_DEVID` when set); a key uses it with `dev_id = wolfcert_default_dev_id()` | `wolfcert/types.h`, `docs/ARCHITECTURE.md` section 4.2 |
 | Logging | `wolfcert_set_log_cb` (e.g. to a UART) | `wolfcert/log.h` |
 | RAM budget | `max_response_bytes`, HTTP stack buffers, wolfSSL `Cert` / `CertName` sizing | `docs/EMBEDDED.md` |
 
@@ -239,6 +239,9 @@ contract, alone or in a group comment.
   which every EST call and SCEP over `https://` refuse with
   `WOLFCERT_ERR_TLS`. Plain-HTTP SCEP ignores it and relies on the CA
   fingerprint check instead.
+- **Set `dev_id` on every `WolfCertKeyCfg`.** `INVALID_DEVID` is software;
+  a zero-initialized config names CryptoCb device 0, which keygen refuses
+  with `WOLFCERT_ERR_BAD_ARG` unless such a device is registered.
 - **The `wolfcert_client_*` calls are EST-only except `get_ca`.** For SCEP
   they return `WOLFCERT_ERR_UNSUPPORTED`; use `wolfcert_scep_*`.
 - **SCEP rejects non-RSA keys** with `WOLFCERT_ERR_UNSUPPORTED`, and an ECC

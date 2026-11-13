@@ -359,42 +359,38 @@ A `dev_id` without a `key_id` only offloads the computation. The key itself
 is an ordinary wolfCrypt key in host memory, and `wolfcert_key_to_pem` exports
 it. Only a `key_id` keeps the key in the backend.
 
-A crypto accelerator gets the rest of the client's work through
-`wolfcert_set_default_dev_id`: the TLS connection, SCEP's PKCS#7, and every
-key generated or imported with `dev_id = INVALID_DEVID`, which takes the
-default as its device. The default is `WC_USE_DEVID` when wolfSSL defines it,
-as the NXP EdgeLock port does, else `INVALID_DEVID`; set it to `INVALID_DEVID`
-to run all of this in software, except that TLS keeps a devId wolfSSL picks
-itself (CAAM, ARIA, MAXQ10xx). The setter returns `WOLFCERT_ERR_BAD_ARG` for a
-devId with no registered device, unless wolfSSL has `WOLF_CRYPTO_CB_FIND`,
-and `wolfcert_cleanup` restores the start value. A key keeps the device it was
-made with, so change the default before generating or importing keys, and
-before other threads use wolfCert. A key's own `dev_id` still takes
-precedence, so a key held in one device can sign while another accelerates the
-connection. The built-in test server always runs in software.
+A crypto accelerator gets the work of the objects wolfCert creates itself, the
+TLS connection and SCEP's PKCS#7 objects and RNGs, through the default devId.
+It starts as `WOLFCERT_DEFAULT_DEVID`, which is `WC_USE_DEVID` when wolfSSL
+defines it, as the NXP EdgeLock port does, else `INVALID_DEVID`, and a build
+may define it in `user_settings.h`. `wolfcert_set_default_dev_id` changes it
+at run time, before other threads use wolfCert, and returns
+`WOLFCERT_ERR_BAD_ARG` for a devId with no registered device, unless wolfSSL
+has `WOLF_CRYPTO_CB_FIND`; `wolfcert_cleanup` restores the start value. With
+`INVALID_DEVID` all of this runs in software, except that TLS keeps a devId
+wolfSSL picks itself (CAAM, ARIA, MAXQ10xx). The built-in test server always
+runs in software.
 
-For TLS client authentication, `WolfCertServerCfg.client_key_src` says what
-`client_key` holds and where the handshake signs with it:
+Keys use the `dev_id` they are given. `INVALID_DEVID` is software, as in
+wolfCrypt, and `dev_id = wolfcert_default_dev_id()` puts a key on the default
+device. A `dev_id` with no registered device, or a `key_id` without a
+`dev_id`, returns `WOLFCERT_ERR_BAD_ARG`. A key held in one device can
+therefore sign while another accelerates the connection.
 
-| `client_key_src` | `client_key` holds | Signed |
-|---|---|---|
-| `WOLFCERT_CLIENT_KEY_BUFFER` (default) | PEM or DER | on the connection's device, the default devId |
-| `WOLFCERT_CLIENT_KEY_ID` | the key id | in `client_key_dev_id` |
-
-EST `/simplereenroll` picks the source from the key being renewed, and runs
-the connection of a key without a `key_id` on that key's `dev_id`.
+For TLS client authentication, `client_key` takes the key as PEM or DER, and
+the handshake signs with it on the connection's device, the default devId.
+`client_key_obj` takes a key handle instead, borrowed while the connection
+opens: a key with a `key_id` signs in its own device, and any other key is
+loaded as DER. Setting both returns `WOLFCERT_ERR_BAD_ARG`. EST
+`/simplereenroll` passes the key being renewed as the handle.
 
 A key with a `key_id` never leaves the backend: `wolfcert_key_to_pem` and
 `wolfcert_key_to_der` fail with `WOLFCERT_ERR_UNSUPPORTED`. Persist the id and
-the issued certificate instead. TLS client authentication needs only those
-two: the certificate in `client_cert` and the id in `client_key`, with
-`client_key_src = WOLFCERT_CLIENT_KEY_ID` and the device in
-`client_key_dev_id`. A source other than `_BUFFER` without the certificate
-and key returns `WOLFCERT_ERR_BAD_ARG`. Re-enrollment also needs a key
-handle, because the CSR carries the public key:
-rebuild it with `wolfcert_key_from_id(&cfg, cert, cert_len, &key)`, which takes
-the public half from the certificate since a backend need not be able to
-return it.
+the issued certificate instead. `wolfcert_key_from_id(&cfg, cert, cert_len,
+&key)` rebuilds the handle from those two, taking the public half from the
+certificate, since a backend need not be able to return it. The handle serves
+as `client_key_obj`, with the certificate in `client_cert`, and for
+re-enrollment, whose CSR carries the public key.
 
 `wolfcert_client_enroll` and `wolfcert_client_reenroll` hand back a key they
 generated under a `key_id` even when they fail, so the caller can delete it

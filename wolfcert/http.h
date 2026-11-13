@@ -67,8 +67,7 @@ typedef struct {
     WolfCertTransport transport;
 
     /* As in WolfCertServerCfg. */
-    WolfCertClientKeySrc client_key_src;
-    int                  client_key_dev_id;
+    const WolfCertKey* client_key_obj;
 } WolfCertHttpRequest;
 
 typedef struct {
@@ -114,8 +113,7 @@ typedef struct {
     WolfCertTransport transport;
 
     /* As in WolfCertServerCfg. */
-    WolfCertClientKeySrc client_key_src;
-    int                  client_key_dev_id;
+    const WolfCertKey* client_key_obj;
 } WolfCertHttpSessionCfg;
 
 /* Connects without verifying the server; the first request runs the TLS

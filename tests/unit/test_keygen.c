@@ -89,7 +89,7 @@ static int roundtrip(WolfCertKeyType type, int param)
 #ifdef TEST_KEY_TYPE
 #define DECLINE_DEVID 0x6b69
 
-#if defined(WOLF_CRYPTO_CB) && defined(WOLF_PRIVATE_KEY_ID)
+#ifdef WOLF_CRYPTO_CB
 static int decline_cb(int devId, wc_CryptoInfo* info, void* ctx)
 {
     (void)devId;
@@ -97,6 +97,9 @@ static int decline_cb(int devId, wc_CryptoInfo* info, void* ctx)
     (void)ctx;
     return CRYPTOCB_UNAVAILABLE;
 }
+#endif
+
+#if defined(WOLF_CRYPTO_CB) && defined(WOLF_PRIVATE_KEY_ID)
 
 /* A device that declines keygen leaves wolfCrypt to generate in software,
  * which a key_id must refuse. */
@@ -381,10 +384,16 @@ static int key_id_cases(void)
                            .key_id = id, .key_id_len = sizeof(id) };
     WolfCertKey* k = NULL;
 
+#ifdef WOLF_CRYPTO_CB
+    REQUIRE(wc_CryptoCb_RegisterDevice(DECLINE_DEVID, decline_cb, NULL) == 0);
+#endif
     REQUIRE(wolfcert_key_generate(&cfg, &k) == WOLFCERT_ERR_UNSUPPORTED);
     REQUIRE(wolfcert_key_from_id(&cfg, junk, sizeof(junk), &k) ==
             WOLFCERT_ERR_UNSUPPORTED);
     REQUIRE(k == NULL);
+#ifdef WOLF_CRYPTO_CB
+    wc_CryptoCb_UnRegisterDevice(DECLINE_DEVID);
+#endif
     return 0;
 }
 #endif

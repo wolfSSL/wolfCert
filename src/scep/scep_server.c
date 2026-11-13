@@ -1332,7 +1332,7 @@ static int make_split_ra(WolfCertServer* s, ScepPriv* p)
     size_t lens[2];
     int rc;
 
-    rc = wolfcert_key_generate_on(&kcfg, INVALID_DEVID, &key);
+    rc = wolfcert_key_generate(&kcfg, &key);
     if (rc == WOLFCERT_OK)
         rc = wolfcert_csr_build(key, &meta, &csr);
     if (rc == WOLFCERT_OK)
@@ -1469,7 +1469,7 @@ static int bundle_root(WolfCertServer* s, uint8_t** root, size_t* root_len)
     size_t ca_len = 0;
     int rc;
 
-    rc = wolfcert_key_generate_on(&kcfg, INVALID_DEVID, &key);
+    rc = wolfcert_key_generate(&kcfg, &key);
     if (rc == WOLFCERT_OK)
         rc = bundle_cert(s, RSA_TYPE, key->impl, "wolfCert Test Root",
                          "keyCertSign,cRLSign,keyEncipherment", BUNDLE_CA,
@@ -1539,7 +1539,7 @@ WOLFCERT_TEST_VIS int wolfcert_scep_server_set_bundle_fault(WolfCertServer* s,
     if (rc == WOLFCERT_OK && mode == 1)
         rc = bundle_root(s, &der[3], &len[3]);
     if (rc == WOLFCERT_OK && mode == 3) {
-        rc = wolfcert_key_generate_on(&ecc, INVALID_DEVID, &ecc_key);
+        rc = wolfcert_key_generate(&ecc, &ecc_key);
         if (rc == WOLFCERT_OK)
             rc = bundle_cert(s, ECC_TYPE, ecc_key->impl,
                              "wolfCert Test ECC Leaf", NULL, 0, NULL, NULL, 0,

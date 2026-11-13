@@ -91,17 +91,12 @@ static inline int wolfcert_devid_is_cb(int dev_id)
     return dev_id != INVALID_DEVID;
 }
 
-static inline int wolfcert_devid_or_default(int dev_id)
-{
-    return dev_id != INVALID_DEVID ? dev_id : wolfcert_default_dev_id();
-}
-
 /* Restores the start devId; wolfCrypt_Cleanup unregisters the devices. */
 void wolfcert_default_dev_id_reset(void);
 
-/* wolfcert_key_generate on dev_id as given, without the default devId. */
-int  wolfcert_key_generate_on(const WolfCertKeyCfg* cfg, int dev_id,
-                              WolfCertKey** out_key);
+/* BAD_ARG or UNSUPPORTED, with a message, unless dev_id is INVALID_DEVID or
+ * names a registered CryptoCb device. */
+int  wolfcert_dev_id_check(int dev_id, const char* module);
 
 /* BAD_ARG or UNSUPPORTED, with a message, unless id names a key a CryptoCb
  * device can hold in this build. */
@@ -310,9 +305,6 @@ typedef struct {
 WOLFCERT_TEST_VIS int  wolfcert_http_url_parse(const char* url, WolfCertUrl* out, void* heap);
 WOLFCERT_TEST_VIS void wolfcert_http_url_free (WolfCertUrl* u);
 
-/* wolfcert_http_session_open with the TLS context on tls_dev_id. */
-int wolfcert_http_session_open_dev(const WolfCertHttpSessionCfg* cfg,
-                                   int tls_dev_id, WolfCertHttpSession** out);
 
 /* Resume point for wolfcert_http_chunked_complete(); zero it before the first
  * call, setting max to cap the decoded body (0 for no cap). */

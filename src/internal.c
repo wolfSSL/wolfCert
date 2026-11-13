@@ -31,12 +31,7 @@
 #include <string.h>
 
 static void*            g_default_heap = NULL;
-#if defined(WC_USE_DEVID) && defined(WOLF_CRYPTO_CB)
-#define START_DEV_ID WC_USE_DEVID
-#else
-#define START_DEV_ID INVALID_DEVID
-#endif
-static int              g_default_dev_id = START_DEV_ID;
+static int              g_default_dev_id = WOLFCERT_DEFAULT_DEVID;
 static WolfCertLogCb    g_log_cb       = NULL;
 static void*            g_log_ctx      = NULL;
 static WolfCertLogLevel g_log_level    = WOLFCERT_LOG_WARN;
@@ -60,19 +55,32 @@ void* wolfcert_default_heap(void)
     return g_default_heap;
 }
 
+int wolfcert_dev_id_check(int dev_id, const char* module)
+{
+    if (dev_id == INVALID_DEVID)
+        return WOLFCERT_OK;
+#ifndef WOLF_CRYPTO_CB
+    return WOLFCERT_ERR(WOLFCERT_ERR_UNSUPPORTED, module,
+                        "wolfSSL lacks WOLF_CRYPTO_CB");
+#else
+#ifndef WOLF_CRYPTO_CB_FIND
+    if (!wc_CryptoCb_IsDeviceRegistered(dev_id))
+        return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, module,
+                            "no CryptoCb device %d is registered", dev_id);
+#else
+    (void)module;
+#endif
+    return WOLFCERT_OK;
+#endif
+}
+
 int wolfcert_set_default_dev_id(int dev_id)
 {
-#ifndef WOLF_CRYPTO_CB
-    if (dev_id != INVALID_DEVID)
-        return WOLFCERT_ERR(WOLFCERT_ERR_UNSUPPORTED, "wolfcert",
-                            "wolfSSL lacks WOLF_CRYPTO_CB");
-#elif !defined(WOLF_CRYPTO_CB_FIND)
-    if (dev_id != INVALID_DEVID && !wc_CryptoCb_IsDeviceRegistered(dev_id))
-        return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "wolfcert",
-                            "no CryptoCb device %d is registered", dev_id);
-#endif
-    g_default_dev_id = dev_id;
-    return WOLFCERT_OK;
+    int rc = wolfcert_dev_id_check(dev_id, "wolfcert");
+
+    if (rc == WOLFCERT_OK)
+        g_default_dev_id = dev_id;
+    return rc;
 }
 
 int wolfcert_default_dev_id(void)
@@ -82,7 +90,7 @@ int wolfcert_default_dev_id(void)
 
 void wolfcert_default_dev_id_reset(void)
 {
-    g_default_dev_id = START_DEV_ID;
+    g_default_dev_id = WOLFCERT_DEFAULT_DEVID;
 }
 
 void wolfcert_set_log_cb(WolfCertLogCb cb, void* ctx)

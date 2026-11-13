@@ -696,7 +696,6 @@ struct WolfCertScepSession {
     uint8_t*             in_signer_copy;    /* owned: _nb copy or self-signed */
     uint8_t*             in_signer_key;     /* key DER, zeroized */
     size_t               in_signer_key_len;
-    int                  in_signer_dev_id;
     uint8_t*             in_txid;           /* owned, from scep_prepare */
     size_t               in_txid_len;
     uint8_t              in_nonce[SCEP_NONCE_SZ];
@@ -777,8 +776,7 @@ static int scep_session_connect(WolfCertScepSession* s,
         .client_cert_len    = srv->client_cert_len,
         .client_key         = srv->client_key,
         .client_key_len     = srv->client_key_len,
-        .client_key_src     = srv->client_key_src,
-        .client_key_dev_id  = srv->client_key_dev_id,
+        .client_key_obj     = srv->client_key_obj,
         .transport          = srv->transport,
         .heap               = s->heap,
     };
@@ -1011,7 +1009,7 @@ static int scep_prepare(WolfCertScepSession* s, const ScepCall* c,
                                           s->in_signer, s->in_signer_len,
                                           s->in_signer_key, s->in_signer_key_len,
                                           hash_oid, &attrs, out_pki,
-                                          s->in_signer_dev_id, heap);
+                                          wolfcert_default_dev_id(), heap);
 
     wolfcert_buffer_free(&env);
     return rc;
@@ -1112,7 +1110,7 @@ static int scep_finish(const WolfCertScepSession* s, WolfCertScepResult* out)
             rc = wolfcert_scep_deenvelop(s->in_signer, s->in_signer_len,
                                           s->in_signer_key, s->in_signer_key_len,
                                           resp_env.data, resp_env.len, &inner,
-                                          s->in_signer_dev_id, heap);
+                                          wolfcert_default_dev_id(), heap);
             if (rc == WOLFCERT_OK)
                 rc = wolfcert_pkcs7_certs_to_pem(inner.data, inner.len,
                                                  &out->cert_pem, heap);
@@ -1151,7 +1149,7 @@ static int scep_session_begin_pki_op(WolfCertScepSession* s, const ScepCall* c,
                                             c->csr, c->csr_len,
                                             &s->in_signer_copy,
                                             &s->in_signer_len,
-                                            c->key->dev_id, heap);
+                                            wolfcert_default_dev_id(), heap);
         s->in_signer = s->in_signer_copy;
     }
     else {
@@ -1204,7 +1202,6 @@ static int scep_session_begin_pki_op(WolfCertScepSession* s, const ScepCall* c,
         rc = wolfcert_key_export_der(c->key, &s->in_signer_key, &key_len,
                                      heap);
     s->in_signer_key_len = (size_t)key_len;
-    s->in_signer_dev_id  = c->key->dev_id;
     if (rc == WOLFCERT_OK)
         rc = scep_prepare(s, c, msg_type, content, content_len, &pki);
     if (rc == WOLFCERT_OK)

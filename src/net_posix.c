@@ -67,32 +67,33 @@ int64_t wolfcert_mono_ms(void)
 static int connect_timeout(int fd, const struct sockaddr* addr, socklen_t alen,
                            int timeout_ms)
 {
-    if (timeout_ms <= 0) {
-        int rc;
-        do {
-            rc = connect(fd, addr, alen);
-        }
-        while (rc != 0 && errno == EINTR);
-
-        return rc == 0 ? 0 : -1;
-    }
-
+    int64_t deadline = (timeout_ms > 0) ? wolfcert_mono_ms() + timeout_ms : 0;
     int flags = fcntl(fd, F_GETFL, 0);
-    if (flags < 0)
+    int rc;
+
+    if (flags < 0 ||
+        (timeout_ms > 0 && fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0))
         return -1;
 
-    if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
-        return -1;
-    }
-
-    int rc = connect(fd, addr, alen);
-    if (rc != 0 && errno == EINPROGRESS) {
+    rc = connect(fd, addr, alen);
+    /* An interrupted connect() completes in the background (POSIX). */
+    if (rc != 0 && (errno == EINPROGRESS || errno == EINTR)) {
         struct pollfd pfd = { .fd = fd, .events = POLLOUT };
         int pr;
-        do {
-            pr = poll(&pfd, 1, timeout_ms);
+
+        for (;;) {
+            int wait_ms = -1;
+            int last = 0;
+
+            if (timeout_ms > 0) {
+                int64_t left = deadline - wolfcert_mono_ms();
+                last    = (left <= 0);
+                wait_ms = last ? 0 : (int)left;
+            }
+            pr = poll(&pfd, 1, wait_ms);
+            if (pr >= 0 || errno != EINTR || last)
+                break;
         }
-        while (pr < 0 && errno == EINTR);
 
         if (pr <= 0) {
             rc = -1;
@@ -110,7 +111,8 @@ static int connect_timeout(int fd, const struct sockaddr* addr, socklen_t alen,
         rc = -1;
     }
 
-    (void)fcntl(fd, F_SETFL, flags);
+    if (timeout_ms > 0)
+        (void)fcntl(fd, F_SETFL, flags);
 
     return rc;
 }

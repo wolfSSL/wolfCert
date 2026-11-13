@@ -17,7 +17,7 @@
  * along with wolfCert.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-/* Built-in POSIX transport: connect timeout and SIGPIPE suppression. */
+/* Built-in POSIX transport: connect timeouts, signals, SIGPIPE suppression. */
 
 #define _POSIX_C_SOURCE 200809L
 #define _DEFAULT_SOURCE
@@ -28,12 +28,14 @@
 #include "internal.h"
 
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 #define REQUIRE(cond) \
@@ -121,6 +123,119 @@ static int test_sock_nosigpipe_suppresses(void)
 }
 #endif
 
+static volatile sig_atomic_t g_alarmed;
+
+static void note_alarm(int sig)
+{
+    (void)sig;
+    g_alarmed = 1;
+}
+
+typedef struct {
+    struct sigaction act;
+    sigset_t         mask;
+} AlarmSaved;
+
+/* SIGALRM every 20 ms without SA_RESTART, so blocking calls see EINTR. */
+static int alarms_start(AlarmSaved* old)
+{
+    struct sigaction sa;
+    struct itimerval it;
+    sigset_t alrm;
+
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = note_alarm;
+    sigemptyset(&sa.sa_mask);
+    sigemptyset(&alrm);
+    sigaddset(&alrm, SIGALRM);
+    REQUIRE(sigaction(SIGALRM, &sa, &old->act) == 0);
+    if (sigprocmask(SIG_UNBLOCK, &alrm, &old->mask) != 0) {
+        (void)sigaction(SIGALRM, &old->act, NULL);
+        REQUIRE(0);
+    }
+
+    memset(&it, 0, sizeof(it));
+    it.it_interval.tv_usec = 20000;
+    it.it_value.tv_usec    = 20000;
+    g_alarmed = 0;
+    if (setitimer(ITIMER_REAL, &it, NULL) != 0) {
+        (void)sigprocmask(SIG_SETMASK, &old->mask, NULL);
+        (void)sigaction(SIGALRM, &old->act, NULL);
+        REQUIRE(0);
+    }
+    return 0;
+}
+
+static int alarms_stop(const AlarmSaved* old)
+{
+    struct itimerval off;
+
+    memset(&off, 0, sizeof(off));
+    REQUIRE(setitimer(ITIMER_REAL, &off, NULL) == 0);
+    REQUIRE(sigprocmask(SIG_SETMASK, &old->mask, NULL) == 0);
+    REQUIRE(sigaction(SIGALRM, &old->act, NULL) == 0);
+    return 0;
+}
+
+/* Signals during a timed connect must not stretch or cut short its deadline.
+ * Needs a host where 10.255.255.1 times out; baseline_ms is that timeout. */
+static int test_connect_eintr_keeps_deadline(int64_t baseline_ms,
+                                             int64_t* out_elapsed)
+{
+    AlarmSaved old;
+    int64_t t0;
+    int fd;
+
+    *out_elapsed = -1;
+    if (baseline_ms < 240) {
+        printf("skip: 10.255.255.1 is refused here, not blackholed\n");
+        return 0;
+    }
+
+    if (alarms_start(&old))
+        return 1;
+    t0 = wolfcert_mono_ms();
+    fd = wolfcert_posix_connect("10.255.255.1", 9, 300, NULL);
+    *out_elapsed = wolfcert_mono_ms() - t0;
+    if (alarms_stop(&old))
+        return 1;
+    if (fd >= 0)
+        close(fd);
+
+    REQUIRE(fd < 0);
+    REQUIRE(g_alarmed);
+    REQUIRE(*out_elapsed >= 250);
+    REQUIRE(*out_elapsed < 3000);
+    return 0;
+}
+
+/* A blocking connect succeeds and leaves the socket blocking. */
+static int test_blocking_connect_keeps_mode(void)
+{
+    struct sockaddr_in sa;
+    socklen_t slen = sizeof(sa);
+    int ls = socket(AF_INET, SOCK_STREAM, 0);
+    int fd;
+    int fl;
+
+    REQUIRE(ls >= 0);
+    memset(&sa, 0, sizeof(sa));
+    sa.sin_family      = AF_INET;
+    sa.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    REQUIRE(bind(ls, (struct sockaddr*)&sa, sizeof(sa)) == 0);
+    REQUIRE(listen(ls, 8) == 0);
+    REQUIRE(getsockname(ls, (struct sockaddr*)&sa, &slen) == 0);
+
+    fd = wolfcert_posix_connect("127.0.0.1", ntohs(sa.sin_port), 0, NULL);
+    close(ls);
+
+    REQUIRE(fd >= 0);
+    fl = fcntl(fd, F_GETFL, 0);
+    close(fd);
+    REQUIRE(fl >= 0 && (fl & O_NONBLOCK) == 0);
+    return 0;
+}
+
 int main(void)
 {
     /* Connect with a 1000 ms timeout to a loopback listener succeeds. */
@@ -149,6 +264,12 @@ int main(void)
     REQUIRE(fd2 < 0);
     REQUIRE(elapsed < 3000);
 
+    int64_t eintr_elapsed = 0;
+    if (test_connect_eintr_keeps_deadline(elapsed, &eintr_elapsed))
+        return 1;
+    if (test_blocking_connect_keeps_mode())
+        return 1;
+
     if (test_no_sigpipe_on_dead_peer())
         return 1;
 
@@ -162,6 +283,11 @@ int main(void)
         return 1;
 #endif
 
-    printf("OK (unreachable connect returned in %ldms)\n", (long)elapsed);
+    if (eintr_elapsed < 0)
+        printf("OK (unreachable connect returned in %ldms; signal case "
+               "skipped)\n", (long)elapsed);
+    else
+        printf("OK (unreachable connect returned in %ldms, %ldms under "
+               "signals)\n", (long)elapsed, (long)eintr_elapsed);
     return 0;
 }

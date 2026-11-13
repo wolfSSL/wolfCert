@@ -23,6 +23,7 @@ if(WOLFCERT_ENABLE_BUILTIN_TRANSPORT)
     target_include_directories(test_net PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_net PRIVATE wolfcert)
     add_test(NAME net COMMAND test_net)
+    set_tests_properties(net PROPERTIES TIMEOUT 30)
 endif()
 
 add_executable(test_transport unit/test_transport.c)

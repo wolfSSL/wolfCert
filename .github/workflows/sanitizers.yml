@@ -117,7 +117,7 @@ jobs:
           # No roundtrips: wolfSSL's asm crypto gives false Memcheck reports
           # without a suppression file.
           rc=0
-          for bin in test_smoke test_keygen test_csr test_store test_parse_negative \
+          for bin in test_smoke test_keygen test_csr test_parse_negative \
                      test_scep_msg; do
             path="build/tests/$bin"
             [ -x "$path" ] || { echo "skip (not built): $bin"; continue; }

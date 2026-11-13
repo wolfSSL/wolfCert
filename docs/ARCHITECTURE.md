@@ -44,8 +44,8 @@ A few constraints shape the whole library:
    CryptoCb itself. The application registers its own (TPM, HSM, PKCS#11,
    custom) and passes the resulting `devId` through `WolfCertKeyCfg.dev_id`;
    wolfCert threads that into every wolfSSL crypto call on the key.
-4. **Pluggable storage and protocol handling via vtables** (see
-   [section 5](#5-extension-points)).
+4. **Pluggable algorithms, transport and protocol handling via vtables** (see
+   [section 5](#5-extension-points)). Storage stays with the application.
 5. **Event-loop-friendly I/O.** Every keep-alive session (HTTP, EST, SCEP)
    takes non-blocking `_nb` calls that surface `WOLFCERT_ERR_WANT_READ` /
    `WOLFCERT_ERR_WANT_WRITE`, so callers can drive the flow from their own
@@ -80,7 +80,7 @@ wolfCert is organised in four layers, top to bottom:
  +----------------------------------------------------------------------+
  |                       public API headers (wolfcert/*.h)              |
  |  wolfcert.h (umbrella)  client.h  est.h  scep.h  http.h             |
- |  keygen.h  csr.h  store.h  server.h  memory.h  errors.h  status.h    |
+ |  keygen.h  csr.h  server.h  memory.h  errors.h  status.h            |
  +----------------------------------------------------------------------+
                                    |
  +----------------------------------------------------------------------+
@@ -91,7 +91,7 @@ wolfCert is organised in four layers, top to bottom:
  +----------------------------------------------------------------------+
  |                        subsystem layer                               |
  |  keygen / key_algs   csr   http (TLS + keep-alive + async)           |
- |  store   pkcs7_util   server + ca_issue   memory / errors / logging  |
+ |  pkcs7_util   server + ca_issue   memory / errors / logging          |
  +----------------------------------------------------------------------+
                                    |
  +----------------------------------------------------------------------+
@@ -432,27 +432,16 @@ Key points:
   its in-flight state; don't mutate the request/response between calls.
 - **One in-flight request per session** — pipelining is not supported.
 
-### 4.4 Pluggable storage for flash / NVM
+### 4.4 Persisting keys and certificates
 
-Populate a `WolfCertStoreOps` with your backend and hand it to the store
-helpers:
-
-```c
-WolfCertStoreOps flash_ops = {
-    .read   = flash_read,
-    .write  = flash_write,
-    .remove = flash_remove,
-    .heap   = my_heap,
-    .ctx    = &my_flash_state,
-};
-wolfcert_store_write_cert(&flash_ops, "device.crt", cert.data, cert.len);
-```
-
-Keys are opaque strings — map them to flash slots, handles, or paths however
-your storage layer prefers. `sensitive = 1` on a write tells you the blob is
-private-key material; enforce whatever access-control or encryption policy the
-device needs. `wolfcert_store_write_key` / `_read_key` round-trip a
-`WolfCertKey` via PEM and always mark the write sensitive.
+wolfCert does not store anything. An enroll returns the certificate in a
+`WolfCertBuffer`, `wolfcert_key_to_pem` / `_to_der` export a software key, and
+`wolfcert_key_from_pem` reads one back. Write them wherever the device keeps
+credentials. A renewal replaces the certificate and, on a rekey, the key, so
+keep the old pair until both new halves are written. Keep exported keys
+readable only by the device's own process, and free their buffers with
+`wolfcert_buffer_free_secure()`. A key that stays in a CryptoCb backend is not
+exported; keep the reference the backend needs.
 
 ### 4.5 Logging & errors on targets without stdio
 
@@ -613,9 +602,8 @@ wolfcert_est_session_open(&srv, &s);
 run_nb_loop(s);                              /* pattern from section 4.3 */
 wolfcert_est_session_close(s);
 
-/* 5. Persist to flash through our storage backend */
-wolfcert_store_write_cert(&flash_ops, "device.crt", cert.data, cert.len);
-/* key stays behind the CryptoCb; persist its label instead */
+/* 5. Persist the certificate; the key stays behind the CryptoCb */
+flash_write("device.crt", cert.data, cert.len);
 
 /* 6. Shutdown */
 wolfcert_key_free(key);
@@ -626,7 +614,7 @@ wolfcert_cleanup();
 
 ## 5. Extension points
 
-Four small vtables carry all of wolfCert's pluggability. Each is a "fill in a
+Three small vtables carry all of wolfCert's pluggability. Each is a "fill in a
 struct, no library changes" extension:
 
 - **`WolfCertKeyAlg`** (`src/key_algs.c`) — algorithm dispatch. Adding a key
@@ -634,10 +622,6 @@ struct, no library changes" extension:
   wolfSSL constants and `alloc_init` / `make` / `priv_decode` / `priv_to_der`
   / `free_` callbacks, plus an optional `WOLFCERT_HAVE_<ALG>` compile guard. No
   edits to `keygen.c`, `csr.c`, or `ca_issue.c`.
-- **`WolfCertStoreOps`** (`wolfcert/store.h`) — storage backend. Supply
-  `read` / `write` / `remove` callbacks and a private `ctx`; keys are opaque
-  strings. Shipped backends: POSIX files (atomic write, 0600 key mode) and
-  in-memory. See [section 4.4](#44-pluggable-storage-for-flash--nvm).
 - **`WolfCertTransport`** (`wolfcert/types.h`) — the bytes on the wire. Supply
   `connect` / `read` / `write` / `disconnect` and a private `ctx` to run
   wolfCert on a non-BSD-sockets stack; TLS rides the same callbacks through an

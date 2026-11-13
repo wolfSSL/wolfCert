@@ -254,7 +254,7 @@ int main(void)
     cfg.protocol         = TLS_LISTENER_PROTO;
     cfg.bind_host        = "127.0.0.1";
     cfg.bind_port        = 0;
-    cfg.ca_store         = test_ca_store();
+    test_ca_set(&cfg);
     cfg.tls_cert_pem     = tls_cert;
     cfg.tls_cert_pem_len = tls_cert_len;
     cfg.tls_key_pem      = tls_key;
@@ -302,7 +302,7 @@ int main(void)
     cfg.protocol  = WOLFCERT_PROTO_SCEP;
     cfg.bind_host = "127.0.0.1";
     cfg.bind_port = 0;
-    cfg.ca_store  = test_ca_store();
+    test_ca_set(&cfg);
 
     memset(&ctx, 0, sizeof(ctx));
     REQUIRE(wolfcert_server_start(&cfg, &ctx.srv) == WOLFCERT_OK);
@@ -431,7 +431,7 @@ int main(void)
     cfg.protocol  = WOLFCERT_PROTO_SCEP;
     cfg.bind_host = "127.0.0.1";
     cfg.bind_port = 0;
-    cfg.ca_store  = test_ca_store();
+    test_ca_set(&cfg);
 
     memset(&ctx, 0, sizeof(ctx));
     REQUIRE(wolfcert_server_start(&cfg, &ctx.srv) == WOLFCERT_OK);
@@ -456,7 +456,7 @@ int main(void)
 
     free(tls_cert);
     free(tls_key);
-    test_ca_store_close();
+    test_ca_close();
     wolfcert_cleanup();
 
     printf("server stop idle: OK\n");

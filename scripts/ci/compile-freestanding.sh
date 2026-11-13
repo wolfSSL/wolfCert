@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # Compile every portable wolfCert source for a bare-metal ARM target: no POSIX
-# headers, no built-in transport, no POSIX store, no test server. This keeps
-# src/http.c, src/csr.c and src/store.c free of syscalls, so wolfCert can run on
-# a non-BSD-sockets stack through a caller-supplied WolfCertTransport.
+# headers, no built-in transport, no test server. This keeps src/http.c and
+# src/csr.c free of syscalls, so wolfCert can run on a non-BSD-sockets stack
+# through a caller-supplied WolfCertTransport.
 #
 # Compile-only, so it wants a wolfSSL checkout for headers rather than a build,
 # and finishes in seconds. Feature set: freestanding-user_settings.h alongside.

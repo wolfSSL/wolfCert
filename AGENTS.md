@@ -91,12 +91,11 @@ install provides the library, the public headers, a generated
 | `WOLFCERT_ENABLE_SERVER` | `--enable-server` | on | Minimal EST/SCEP test server |
 | `WOLFCERT_ENABLE_CLI` | `--enable-cli` | on | `wolfcert-client`, `wolfcert-server` |
 | `WOLFCERT_ENABLE_BUILTIN_TRANSPORT` | `--enable-builtin-transport` | on | POSIX socket transport; turn off on targets with no sockets |
-| `WOLFCERT_ENABLE_POSIX_STORE` | `--enable-posix-store` | on | File-based cert/key store |
 | `WOLFCERT_BUILD_SHARED` | (libtool `--enable-shared`) | on | Shared vs static library |
 | `WOLFCERT_USER_SETTINGS` | `--enable-user-settings` | off | Read features from `user_settings.h` instead of the generated `options.h` |
 
 A device build usually turns off the server and CLI, and the built-in
-transport and POSIX store where the target has no sockets or filesystem.
+transport where the target has no sockets.
 
 ## Configuration model
 
@@ -185,9 +184,8 @@ wolfcert_cleanup();
 | `wolfcert/wolfcert.h` | Umbrella header, `wolfcert_init` / `wolfcert_cleanup` |
 | `wolfcert/client.h` | High-level `wolfcert_client_*` API |
 | `wolfcert/est.h`, `wolfcert/scep.h` | Protocol one-shots, sessions, non-blocking `_nb` sessions |
-| `wolfcert/types.h` | `WolfCertServerCfg`, `WolfCertKeyCfg`, `WolfCertCertMeta`, `WolfCertEncoding` (PEM or DER output), `WolfCertTransport`, `wolfcert_buffer_free` |
+| `wolfcert/types.h` | `WolfCertServerCfg`, `WolfCertKeyCfg`, `WolfCertCertMeta`, `WolfCertEncoding` (PEM or DER output), `WolfCertTransport`, `wolfcert_buffer_free` / `_secure` |
 | `wolfcert/keygen.h`, `wolfcert/csr.h` | Key generation, import / export, CSR building |
-| `wolfcert/store.h` | `WolfCertStoreOps` storage vtable, POSIX and in-memory backends |
 | `wolfcert/errors.h`, `wolfcert/status.h`, `wolfcert/log.h` | Error codes, last-error detail, log callback |
 | `wolfcert/memory.h` | Default heap hint, allocation macros |
 | `examples/` | `enroll_est.c`, `enroll_scep.c`, `enroll_cryptocb.c`, `user_settings.h.example` |
@@ -204,7 +202,7 @@ contract, alone or in a group comment.
 |---|---|---|
 | Static memory / custom heap | `wolfcert_init(heap)` sets the default heap hint; per-call `heap` fields override it, and the hint reaches every wolfSSL call | `wolfcert/memory.h`, README "Integrating with a wolfSSL static-memory pool" |
 | Network stack without BSD sockets (lwIP, NetX, FreeRTOS+TCP, wolfIP) | Fill `WolfCertServerCfg.transport` (`WolfCertTransport`); TLS records go through it too | `wolfcert/types.h`, `docs/EMBEDDED.md` section 7 |
-| Persistence in flash / NVM | Implement `WolfCertStoreOps` (`read` / `write` / `remove`) | `wolfcert/store.h` |
+| Persistence in flash / NVM | Store the buffers from `wolfcert_key_to_pem` / `_to_der` and the enroll result; wolfCert does no storage | `wolfcert/keygen.h` |
 | Keys in a TPM, HSM, PKCS#11 token or secure element | Register a backend with `wc_CryptoCb_RegisterDevice`, pass its id as `WolfCertKeyCfg.dev_id` | `docs/ARCHITECTURE.md` section 4.2, `examples/enroll_cryptocb.c` |
 | Event loop / no blocking | `wolfcert_est_session_open` / `wolfcert_scep_session_open`, then the `_nb` calls until they stop returning `WOLFCERT_ERR_WANT_READ` / `_WANT_WRITE`; `*_session_fd` gives the descriptor to poll | `wolfcert/est.h`, `wolfcert/scep.h` |
 | Logging | `wolfcert_set_log_cb` (e.g. to a UART) | `wolfcert/log.h` |

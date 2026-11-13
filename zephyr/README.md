@@ -221,8 +221,7 @@ needs changing. `prj.conf` leaves these to the board:
   clock — [`docs/EMBEDDED.md` section 8](../docs/EMBEDDED.md#8-zephyr)
   explains why.
 - **Keeping the key and certificate.** They are freed here. A real device
-  writes them through a `WolfCertStoreOps` — on Zephyr, one over NVS or the
-  settings subsystem.
+  writes them to NVS or the settings subsystem.
 
 ## Running the tests
 

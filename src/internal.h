@@ -103,9 +103,14 @@ typedef struct {
 } WolfCertCa;
 
 int  wolfcert_ca_generate(WolfCertCa* ca, WolfCertKeyType type, int param, void* heap);
-WOLFCERT_TEST_VIS int  wolfcert_ca_load(WolfCertCa* ca, WolfCertStoreOps* store,
+/* Load a CA from a certificate and private key, each PEM or DER. */
+WOLFCERT_TEST_VIS int  wolfcert_ca_load(WolfCertCa* ca,
+                                        const uint8_t* cert, size_t cert_len,
+                                        const uint8_t* key, size_t key_len,
                                         void* heap);
-int  wolfcert_ca_save(const WolfCertCa* ca, WolfCertStoreOps* store);
+/* Copy out the CA certificate and, unless out_key is NULL, its key. */
+int  wolfcert_ca_export(const WolfCertCa* ca, WolfCertEncoding enc,
+                        WolfCertBuffer* out_cert, WolfCertBuffer* out_key);
 WOLFCERT_TEST_VIS void wolfcert_ca_free(WolfCertCa* ca);
 
 /* Rebuild an issued certificate's subject from a decoded CSR. */

@@ -51,13 +51,27 @@ static WolfCertKey* alloc_shell(WolfCertKeyType type, int dev_id,
 
 static int check_key_id(const WolfCertKeyCfg* cfg, int dev_id)
 {
+    int rc = wolfcert_dev_id_check(dev_id, "keygen");
+
+    if (rc != WOLFCERT_OK)
+        return rc;
     if (cfg->key_id_len == 0)
         return cfg->key_id == NULL ? WOLFCERT_OK
                : WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "keygen",
                               "key_id is set but key_id_len is 0");
-
-    return wolfcert_key_id_check(cfg->key_id, cfg->key_id_len, dev_id,
-                                 "keygen");
+    if (cfg->key_id == NULL || cfg->key_id_len > WOLFCERT_KEY_ID_MAX_LEN)
+        return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "keygen",
+                            "key id must be 1..%d bytes",
+                            WOLFCERT_KEY_ID_MAX_LEN);
+    if (dev_id == INVALID_DEVID)
+        return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "keygen",
+                            "key id needs a CryptoCb device id");
+#ifndef WOLFCERT_USE_KEY_ID
+    return WOLFCERT_ERR(WOLFCERT_ERR_UNSUPPORTED, "keygen",
+                        "wolfSSL lacks WOLF_CRYPTO_CB or WOLF_PRIVATE_KEY_ID");
+#else
+    return WOLFCERT_OK;
+#endif
 }
 
 static void free_shell(WolfCertKey* k)
@@ -74,19 +88,13 @@ static void free_shell(WolfCertKey* k)
 
 int wolfcert_key_generate(const WolfCertKeyCfg* cfg, WolfCertKey** out_key)
 {
-    return wolfcert_key_generate_on(cfg,
-        cfg != NULL ? wolfcert_devid_or_default(cfg->dev_id) : INVALID_DEVID,
-        out_key);
-}
-
-int wolfcert_key_generate_on(const WolfCertKeyCfg* cfg, int dev_id,
-                             WolfCertKey** out_key)
-{
     if (out_key == NULL)
         return WOLFCERT_ERR_BAD_ARG;
     *out_key = NULL;
     if (cfg == NULL)
         return WOLFCERT_ERR_BAD_ARG;
+
+    int dev_id = cfg->dev_id;
 
     const WolfCertKeyAlg* alg = wolfcert_key_alg(cfg->type);
     if (alg == NULL)
@@ -220,8 +228,7 @@ int wolfcert_key_from_pem(const uint8_t* data, size_t data_len,
     const WolfCertKeyAlg* const* list = wolfcert_key_algs_all();
     for (; *list != NULL; ++list) {
         const WolfCertKeyAlg* a = *list;
-        WolfCertKey* k = alloc_shell(a->type, wolfcert_default_dev_id(), NULL,
-                                     0, heap);
+        WolfCertKey* k = alloc_shell(a->type, INVALID_DEVID, NULL, 0, heap);
         if (k == NULL) {
             if (der != NULL)
                 wc_FreeDer(&der);
@@ -330,7 +337,7 @@ int wolfcert_key_from_id(const WolfCertKeyCfg* cfg,
     if (cfg == NULL || cfg->key_id_len == 0 || cert == NULL || cert_len == 0)
         return WOLFCERT_ERR_BAD_ARG;
 
-    int dev_id = wolfcert_devid_or_default(cfg->dev_id);
+    int dev_id = cfg->dev_id;
     int rc = check_key_id(cfg, dev_id);
     if (rc != WOLFCERT_OK)
         return rc;
@@ -381,7 +388,7 @@ int wolfcert_key_export_der(const WolfCertKey* key, uint8_t** out_der,
     const WolfCertKeyAlg* alg = wolfcert_key_alg(key->type);
     if (alg == NULL)
         return WOLFCERT_ERR_UNSUPPORTED;
-    if (key->id_len > 0)
+    if (key->id_len > 0 || (alg->host_priv != NULL && !alg->host_priv(key)))
         return WOLFCERT_ERR(WOLFCERT_ERR_UNSUPPORTED, "keygen",
                             "the private key stays in CryptoCb device %d",
                             key->dev_id);

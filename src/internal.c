@@ -31,12 +31,7 @@
 #include <string.h>
 
 static void*            g_default_heap = NULL;
-#if defined(WC_USE_DEVID) && defined(WOLF_CRYPTO_CB)
-#define START_DEV_ID WC_USE_DEVID
-#else
-#define START_DEV_ID INVALID_DEVID
-#endif
-static int              g_default_dev_id = START_DEV_ID;
+static int              g_default_dev_id = WOLFCERT_DEFAULT_DEVID;
 static WolfCertLogCb    g_log_cb       = NULL;
 static void*            g_log_ctx      = NULL;
 static WolfCertLogLevel g_log_level    = WOLFCERT_LOG_WARN;
@@ -60,19 +55,32 @@ void* wolfcert_default_heap(void)
     return g_default_heap;
 }
 
+int wolfcert_dev_id_check(int dev_id, const char* module)
+{
+    if (dev_id == INVALID_DEVID)
+        return WOLFCERT_OK;
+#ifndef WOLF_CRYPTO_CB
+    return WOLFCERT_ERR(WOLFCERT_ERR_UNSUPPORTED, module,
+                        "wolfSSL lacks WOLF_CRYPTO_CB");
+#else
+#ifndef WOLF_CRYPTO_CB_FIND
+    if (!wc_CryptoCb_IsDeviceRegistered(dev_id))
+        return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, module,
+                            "no CryptoCb device %d is registered", dev_id);
+#else
+    (void)module;
+#endif
+    return WOLFCERT_OK;
+#endif
+}
+
 int wolfcert_set_default_dev_id(int dev_id)
 {
-#ifndef WOLF_CRYPTO_CB
-    if (dev_id != INVALID_DEVID)
-        return WOLFCERT_ERR(WOLFCERT_ERR_UNSUPPORTED, "wolfcert",
-                            "wolfSSL lacks WOLF_CRYPTO_CB");
-#elif !defined(WOLF_CRYPTO_CB_FIND)
-    if (dev_id != INVALID_DEVID && !wc_CryptoCb_IsDeviceRegistered(dev_id))
-        return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "wolfcert",
-                            "no CryptoCb device %d is registered", dev_id);
-#endif
-    g_default_dev_id = dev_id;
-    return WOLFCERT_OK;
+    int rc = wolfcert_dev_id_check(dev_id, "wolfcert");
+
+    if (rc == WOLFCERT_OK)
+        g_default_dev_id = dev_id;
+    return rc;
 }
 
 int wolfcert_default_dev_id(void)
@@ -82,7 +90,7 @@ int wolfcert_default_dev_id(void)
 
 void wolfcert_default_dev_id_reset(void)
 {
-    g_default_dev_id = START_DEV_ID;
+    g_default_dev_id = WOLFCERT_DEFAULT_DEVID;
 }
 
 void wolfcert_set_log_cb(WolfCertLogCb cb, void* ctx)
@@ -427,24 +435,6 @@ int wolfcert_ecc_param_from_curve(int curve_id, int* out_param)
     return WOLFCERT_ERR_UNSUPPORTED;
 }
 #endif /* WOLFCERT_HAVE_ECC */
-
-int wolfcert_key_id_check(const uint8_t* id, size_t id_len, int dev_id,
-                          const char* module)
-{
-    if (id == NULL || id_len == 0 || id_len > WOLFCERT_KEY_ID_MAX_LEN)
-        return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, module,
-                            "key id must be 1..%d bytes",
-                            WOLFCERT_KEY_ID_MAX_LEN);
-    if (!wolfcert_devid_is_cb(dev_id))
-        return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, module,
-                            "key id needs a CryptoCb device id");
-#ifndef WOLFCERT_USE_KEY_ID
-    return WOLFCERT_ERR(WOLFCERT_ERR_UNSUPPORTED, module,
-                        "wolfSSL lacks WOLF_CRYPTO_CB or WOLF_PRIVATE_KEY_ID");
-#else
-    return WOLFCERT_OK;
-#endif
-}
 
 WOLFCERT_TEST_VIS int wolfcert_base64_encode(const uint8_t* in, size_t in_len,
                                              WolfCertBuffer* out, void* heap)

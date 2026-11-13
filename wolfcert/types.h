@@ -39,6 +39,8 @@
 extern "C" {
 #endif
 
+typedef struct WolfCertKey WolfCertKey;
+
 typedef enum {
     WOLFCERT_PROTO_EST  = 1,
     WOLFCERT_PROTO_SCEP = 2
@@ -83,16 +85,10 @@ typedef enum {
 #define WOLFCERT_KEY_ID_MAX_LEN 32
 #endif
 
-/* What a TLS client_key holds. */
-typedef enum {
-    WOLFCERT_CLIENT_KEY_BUFFER = 0, /* PEM or DER */
-    WOLFCERT_CLIENT_KEY_ID     = 1  /* key id held by client_key_dev_id */
-} WolfCertClientKeySrc;
-
 typedef struct {
     WolfCertKeyType type;
     int             param;       /* RSA 2048/3072/4096 or ECC 256/384/521 bits */
-    int             dev_id;      /* devId; INVALID_DEVID = the default */
+    int             dev_id;      /* devId as given; INVALID_DEVID = software */
     void*           heap;        /* optional heap hint; NULL = default */
     /* Backend key id, opaque to wolfCert; needs a devId. Up to
      * WOLFCERT_KEY_ID_MAX_LEN bytes. */
@@ -100,8 +96,22 @@ typedef struct {
     size_t          key_id_len;
 } WolfCertKeyCfg;
 
-/* Registered devId for client crypto and keys made later with INVALID_DEVID;
- * starts as WC_USE_DEVID if defined. Set it before threads use wolfCert. */
+/* Start value of the default devId; user_settings.h may override it. */
+#ifndef WOLFCERT_DEFAULT_DEVID
+    #if defined(WC_USE_DEVID) && defined(WOLF_CRYPTO_CB)
+        #define WOLFCERT_DEFAULT_DEVID WC_USE_DEVID
+    #else
+        #define WOLFCERT_DEFAULT_DEVID INVALID_DEVID
+    #endif
+#endif
+#if !defined(WOLF_CRYPTO_CB) && WOLFCERT_DEFAULT_DEVID != INVALID_DEVID
+    #error "WOLFCERT_DEFAULT_DEVID needs wolfSSL built with WOLF_CRYPTO_CB"
+#endif
+
+/* Registered devId for the TLS contexts and SCEP PKCS#7 objects wolfCert
+ * creates; keys, their keygen and CSRs use their own. BAD_ARG for an
+ * unregistered devId, UNSUPPORTED without WOLF_CRYPTO_CB. Set it before
+ * threads use wolfCert. */
 WOLFCERT_API int  wolfcert_set_default_dev_id(int dev_id);
 WOLFCERT_API int  wolfcert_default_dev_id(void);
 
@@ -250,10 +260,9 @@ typedef struct {
 
     WolfCertTransport transport;
 
-    /* What client_key holds, and the device holding an _ID key (INVALID_DEVID =
-     * default). _ID needs client_cert, client_key and an https:// URL. */
-    WolfCertClientKeySrc client_key_src;
-    int                  client_key_dev_id;
+    /* Instead of client_key: the TLS client key as a key handle, borrowed
+     * while an https:// connection opens; a key_id key signs in its device. */
+    const WolfCertKey* client_key_obj;
 } WolfCertServerCfg;
 
 /* Caller-owned byte buffer filled by the library. wolfcert_buffer_free()

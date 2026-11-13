@@ -394,8 +394,9 @@ static int accel_cb(int devId, wc_CryptoInfo* info, void* ctx)
     return CRYPTOCB_UNAVAILABLE;
 }
 
-/* A PKCSReq with a default devId signs, decrypts, encrypts and verifies on
- * it, while the built-in server stays in software. */
+/* A PKCSReq with a default devId runs its PKCS#7 signing, decryption,
+ * encryption and verification there; a software key and the built-in server
+ * stay in software. */
 static int check_default_dev_id(const WolfCertServerCfg* cli,
                                 const WolfCertScepCaps* caps,
                                 const uint8_t* ca_der_buf, size_t ca_der_len)
@@ -417,11 +418,11 @@ static int check_default_dev_id(const WolfCertServerCfg* cli,
     REQUIRE(wolfcert_set_default_dev_id(ACCEL_DEVID) == WOLFCERT_OK);
 
     REQUIRE(wolfcert_key_generate(&kcfg, &key) == WOLFCERT_OK);
-    REQUIRE(wolfcert_key_dev_id(key) == ACCEL_DEVID);
+    REQUIRE(wolfcert_key_dev_id(key) == INVALID_DEVID);
     REQUIRE(wolfcert_key_to_pem(key, &pem) == WOLFCERT_OK);
     REQUIRE(wolfcert_key_from_pem(pem.data, pem.len, NULL, &imported) ==
             WOLFCERT_OK);
-    REQUIRE(wolfcert_key_dev_id(imported) == ACCEL_DEVID);
+    REQUIRE(wolfcert_key_dev_id(imported) == INVALID_DEVID);
     REQUIRE(wolfcert_csr_build(key, &meta, &csr) == WOLFCERT_OK);
 
     accel_priv = 0;
@@ -431,8 +432,8 @@ static int check_default_dev_id(const WolfCertServerCfg* cli,
                                    key, csr.data, csr.len, &issued) ==
             WOLFCERT_OK);
     REQUIRE(issued.status == WOLFCERT_SCEP_STATUS_SUCCESS);
-    /* Self-signed signer, pkiMessage signature and CertRep decryption. */
-    REQUIRE(accel_priv >= 3);
+    /* pkiMessage signature and CertRep decryption. */
+    REQUIRE(accel_priv >= 2);
     REQUIRE(accel_pub >= 2);
 
     REQUIRE(wolfcert_set_default_dev_id(INVALID_DEVID) == WOLFCERT_OK);

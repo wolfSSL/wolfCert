@@ -102,7 +102,7 @@ int main(void)
         .protocol            = WOLFCERT_PROTO_EST,
         .bind_host           = "127.0.0.1",
         .bind_port           = 0,
-        .ca_store            = test_ca_store(),
+        TEST_CA_CFG,
         .csr_attributes_der  = blob.data,
         .csr_attributes_len  = blob.len,
         .tls_cert_pem        = tls_cert, .tls_cert_pem_len = tls_cert_len,
@@ -178,7 +178,7 @@ int main(void)
     WolfCertServerCfgSrv cfg2 = {
         .protocol = WOLFCERT_PROTO_EST,
         .bind_host = "127.0.0.1", .bind_port = 0,
-        .ca_store = test_ca_store(),
+        TEST_CA_CFG,
         .tls_cert_pem = tls_cert, .tls_cert_pem_len = tls_cert_len,
         .tls_key_pem  = tls_key,  .tls_key_pem_len  = tls_key_len,
         .est_allow_anonymous_enroll = 1,
@@ -232,7 +232,7 @@ int main(void)
     wolfcert_buffer_free(&blob);
     free(tls_cert);
     free(tls_key);
-    test_ca_store_close();
+    test_ca_close();
     wolfcert_cleanup();
     printf("OK\n");
     return 0;

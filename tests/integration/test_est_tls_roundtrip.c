@@ -162,7 +162,7 @@ static int test_client_reenroll_keeps_identity(const uint8_t* tls_cert,
         .protocol         = WOLFCERT_PROTO_EST,
         .bind_host        = "127.0.0.1",
         .bind_port        = 0,
-        .ca_store         = test_ca_store(),
+        TEST_CA_CFG,
         .tls_cert_pem     = tls_cert, .tls_cert_pem_len = tls_cert_len,
         .tls_key_pem      = tls_key,  .tls_key_pem_len  = tls_key_len,
     };
@@ -297,33 +297,26 @@ int main(void)
     size_t tls_key_len  = 0;
     REQUIRE(gen_server_identity(&tls_cert, &tls_cert_len, &tls_key, &tls_key_len) == 0);
 
-    /* An EST listener without a TLS identity is refused at start. */
-    WolfCertStoreOps* plain_store = wolfcert_store_memory_open(NULL);
-    REQUIRE(plain_store != NULL);
+    /* An EST listener without a TLS identity is refused at start, before the
+     * CA is loaded: this one does not parse. */
+    static const uint8_t junk_ca[] = "not a CA";
     WolfCertServerCfgSrv plain = {
-        .protocol  = WOLFCERT_PROTO_EST,
-        .bind_host = "127.0.0.1",
-        .bind_port = 0,
-        .ca_store  = plain_store,
+        .protocol    = WOLFCERT_PROTO_EST,
+        .bind_host   = "127.0.0.1",
+        .bind_port   = 0,
+        .ca_cert     = junk_ca, .ca_cert_len = sizeof(junk_ca) - 1,
+        .ca_key      = junk_ca, .ca_key_len  = sizeof(junk_ca) - 1,
     };
     WolfCertServer* plain_srv = NULL;
     REQUIRE(wolfcert_server_start(&plain, &plain_srv) == WOLFCERT_ERR_TLS);
     REQUIRE(plain_srv == NULL);
-
-    /* The refusal comes before a CA is minted into the store. */
-    WolfCertBuffer leftover = { 0 };
-    REQUIRE(plain_store->read(plain_store->ctx, "ca.cert.der", &leftover)
-            == WOLFCERT_ERR_NOT_FOUND);
-    REQUIRE(plain_store->read(plain_store->ctx, "ca.key.der", &leftover)
-            == WOLFCERT_ERR_NOT_FOUND);
-    wolfcert_store_memory_close(plain_store);
 
     /* An EST listener with no way to authenticate a client is refused too. */
     WolfCertServerCfgSrv open_cfg = {
         .protocol         = WOLFCERT_PROTO_EST,
         .bind_host        = "127.0.0.1",
         .bind_port        = 0,
-        .ca_store         = test_ca_store(),
+        TEST_CA_CFG,
         .tls_cert_pem     = tls_cert, .tls_cert_pem_len = tls_cert_len,
         .tls_key_pem      = tls_key,  .tls_key_pem_len  = tls_key_len,
     };
@@ -361,7 +354,7 @@ int main(void)
         .protocol         = WOLFCERT_PROTO_EST,
         .bind_host        = "127.0.0.1",
         .bind_port        = 0,
-        .ca_store         = test_ca_store(),
+        TEST_CA_CFG,
         .tls_cert_pem     = tls_cert, .tls_cert_pem_len = tls_cert_len,
         .tls_key_pem      = tls_key,  .tls_key_pem_len  = tls_key_len,
         .est_allow_anonymous_enroll = 1,
@@ -457,7 +450,7 @@ int main(void)
     wolfcert_key_free(dk);
     free(tls_cert);
     free(tls_key);
-    test_ca_store_close();
+    test_ca_close();
     wolfcert_cleanup();
     printf("OK\n");
     return 0;

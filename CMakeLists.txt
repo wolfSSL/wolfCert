@@ -32,7 +32,6 @@ option(WOLFCERT_ENABLE_SERVER  "Build the minimal EST/SCEP test server" ON)
 option(WOLFCERT_ENABLE_CLI     "Build wolfcert-client / wolfcert-server" ON)
 option(WOLFCERT_ENABLE_TESTS   "Build unit and integration tests"       OFF)
 option(WOLFCERT_ENABLE_EXAMPLES "Build example programs"                OFF)
-option(WOLFCERT_ENABLE_POSIX_STORE "Build the POSIX file storage backend" ON)
 option(WOLFCERT_ENABLE_BUILTIN_TRANSPORT
     "Build the built-in POSIX socket transport" ON)
 option(WOLFCERT_WERROR         "Treat warnings as errors"               OFF)
@@ -312,8 +311,6 @@ if(NOT WOLFCERT_USER_SETTINGS)
     _wc_opt(WOLFCERT_OPT_EST     "${WOLFCERT_ENABLE_EST}"    WOLFCERT_HAVE_EST)
     _wc_opt(WOLFCERT_OPT_SCEP    "${WOLFCERT_ENABLE_SCEP}"   WOLFCERT_HAVE_SCEP)
     _wc_opt(WOLFCERT_OPT_SERVER  "${WOLFCERT_ENABLE_SERVER}" WOLFCERT_HAVE_SERVER)
-    _wc_plat(WOLFCERT_OPT_POSIX_STORE "${WOLFCERT_ENABLE_POSIX_STORE}"
-             WOLFCERT_HAVE_POSIX_STORE WOLFCERT_NO_POSIX_STORE)
     _wc_plat(WOLFCERT_OPT_BUILTIN_TRANSPORT
              "${WOLFCERT_ENABLE_BUILTIN_TRANSPORT}"
              WOLFCERT_HAVE_BUILTIN_TRANSPORT WOLFCERT_NO_BUILTIN_TRANSPORT)
@@ -335,7 +332,6 @@ set(WOLFCERT_SOURCES
     src/key_algs.c
     src/keygen.c
     src/csr.c
-    src/store.c
     src/http.c
     src/client.c)
 
@@ -641,6 +637,6 @@ endif()
 
 message(STATUS "wolfCert ${PROJECT_VERSION}: EST=${WOLFCERT_ENABLE_EST}, "
     "SCEP=${WOLFCERT_ENABLE_SCEP}, server=${WOLFCERT_ENABLE_SERVER}, "
-    "cli=${WOLFCERT_ENABLE_CLI}, posix_store=${WOLFCERT_ENABLE_POSIX_STORE}, "
+    "cli=${WOLFCERT_ENABLE_CLI}, "
     "builtin_transport=${WOLFCERT_ENABLE_BUILTIN_TRANSPORT}, "
     "user_settings=${WOLFCERT_USER_SETTINGS}")

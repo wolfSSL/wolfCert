@@ -19,7 +19,6 @@ libwolfcert_la_SOURCES = \
     src/key_algs.h \
     src/keygen.c \
     src/csr.c \
-    src/store.c \
     src/http.c \
     src/client.c
 
@@ -68,7 +67,6 @@ wolfcertinclude_HEADERS = \
     wolfcert/types.h    \
     wolfcert/keygen.h   \
     wolfcert/csr.h      \
-    wolfcert/store.h    \
     wolfcert/http.h     \
     wolfcert/est.h      \
     wolfcert/scep.h     \
@@ -106,7 +104,7 @@ endif
 
 if WOLFCERT_BUILD_TESTS
 check_PROGRAMS = \
-    test_smoke test_keygen test_csr test_store test_http test_transport \
+    test_smoke test_keygen test_csr test_http test_transport \
     test_parse_negative test_tls_http
 if WOLFCERT_HAVE_BUILTIN_TRANSPORT
 check_PROGRAMS     += test_net
@@ -119,8 +117,6 @@ test_keygen_LDADD   = libwolfcert.la $(WOLFSSL_LIBS)
 test_csr_SOURCES    = tests/unit/test_csr.c
 test_csr_CPPFLAGS = $(AM_CPPFLAGS) -I$(top_srcdir)/src
 test_csr_LDADD      = libwolfcert.la $(WOLFSSL_LIBS)
-test_store_SOURCES  = tests/unit/test_store.c
-test_store_LDADD    = libwolfcert.la $(WOLFSSL_LIBS)
 test_transport_SOURCES = tests/unit/test_transport.c
 test_transport_CPPFLAGS = $(AM_CPPFLAGS) -I$(top_srcdir)/src
 test_transport_LDADD   = libwolfcert.la $(WOLFSSL_LIBS)
@@ -201,13 +197,13 @@ endif
 
 # Protocol-agnostic server tests.
 if WOLFCERT_HAVE_SERVER
-check_PROGRAMS += test_server_stop_idle test_server_ca_store
+check_PROGRAMS += test_server_stop_idle test_server_ca
 test_server_stop_idle_SOURCES = tests/integration/test_server_stop_idle.c
 test_server_stop_idle_CPPFLAGS = $(AM_CPPFLAGS) -I$(top_srcdir)/src
 test_server_stop_idle_LDADD   = libwolfcert.la $(WOLFSSL_LIBS) -lpthread
-test_server_ca_store_SOURCES = tests/unit/test_server_ca_store.c
-test_server_ca_store_CPPFLAGS = $(AM_CPPFLAGS) -I$(top_srcdir)/src
-test_server_ca_store_LDADD   = libwolfcert.la $(WOLFSSL_LIBS) -lpthread
+test_server_ca_SOURCES = tests/unit/test_server_ca.c
+test_server_ca_CPPFLAGS = $(AM_CPPFLAGS) -I$(top_srcdir)/src
+test_server_ca_LDADD   = libwolfcert.la $(WOLFSSL_LIBS) -lpthread
 endif
 
 TESTS = $(check_PROGRAMS)

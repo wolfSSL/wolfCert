@@ -34,7 +34,6 @@
 #include <wolfcert/memory.h>
 #include <wolfcert/keygen.h>
 #include <wolfcert/csr.h>
-#include <wolfcert/store.h>
 #include <wolfcert/http.h>
 #ifdef WOLFCERT_HAVE_EST
 #  include <wolfcert/est.h>

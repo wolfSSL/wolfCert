@@ -1821,7 +1821,7 @@ static int test_split_ra(void)
 {
     WolfCertServerCfgSrv cfg = { .protocol = WOLFCERT_PROTO_SCEP,
                                  .bind_host = "127.0.0.1", .bind_port = 0,
-                                 .ca_store = test_ca_store(),
+                                 TEST_CA_CFG,
                                  .scep_split_ra = 1 };
     WolfCertKeyCfg kcfg = { .type = WOLFCERT_KEY_RSA, .param = 2048,
                             .dev_id = WOLFCERT_DEVID_SOFTWARE };
@@ -1971,7 +1971,7 @@ int main(void)
 
     WolfCertServerCfgSrv cfg = { .protocol = WOLFCERT_PROTO_SCEP,
                                  .bind_host = "127.0.0.1", .bind_port = 0,
-                                 .ca_store = test_ca_store() };
+                                 TEST_CA_CFG };
     WolfCertServer* s = NULL;
     REQUIRE(wolfcert_server_start(&cfg, &s) == WOLFCERT_OK);
     REQUIRE(wolfcert_scep_server_set_bundle_fault(s, 2)
@@ -2257,7 +2257,7 @@ int main(void)
     /* Challenge password (RFC 8894 section 2.9). */
     WolfCertServerCfgSrv cfg2 = { .protocol = WOLFCERT_PROTO_SCEP,
                                   .bind_host = "127.0.0.1", .bind_port = 0,
-                                  .ca_store = test_ca_store(),
+                                  TEST_CA_CFG,
                                   .challenge_password = "correct-horse" };
     WolfCertServer* s2 = NULL;
     REQUIRE(wolfcert_server_start(&cfg2, &s2) == WOLFCERT_OK);
@@ -2391,7 +2391,7 @@ int main(void)
     /* A CertRep with no recipientNonce is rejected (RFC 8894 3.2.1.2). */
     WolfCertServerCfgSrv cfg3 = { .protocol = WOLFCERT_PROTO_SCEP,
                                   .bind_host = "127.0.0.1", .bind_port = 0,
-                                  .ca_store = test_ca_store() };
+                                  TEST_CA_CFG };
     WolfCertServer* s3 = NULL;
     REQUIRE(wolfcert_server_start(&cfg3, &s3) == WOLFCERT_OK);
     wolfcert_scep_server_set_faults(s3, 1 /* omit recipientNonce */, 0, 0);
@@ -2434,7 +2434,7 @@ int main(void)
     /* A CertRep signed by a key other than the CA's is rejected. */
     WolfCertServerCfgSrv cfg4 = { .protocol = WOLFCERT_PROTO_SCEP,
                                   .bind_host = "127.0.0.1", .bind_port = 0,
-                                  .ca_store = test_ca_store() };
+                                  TEST_CA_CFG };
     WolfCertServer* s4 = NULL;
     REQUIRE(wolfcert_server_start(&cfg4, &s4) == WOLFCERT_OK);
     wolfcert_scep_server_set_faults(s4, 0, 1 /* sign with wrong key */, 0);
@@ -2477,7 +2477,7 @@ int main(void)
     /* A failed senderNonce RNG draw on the server answers HTTP 500. */
     WolfCertServerCfgSrv cfg5 = { .protocol = WOLFCERT_PROTO_SCEP,
                                   .bind_host = "127.0.0.1", .bind_port = 0,
-                                  .ca_store = test_ca_store() };
+                                  TEST_CA_CFG };
     WolfCertServer* s5 = NULL;
     REQUIRE(wolfcert_server_start(&cfg5, &s5) == WOLFCERT_OK);
     wolfcert_scep_server_set_faults(s5, 0, 0, 1 /* RNG draw fails */);
@@ -2523,7 +2523,7 @@ int main(void)
     wolfcert_buffer_free(&csr);
     wolfcert_scep_result_free(&issued);
     wolfcert_key_free(dk);
-    test_ca_store_close();
+    test_ca_close();
     wolfcert_cleanup();
     printf("OK\n");
     return 0;

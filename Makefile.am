@@ -104,6 +104,23 @@ WOLFCERT_TEST_SERVER    = $(abs_builddir)/wolfcert-server
 endif
 endif
 
+noinst_PROGRAMS =
+
+if WOLFCERT_BUILD_EXAMPLES
+if WOLFCERT_HAVE_EST
+noinst_PROGRAMS += examples/enroll_est examples/enroll_cryptocb
+endif
+if WOLFCERT_HAVE_SCEP
+noinst_PROGRAMS += examples/enroll_scep
+endif
+endif
+examples_enroll_est_SOURCES      = examples/enroll_est.c
+examples_enroll_est_LDADD        = libwolfcert.la $(WOLFSSL_LIBS)
+examples_enroll_cryptocb_SOURCES = examples/enroll_cryptocb.c
+examples_enroll_cryptocb_LDADD   = libwolfcert.la $(WOLFSSL_LIBS)
+examples_enroll_scep_SOURCES     = examples/enroll_scep.c
+examples_enroll_scep_LDADD       = libwolfcert.la $(WOLFSSL_LIBS)
+
 if WOLFCERT_BUILD_TESTS
 check_PROGRAMS = \
     test_smoke test_keygen test_csr test_store test_http test_transport \
@@ -245,14 +262,34 @@ EXTRA_DIST = \
     CMakeLists.txt      \
     wolfcert/options.h.in \
     examples/user_settings.h.example \
+    examples/CMakeLists.txt \
+    examples/certs/README.md \
+    examples/certs/gen-certs.sh \
+    examples/certs/gen-server-cert.sh \
+    examples/certs/ecc/ca-cert.pem \
+    examples/certs/ecc/ca-key.pem \
+    examples/certs/ecc/client-cert.pem \
+    examples/certs/ecc/client-key.pem \
+    examples/certs/ecc/server-cert.pem \
+    examples/certs/ecc/server-key.pem \
+    examples/certs/mldsa/ca-cert.pem \
+    examples/certs/mldsa/ca-key.pem \
+    examples/certs/mldsa/client-cert.pem \
+    examples/certs/mldsa/client-key.pem \
+    examples/certs/mldsa/server-cert.pem \
+    examples/certs/mldsa/server-key.pem \
     cmake/wolfCertConfig.cmake.in \
     cmake/Config.cmake.in \
     cmake/wolfCertConfigVersion.cmake.in \
     cmake/wolfCertTargets.cmake.in \
     cmake/wolfcert.pc.in \
+    tests/CMakeLists.txt \
+    tests/test_static_mem.h \
     tests/integration/tls_test_util.h \
     tests/integration/est_client_cases.h \
     tests/integration/cli_proto_scoping.sh
+
+AM_DISTCHECK_CONFIGURE_FLAGS = --enable-tests --enable-examples
 
 # Zephyr module port
 include zephyr/include.am

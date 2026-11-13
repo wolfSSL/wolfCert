@@ -191,7 +191,7 @@ wolfcert_cleanup();
 | `wolfcert/errors.h`, `wolfcert/status.h`, `wolfcert/log.h` | Error codes, last-error detail, log callback |
 | `wolfcert/memory.h` | Default heap hint, allocation macros |
 | `examples/` | `enroll_est.c`, `enroll_scep.c`, `enroll_cryptocb.c`, `user_settings.h.example` |
-| `examples/certs/` | Test credentials; never ship them |
+| `examples/certs/` | Test credentials; never deploy them |
 | `zephyr/samples/wolfcert_est_client/` | EST client on Zephyr (qemu_x86, FRDM-MCXN947) |
 | `src/` | Implementation; `src/internal.h` is not for applications |
 

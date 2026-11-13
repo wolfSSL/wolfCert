@@ -72,6 +72,11 @@ cmake/wolfCertTargets.cmake
 /wolfcert-client
 /wolfcert-server
 
+# Example binaries from an in-tree autoconf build
+/examples/enroll_est
+/examples/enroll_cryptocb
+/examples/enroll_scep
+
 # make sbom in the source tree
 /wolfcert-*.cdx.json
 /wolfcert-*.spdx.json

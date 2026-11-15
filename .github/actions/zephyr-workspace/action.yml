@@ -3,7 +3,7 @@ name: zephyr-workspace
 description: >
   Restore or create the west workspace (Zephyr + wolfSSL) in ~/zephyrproject
   with its venv in ~/zephyr-venv, install the Zephyr SDK with one GNU
-  toolchain, and export ZEPHYR_SDK_INSTALL_DIR.
+  toolchain, export ZEPHYR_SDK_INSTALL_DIR, and restore the job's ccache.
 
 inputs:
   zephyr-ref:
@@ -22,6 +22,14 @@ inputs:
     description: "Save the workspace cache after a miss (one job only, so jobs cannot race on the key)"
     required: false
     default: "false"
+  ccache-name:
+    description: "Job name in the ccache key; a job restores its own cache, else the newest on its toolchain, and saves its own after its builds"
+    required: true
+
+outputs:
+  ccache-key:
+    description: "Key to save ~/.cache/ccache under at the end of the job"
+    value: ${{ steps.cckey.outputs.key }}
 
 runs:
   using: composite
@@ -31,9 +39,7 @@ runs:
       run: |
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends \
-          ninja-build gperf ccache dfu-util device-tree-compiler wget \
-          python3-dev python3-pip python3-setuptools python3-wheel \
-          xz-utils file make gcc libsdl2-dev libmagic1
+          ninja-build gperf ccache device-tree-compiler
 
     # Keyed on the refs, the manifest script and the venv's interpreter; west
     # update still moves wolfSSL to the tip of wolfssl-ref.
@@ -111,3 +117,36 @@ runs:
         cd "zephyr-sdk-${v}"
         ./setup.sh -h -c -t "$TOOLCHAIN"
         echo "ZEPHYR_SDK_INSTALL_DIR=$HOME/zephyr-sdk-${v}" >> "$GITHUB_ENV"
+
+    # The SDK is unpacked fresh each run, so key compilers on the SDK version
+    # rather than their mtime, and ignore the per-build output directory.
+    - name: Configure ccache
+      id: cckey
+      shell: bash
+      env:
+        PREFIX: zephyr-ccache-${{ runner.os }}-${{ inputs.zephyr-ref }}-${{ inputs.sdk-version }}-${{ inputs.toolchain }}-
+        NAME: ${{ inputs.ccache-name }}
+      run: |
+        {
+          echo "CCACHE_DIR=$HOME/.cache/ccache"
+          echo "CCACHE_MAXSIZE=500M"
+          echo "CCACHE_BASEDIR=$HOME"
+          echo "CCACHE_NOHASHDIR=1"
+          echo "CCACHE_COMPILERCHECK=string:zephyr-sdk-${{ inputs.sdk-version }}"
+          echo "CCACHE_SLOPPINESS=include_file_mtime,include_file_ctime,time_macros"
+        } >> "$GITHUB_ENV"
+        echo "prefix=$PREFIX" >> "$GITHUB_OUTPUT"
+        echo "key=${PREFIX}${NAME}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+
+    - name: Restore the ccache
+      uses: actions/cache/restore@v4
+      with:
+        path: ~/.cache/ccache
+        key: ${{ steps.cckey.outputs.key }}
+        restore-keys: |
+          ${{ steps.cckey.outputs.prefix }}${{ inputs.ccache-name }}-
+          ${{ steps.cckey.outputs.prefix }}
+
+    - name: Reset the ccache statistics
+      shell: bash
+      run: ccache --zero-stats

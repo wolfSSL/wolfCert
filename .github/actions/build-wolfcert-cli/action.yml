@@ -10,11 +10,16 @@ inputs:
     description: "wolfSSL git ref to build"
     required: false
     default: master
+  install-deps:
+    description: "apt-get update and install the host build tools (interop.yml relies on the update)"
+    required: false
+    default: "true"
 
 runs:
   using: composite
   steps:
     - name: Install build dependencies
+      if: inputs.install-deps == 'true'
       shell: bash
       run: |
         sudo apt-get update

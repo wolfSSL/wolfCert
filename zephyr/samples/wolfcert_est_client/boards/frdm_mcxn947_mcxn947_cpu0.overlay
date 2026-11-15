@@ -2,7 +2,11 @@
 
 /* Take the MAC from the chip's unique ID, so the board keeps one DHCP lease
  * across resets. */
+#ifdef WOLFCERT_DT_ENET_MAC_NODE
 &enet_mac {
+#else
+&enet {
+#endif
 	/delete-property/ zephyr,random-mac-address;
 	nxp,unique-mac;
 };

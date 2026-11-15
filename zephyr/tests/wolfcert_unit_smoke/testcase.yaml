@@ -16,17 +16,20 @@ tests:
   # Build-only rows for options the other suites leave at their defaults.
   wolfcert.build.no_builtin_transport:
     build_only: true
+    tags: wolfcert_build
     platform_allow: qemu_x86
     extra_configs:
       - CONFIG_WOLFCERT_BUILTIN_TRANSPORT=n
   wolfcert.build.rsa_only:
     build_only: true
+    tags: wolfcert_build
     platform_allow: qemu_x86
     extra_configs:
       - CONFIG_WOLFCERT_ECC=n
       - CONFIG_WOLFCERT_ED25519=n
   wolfcert.build.scep_only_rsa:
     build_only: true
+    tags: wolfcert_build
     platform_allow: qemu_x86
     extra_configs:
       - CONFIG_WOLFCERT_EST=n
@@ -35,6 +38,7 @@ tests:
       - CONFIG_WOLFCERT_ED25519=n
   wolfcert.build.ed448_mldsa:
     build_only: true
+    tags: wolfcert_build
     platform_allow: qemu_x86
     extra_configs:
       - CONFIG_WOLFCERT_ED448=y

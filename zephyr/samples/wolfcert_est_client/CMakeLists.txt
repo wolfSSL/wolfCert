@@ -1,6 +1,12 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 cmake_minimum_required(VERSION 3.20.0)
 
+# The MCXN MAC node is enet_mac before Zephyr 4.5 and enet from 4.5 on.
+find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE} COMPONENTS version)
+if("${KERNEL_VERSION_MAJOR}.${KERNEL_VERSION_MINOR}" VERSION_LESS 4.5)
+  list(APPEND DTS_EXTRA_CPPFLAGS -DWOLFCERT_DT_ENET_MAC_NODE)
+endif()
+
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(wolfcert_est_client)
 

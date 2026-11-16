@@ -34,7 +34,7 @@ jobs:
             os: ubuntu-latest
             build: cmake
             wolfssl: full
-            cmake_extra: -DWOLFCERT_WERROR=ON
+            cmake_extra: -DWOLFCERT_WERROR=ON -DWOLFCERT_ENABLE_EXAMPLES=ON
           - name: cmake-full-opensslextra
             os: ubuntu-latest
             build: cmake
@@ -205,6 +205,19 @@ jobs:
           make -j "$(nproc)"
           if ! make check; then
             find . -name '*.log' -exec sh -c 'echo "== $1 =="; cat "$1"' _ {} \;
+            exit 1
+          fi
+
+      - name: Release tarball (make distcheck)
+        if: matrix.build == 'autoconf'
+        shell: bash
+        run: |
+          set -euo pipefail
+          trap '' PIPE
+          if ! make distcheck \
+              DISTCHECK_CONFIGURE_FLAGS="--with-wolfssl=$WOLFSSL_PREFIX"; then
+            find wolfcert-* -name '*.log' \
+              -exec sh -c 'echo "== $1 =="; cat "$1"' _ {} \; 2>/dev/null
             exit 1
           fi
 

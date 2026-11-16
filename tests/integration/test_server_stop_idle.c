@@ -250,16 +250,17 @@ int main(void)
     REQUIRE(gen_server_identity(&tls_cert, &tls_cert_len,
                                 &tls_key, &tls_key_len) == 0);
 
-    memset(&cfg, 0, sizeof(cfg));
-    cfg.protocol         = TLS_LISTENER_PROTO;
-    cfg.bind_host        = "127.0.0.1";
-    cfg.bind_port        = 0;
-    cfg.ca_store         = test_ca_store();
-    cfg.tls_cert_pem     = tls_cert;
-    cfg.tls_cert_pem_len = tls_cert_len;
-    cfg.tls_key_pem      = tls_key;
-    cfg.tls_key_pem_len  = tls_key_len;
-    cfg.est_allow_anonymous_enroll = 1;
+    cfg = (WolfCertServerCfgSrv){
+        .protocol         = TLS_LISTENER_PROTO,
+        .bind_host        = "127.0.0.1",
+        .bind_port        = 0,
+        TEST_CA_CFG,
+        .tls_cert_pem     = tls_cert,
+        .tls_cert_pem_len = tls_cert_len,
+        .tls_key_pem      = tls_key,
+        .tls_key_pem_len  = tls_key_len,
+        .est_allow_anonymous_enroll = 1,
+    };
 
     /* 1. Parked in wolfSSL_accept() after answering the ClientHello. */
     memset(&ctx, 0, sizeof(ctx));
@@ -298,11 +299,12 @@ int main(void)
 
 #ifdef WOLFCERT_HAVE_SCEP
     /* 3. Parked in recv() on a plaintext listener. */
-    memset(&cfg, 0, sizeof(cfg));
-    cfg.protocol  = WOLFCERT_PROTO_SCEP;
-    cfg.bind_host = "127.0.0.1";
-    cfg.bind_port = 0;
-    cfg.ca_store  = test_ca_store();
+    cfg = (WolfCertServerCfgSrv){
+        .protocol  = WOLFCERT_PROTO_SCEP,
+        .bind_host = "127.0.0.1",
+        .bind_port = 0,
+        TEST_CA_CFG,
+    };
 
     memset(&ctx, 0, sizeof(ctx));
     REQUIRE(wolfcert_server_start(&cfg, &ctx.srv) == WOLFCERT_OK);
@@ -427,11 +429,12 @@ int main(void)
 
 #ifdef WOLFCERT_HAVE_SCEP
     /* 8. The next client is served behind a silent plaintext peer. */
-    memset(&cfg, 0, sizeof(cfg));
-    cfg.protocol  = WOLFCERT_PROTO_SCEP;
-    cfg.bind_host = "127.0.0.1";
-    cfg.bind_port = 0;
-    cfg.ca_store  = test_ca_store();
+    cfg = (WolfCertServerCfgSrv){
+        .protocol  = WOLFCERT_PROTO_SCEP,
+        .bind_host = "127.0.0.1",
+        .bind_port = 0,
+        TEST_CA_CFG,
+    };
 
     memset(&ctx, 0, sizeof(ctx));
     REQUIRE(wolfcert_server_start(&cfg, &ctx.srv) == WOLFCERT_OK);
@@ -456,7 +459,7 @@ int main(void)
 
     free(tls_cert);
     free(tls_key);
-    test_ca_store_close();
+    test_ca_close();
     wolfcert_cleanup();
 
     printf("server stop idle: OK\n");

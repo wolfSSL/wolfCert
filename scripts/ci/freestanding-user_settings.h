@@ -18,7 +18,7 @@
  */
 
 /* Combined wolfSSL + wolfCert config for compile-freestanding.sh. The
- * built-in transport, POSIX store, server and HAVE_SNI stay out on purpose. */
+ * built-in transport, server and HAVE_SNI stay out on purpose. */
 
 #ifndef WOLFSSL_USER_SETTINGS_H
 #define WOLFSSL_USER_SETTINGS_H
@@ -67,7 +67,6 @@
 /* wolfCert: no sockets, no filesystem */
 #define WOLFCERT_NO_SNI
 #define WOLFCERT_NO_BUILTIN_TRANSPORT
-#define WOLFCERT_NO_POSIX_STORE
 #define WOLFCERT_HAVE_EST    1   /* EST  (RFC 7030) */
 #define WOLFCERT_HAVE_SCEP   1   /* SCEP (RFC 8894) - requires WOLFCERT_HAVE_RSA */
 #define WOLFCERT_HAVE_RSA     1

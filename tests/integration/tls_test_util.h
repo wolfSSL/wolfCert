@@ -23,6 +23,9 @@
 #define WOLFCERT_TLS_TEST_UTIL_H
 
 #include <wolfcert/wolfcert.h>
+#ifdef WOLFCERT_HAVE_SERVER
+#include <wolfcert/server.h>
+#endif
 
 #include <sys/types.h>   /* pid_t, referenced by wolfssl/wolfcrypt/random.h */
 
@@ -101,10 +104,13 @@ static inline int black_hole_listener(uint16_t* out_port)
     typedef RsaKey            test_signkey;
     #define TEST_CERT_SIGTYPE CTC_SHA256wRSA
     #define TEST_KEY_PEM_TYPE PRIVATEKEY_TYPE
+    #define TEST_CA_KEY_USAGE \
+        "keyCertSign,cRLSign,digitalSignature,keyEncipherment"
 #elif defined(HAVE_ECC)
     typedef ecc_key           test_signkey;
     #define TEST_CERT_SIGTYPE CTC_SHA256wECDSA
     #define TEST_KEY_PEM_TYPE ECC_PRIVATEKEY_TYPE
+    #define TEST_CA_KEY_USAGE "keyCertSign,cRLSign,digitalSignature"
 #else
     #error "tls_test_util: tests need RSA or ECC for a signing identity"
 #endif
@@ -187,7 +193,7 @@ static inline int test_signkey_to_der(test_signkey* key, uint8_t* der,
 }
 
 /* Self-signed cert + key (PEM) for `cn`. A leaf gets an iPAddress SAN for
- * 127.0.0.1, a CA none. The caller frees both with free(). */
+ * 127.0.0.1, a CA keyUsage instead. The caller frees both with free(). */
 static inline int mint_self_id(const char* cn, int is_ca,
                                uint8_t** cert_pem, size_t* cert_pem_len,
                                uint8_t** key_pem,  size_t* key_pem_len)
@@ -215,7 +221,11 @@ static inline int mint_self_id(const char* cn, int is_ca,
     cert.sigType = TEST_CERT_SIGTYPE;
     cert.daysValid = 1;
     cert.isCA = is_ca ? 1 : 0;
-    if (!is_ca) {
+    if (is_ca) {
+        if (wc_SetKeyUsage(&cert, TEST_CA_KEY_USAGE) != 0)
+            goto fail;
+    }
+    else {
         memcpy(cert.altNames, san_seq, sizeof(san_seq));
         cert.altNamesSz = (int)sizeof(san_seq);
     }
@@ -249,37 +259,6 @@ fail:
     return -1;
 }
 
-static inline WolfCertStoreOps** test_ca_store_slot(void)
-{
-    static WolfCertStoreOps* store = NULL;
-
-    return &store;
-}
-
-/* One CA store for every test server in the process, so only the first
- * server start generates a CA. */
-static inline WolfCertStoreOps* test_ca_store(void)
-{
-    WolfCertStoreOps** store = test_ca_store_slot();
-
-    if (*store == NULL) {
-        *store = wolfcert_store_memory_open(NULL);
-        if (*store == NULL) {
-            fprintf(stderr, "test_ca_store: cannot open the memory store\n");
-            exit(1);
-        }
-    }
-    return *store;
-}
-
-static inline void test_ca_store_close(void)
-{
-    WolfCertStoreOps** store = test_ca_store_slot();
-
-    wolfcert_store_memory_close(*store);
-    *store = NULL;
-}
-
 /* Self-signed TLS server identity (cert + key, PEM) for 127.0.0.1. */
 static inline int gen_server_identity(uint8_t** cert_pem, size_t* cert_pem_len,
                                       uint8_t** key_pem,  size_t* key_pem_len)
@@ -287,6 +266,50 @@ static inline int gen_server_identity(uint8_t** cert_pem, size_t* cert_pem_len,
     return mint_self_id("127.0.0.1", 0, cert_pem, cert_pem_len,
                         key_pem, key_pem_len);
 }
+
+#ifdef WOLFCERT_HAVE_SERVER
+typedef struct {
+    uint8_t* cert;
+    size_t   cert_len;
+    uint8_t* key;
+    size_t   key_len;
+} TestCa;
+
+static inline TestCa* test_ca_slot(void)
+{
+    static TestCa ca;
+
+    return &ca;
+}
+
+/* One CA per process, handed to every server the test starts. */
+static inline const TestCa* test_ca(void)
+{
+    TestCa* ca = test_ca_slot();
+
+    if (ca->cert == NULL &&
+            mint_self_id("wolfCert Test CA", 1, &ca->cert, &ca->cert_len,
+                         &ca->key, &ca->key_len) != 0) {
+        fprintf(stderr, "test_ca: cannot generate the shared CA\n");
+        exit(1);
+    }
+    return ca;
+}
+
+/* Designated initializers that give a server config the shared CA. */
+#define TEST_CA_CFG                                                     \
+    .ca_cert = test_ca()->cert, .ca_cert_len = test_ca()->cert_len,     \
+    .ca_key  = test_ca()->key,  .ca_key_len  = test_ca()->key_len
+
+static inline void test_ca_close(void)
+{
+    TestCa* ca = test_ca_slot();
+
+    free(ca->cert);
+    free(ca->key);
+    memset(ca, 0, sizeof(*ca));
+}
+#endif /* WOLFCERT_HAVE_SERVER */
 
 /* Raw TLS client; each test_tls_write() is one TLS record, so one
  * wolfSSL_read() on the server, which the split-request tests need. */

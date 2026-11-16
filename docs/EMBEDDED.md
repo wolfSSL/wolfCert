@@ -303,17 +303,17 @@ with ECC or a PQC algorithm, disabling SCEP avoids pulling in RSA.
 
 ## 7. Targets without BSD sockets or a filesystem
 
-Two platform pieces can be compiled out entirely, so a target that has
-neither a socket API nor a filesystem links neither.
+The one platform piece, the socket transport, can be compiled out entirely,
+so a target without a socket API does not link it. wolfCert never touches a
+filesystem.
 
 | Macro | Off means | Build flags | `user_settings.h` |
 |---|---|---|---|
 | `WOLFCERT_HAVE_BUILTIN_TRANSPORT` | `src/net_posix.c` is not compiled | `-DWOLFCERT_ENABLE_BUILTIN_TRANSPORT=OFF` / `--disable-builtin-transport` | `#define WOLFCERT_NO_BUILTIN_TRANSPORT` |
-| `WOLFCERT_HAVE_POSIX_STORE` | the POSIX file store backend is stubbed out | `-DWOLFCERT_ENABLE_POSIX_STORE=OFF` / `--disable-posix-store` | `#define WOLFCERT_NO_POSIX_STORE` |
 
-Each pair is mandatory-one-of: `check_config.h` fails the build when a
+The pair is mandatory-one-of: `check_config.h` fails the build when a
 config defines neither the `WOLFCERT_HAVE_*` nor the `WOLFCERT_NO_*` form,
-so compiling a backend out is always an explicit decision. The configure
+so compiling the transport out is always an explicit decision. The configure
 builds emit the right macro automatically; only a `user_settings.h` build
 writes it by hand.
 
@@ -322,8 +322,6 @@ leaving it NULL is `WOLFCERT_ERR_BAD_ARG`. Writing one is a small glue file
 in your own tree - `connect` / `read` / `write` / `disconnect` over your
 stack, no TLS code - described in
 [`ARCHITECTURE.md` section 4.6](ARCHITECTURE.md#46-pluggable-transport).
-With the store off, `wolfcert_store_posix_open()` returns NULL and the
-in-memory backend or your own `WolfCertStoreOps` carries persistence.
 
 The CLI tools and the built-in test server both need real sockets, so both
 build systems reject enabling them alongside `--disable-builtin-transport`.

@@ -74,7 +74,7 @@ jobs:
             "${{ github.workspace }}/scripts/ci/twister-assert-ran.py" \
             "$HOME/twister-unit/twister.json" \
             wolfcert.unit.smoke wolfcert.unit.keygen wolfcert.unit.csr \
-            wolfcert.unit.csr_attrs wolfcert.unit.store \
+            wolfcert.unit.csr_attrs \
             wolfcert.unit.parse_negative wolfcert.unit.scep_msg
 
       - name: Start the host EST server

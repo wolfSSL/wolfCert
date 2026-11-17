@@ -240,6 +240,13 @@ static int test_csr_pem(void)
     return 0;
 }
 
+/* A size of 0 on a wolfSSL failure path must not map to success. */
+static int test_wc_err_zero(void)
+{
+    REQUIRE(wolfcert_map_wc_err(0) != WOLFCERT_OK);
+    return 0;
+}
+
 int main(void)
 {
     REQUIRE(test_static_mem_init() == 0);
@@ -260,6 +267,8 @@ int main(void)
     if (test_scep_envelop_alg())
         return 1;
 #endif
+    if (test_wc_err_zero())
+        return 1;
     wolfcert_cleanup();
     printf("OK\n");
     return 0;

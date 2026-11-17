@@ -464,7 +464,7 @@ int wolfcert_csr_build_ex(const WolfCertKey* key, const WolfCertCertMeta* meta,
 
     int body_sz = wc_MakeCertReq_ex(cert, der, (word32)der_cap,
                                     alg->wc_keytype_enum, key->impl);
-    if (body_sz < 0) {
+    if (body_sz <= 0) {
         WOLFCERT_XFREE(der, heap);
         wc_CertFree(cert);
         return WOLFCERT_ERR_WC(body_sz, "csr", "MakeCertReq_ex");
@@ -483,7 +483,7 @@ int wolfcert_csr_build_ex(const WolfCertKey* key, const WolfCertCertMeta* meta,
 
     wc_FreeRng(&rng);
     wc_CertFree(cert);
-    if (sig_sz < 0) {
+    if (sig_sz <= 0) {
         WOLFCERT_XFREE(der, heap);
         return WOLFCERT_ERR_WC(sig_sz, "csr", "SignCert");
     }

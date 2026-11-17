@@ -374,11 +374,8 @@ int wolfcert_cfg_require_proto(const WolfCertServerCfg* srv,
         "protocol", (int)srv->protocol, (int)want, module);
 }
 
-int wolfcert_map_wc_err(int wc_rc)
+WOLFCERT_TEST_VIS int wolfcert_map_wc_err(int wc_rc)
 {
-    if (wc_rc == 0)
-        return WOLFCERT_OK;
-
     switch (wc_rc) {
         case MEMORY_E:
             return WOLFCERT_ERR_MEMORY;

@@ -237,7 +237,7 @@ WOLFCERT_TEST_VIS int wolfcert_scep_server_set_bundle_fault(WolfCertServer* s,
                                                             int mode);
 #endif
 
-int  wolfcert_map_wc_err(int wc_rc);
+WOLFCERT_TEST_VIS int  wolfcert_map_wc_err(int wc_rc);
 int  wolfcert_set_error(int wolfcert_rc, int wolfssl_rc,
                         const char* module, const char* fmt, ...);
 

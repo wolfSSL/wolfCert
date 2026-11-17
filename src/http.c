@@ -1071,19 +1071,31 @@ static int setup_tls_ex(WolfCertConn* c, const TlsDials* dials,
     }
 
     if (sni_host != NULL) {
+        int is_ip = host_ip_len(sni_host) != 0;
+        int rc;
+
 #if defined(HAVE_SNI) && !defined(WOLFCERT_NO_SNI)
-        wolfSSL_UseSNI(ssl, 0, sni_host, (word16)strlen(sni_host));
+        /* RFC 6066 section 3: HostName never carries an IP literal. */
+        if (!is_ip) {
+            size_t sni_len = strlen(sni_host);
+
+            if (sni_len > 0 && sni_host[sni_len - 1] == '.')
+                --sni_len;
+            rc = wolfSSL_UseSNI(ssl, WOLFSSL_SNI_HOST_NAME, sni_host,
+                                (word16)sni_len);
+            if (rc != WOLFSSL_SUCCESS) {
+                wolfSSL_free(ssl);
+                wolfSSL_CTX_free(ctx);
+                return WOLFCERT_ERR_RC_WC(rc == MEMORY_E ? WOLFCERT_ERR_MEMORY
+                                          : WOLFCERT_ERR_TLS, rc, "http",
+                    "http: cannot set SNI to %s", sni_host);
+            }
+        }
 #endif
 
         if (dials->verify_server) {
             /* RFC 2818 section 3.1: an IP literal matches iPAddress SAN
              * entries only. */
-            uint8_t ipbuf[16];
-            size_t  iplen;
-            int     is_ip;
-            int     rc;
-
-            is_ip = wolfcert_parse_ip(sni_host, ipbuf, &iplen) == WOLFCERT_OK;
             rc = is_ip ? wolfSSL_check_ip_address(ssl, sni_host)
                        : wolfSSL_check_domain_name(ssl, sni_host);
             if (rc != WOLFSSL_SUCCESS) {

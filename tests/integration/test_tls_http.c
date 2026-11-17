@@ -69,7 +69,20 @@ struct srv_ctx {
     uint8_t* key_pem;
     size_t key_pem_len;
     const char* version;
+    int sni_len;    /* SNI HostName length the client sent, 0 if none */
 };
+
+#ifdef HAVE_SNI
+static int sni_cb(WOLFSSL* ssl, int* ad, void* arg)
+{
+    void* name = NULL;
+
+    (void)ad;
+    ((struct srv_ctx*)arg)->sni_len =
+        wolfSSL_SNI_GetRequest(ssl, WOLFSSL_SNI_HOST_NAME, &name);
+    return 0;
+}
+#endif
 
 static void* srv_thread(void* arg)
 {
@@ -87,6 +100,10 @@ static void* srv_thread(void* arg)
             (long)sc->cert_pem_len, WOLFSSL_FILETYPE_PEM) != WOLFSSL_SUCCESS) return NULL;
     if (wolfSSL_CTX_use_PrivateKey_buffer(ctx, sc->key_pem,
             (long)sc->key_pem_len, WOLFSSL_FILETYPE_PEM) != WOLFSSL_SUCCESS) return NULL;
+#ifdef HAVE_SNI
+    wolfSSL_CTX_set_servername_callback(ctx, sni_cb);
+    wolfSSL_CTX_set_servername_arg(ctx, sc);
+#endif
 
     int ls = socket(AF_INET, SOCK_STREAM, 0);
     if (ls < 0)
@@ -136,6 +153,7 @@ static int start_srv(struct srv_ctx* sc, pthread_t* tid, char* url,
     int i;
 
     WOLFSSL_ATOMIC_STORE(sc->port, 0);
+    sc->sni_len = 0;
     if (pthread_create(tid, NULL, srv_thread, sc) != 0)
         return -1;
     for (i = 0; i < 200 && WOLFSSL_ATOMIC_LOAD(sc->port) == 0; ++i) {
@@ -361,8 +379,8 @@ static int handshake_oom_case(struct srv_ctx* sc, int nb)
     return 0;
 }
 
-/* Failing each allocation of a session open in turn: the one storing the
- * name to check gives WOLFCERT_ERR_MEMORY with wolfSSL's MEMORY_ERROR. */
+/* Failing each allocation of a session open in turn: the SNI one gives
+ * WOLFCERT_ERR_MEMORY with MEMORY_E, the name check's with MEMORY_ERROR. */
 static int name_check_oom_case(struct srv_ctx* sc)
 {
     WolfCertTransport t = lo_transport();
@@ -373,6 +391,7 @@ static int name_check_oom_case(struct srv_ctx* sc)
     char url[64];
     int failed = 1;
     int found = 0;
+    int sni_oom = 0;
     int fails;
     int ls;
     int fd;
@@ -391,6 +410,9 @@ static int name_check_oom_case(struct srv_ctx* sc)
         oom_arm(fails);
         rc = wolfcert_http_session_open(&cfg, &s);
         failed = oom_disarm();
+        if (rc == WOLFCERT_ERR_MEMORY &&
+                wolfcert_last_wolfssl_err() == MEMORY_E)
+            sni_oom = 1;
         found = rc == WOLFCERT_ERR_MEMORY &&
                 wolfcert_last_wolfssl_err() == MEMORY_ERROR;
         wolfcert_http_session_close(s);
@@ -402,6 +424,11 @@ static int name_check_oom_case(struct srv_ctx* sc)
     }
     close(ls);
 
+#if defined(HAVE_SNI) && !defined(WOLFCERT_NO_SNI)
+    REQUIRE(sni_oom);
+#else
+    (void)sni_oom;
+#endif
     REQUIRE(found);
     return 0;
 }
@@ -412,6 +439,8 @@ int main(void)
     REQUIRE(wolfcert_init(NULL) == WOLFCERT_OK);
     struct srv_ctx sc = { 0 };
     struct srv_ctx other = { 0 };
+    struct srv_ctx dns = { 0 };
+    struct srv_ctx lh = { 0 };
     int open_rc = -1;
 #ifdef TEST_ALLOC_FAILURES
     /* Installed before any thread starts; they fail nothing until armed. */
@@ -423,6 +452,11 @@ int main(void)
                                 &sc.key_pem, &sc.key_pem_len) == 0);
     REQUIRE(gen_server_identity(&other.cert_pem, &other.cert_pem_len,
                                 &other.key_pem, &other.key_pem_len) == 0);
+    /* A CA cert has no SAN, so wolfSSL matches ca.example against its CN. */
+    REQUIRE(mint_self_id("ca.example", 1, &dns.cert_pem, &dns.cert_pem_len,
+                         &dns.key_pem, &dns.key_pem_len) == 0);
+    REQUIRE(mint_self_id("localhost", 1, &lh.cert_pem, &lh.cert_pem_len,
+                         &lh.key_pem, &lh.key_pem_len) == 0);
 
     WolfCertHttpResponse resp = { 0 };
     REQUIRE(get_once(&sc, sc.cert_pem, sc.cert_pem_len, NULL, &resp)
@@ -446,6 +480,18 @@ int main(void)
     REQUIRE(wolfcert_last_wolfssl_err() != 0);
     REQUIRE(resp.body == NULL && resp.status_code == 0);
 
+    /* RFC 6066 section 3: no SNI for an IP literal; a DNS name gets one. */
+    REQUIRE(get_as(&sc, "127.0.0.1", 0, &open_rc) == WOLFCERT_OK);
+    REQUIRE(sc.sni_len == 0);
+    REQUIRE(get_as(&sc, "[::1]", 0, &open_rc) == WOLFCERT_OK);
+    REQUIRE(sc.sni_len == 0);
+#if defined(HAVE_SNI) && !defined(WOLFCERT_NO_SNI)
+    REQUIRE(get_as(&sc, "ca.example", 0, &open_rc) == WOLFCERT_OK);
+    REQUIRE(sc.sni_len == (int)strlen("ca.example"));
+    REQUIRE(get_as(&sc, "ca.example.", 0, &open_rc) == WOLFCERT_OK);
+    REQUIRE(sc.sni_len == (int)strlen("ca.example"));
+#endif
+
     /* A trusted cert for 127.0.0.1 does not pass as ca.example. */
     REQUIRE(get_as(&sc, "ca.example", 1, &open_rc) == WOLFCERT_ERR_TLS);
     REQUIRE(open_rc == WOLFCERT_OK);
@@ -460,6 +506,12 @@ int main(void)
     REQUIRE(get_as(&sc, "estserver.", 1, &open_rc) == WOLFCERT_ERR_TLS);
 #endif
 
+    /* The name check takes an absolute name with its trailing dot. */
+    REQUIRE(get_as(&dns, "ca.example", 1, &open_rc) == WOLFCERT_OK);
+    REQUIRE(get_as(&dns, "ca.example.", 1, &open_rc) == WOLFCERT_OK);
+    /* wolfSSL exempts localhost from its two-label rule. */
+    REQUIRE(get_as(&lh, "localhost", 1, &open_rc) == WOLFCERT_OK);
+
 #ifdef TEST_ALLOC_FAILURES
     REQUIRE(handshake_oom_case(&sc, 0) == 0);
     REQUIRE(handshake_oom_case(&sc, 1) == 0);
@@ -470,6 +522,10 @@ int main(void)
     free(sc.key_pem);
     free(other.cert_pem);
     free(other.key_pem);
+    free(dns.cert_pem);
+    free(dns.key_pem);
+    free(lh.cert_pem);
+    free(lh.key_pem);
     wolfcert_cleanup();
     printf("OK\n");
     return 0;

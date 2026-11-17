@@ -121,7 +121,8 @@ WOLFCERT_API int  wolfcert_default_dev_id(void);
 typedef int (*WolfCertCsrCustomizeCb)(void* wolfssl_cert, void* ctx);
 
 typedef struct {
-    /* All pointers are caller-owned. NULL lists => none. */
+    /* All pointers are caller-owned. NULL lists => none; a NULL list with a
+     * non-zero length, or a NULL or empty entry, is WOLFCERT_ERR_BAD_ARG. */
     const char*        subject_dn;         /* e.g. "CN=device-123,O=Acme".
                                             * Values cannot hold ',';
                                             * customize can set one. A

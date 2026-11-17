@@ -337,6 +337,53 @@ static int csr_build_rejects_unprintable_rdn(void)
     return 0;
 }
 
+/* A SAN list that is NULL with a length, or holds a NULL or empty entry, is
+ * BAD_ARG. */
+static int csr_build_rejects_null_san(void)
+{
+    static const char* const holes[] = { "a.example", NULL };
+    static const char* const blanks[] = { "a.example", "" };
+    static const char* const* const lists[] = { NULL, holes, blanks };
+    WolfCertKeyCfg cfg = { .type = WOLFCERT_KEY_ECC, .param = 256,
+                           .dev_id = INVALID_DEVID };
+    WolfCertKey* key = NULL;
+    WolfCertCertMeta meta;
+    WolfCertBuffer der = { 0 };
+    int i;
+
+    REQUIRE(wolfcert_key_generate(&cfg, &key) == WOLFCERT_OK);
+    for (i = 0; i < 12; i++) {
+        const char* const* list = lists[i % 3];
+        size_t len = list != NULL ? 2 : 1;
+
+        memset(&meta, 0, sizeof(meta));
+        meta.subject_dn = "CN=dev";
+        switch (i / 3) {
+            case 0:
+                meta.san_dns = list;
+                meta.san_dns_len = len;
+                break;
+            case 1:
+                meta.san_ip = list;
+                meta.san_ip_len = len;
+                break;
+            case 2:
+                meta.san_uri = list;
+                meta.san_uri_len = len;
+                break;
+            default:
+                meta.san_email = list;
+                meta.san_email_len = len;
+                break;
+        }
+        REQUIRE(wolfcert_csr_build(key, &meta, &der) == WOLFCERT_ERR_BAD_ARG);
+        REQUIRE(der.data == NULL && der.len == 0);
+    }
+
+    wolfcert_key_free(key);
+    return 0;
+}
+
 /* Self-sign the subject and SAN set in c with the test's ECC key, then free
  * c; returns the DER length. */
 static int make_self_cert(Cert* c, const WolfCertKey* key, byte* out, int cap)
@@ -987,6 +1034,8 @@ int main(void)
     if (csr_build_rejects_unprintable_rdn())
         return 1;
     if (csr_build_rejects_oversized_rdn())
+        return 1;
+    if (csr_build_rejects_null_san())
         return 1;
     if (renewal_keeps_empty_subject(1) || renewal_keeps_empty_subject(0))
         return 1;

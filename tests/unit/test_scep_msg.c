@@ -351,12 +351,14 @@ static int test_envelop_rejects_ecc_ra(void)
     if (made_ecc == 0) {
         ecc_rc = wolfcert_scep_envelop(ecc_ca, ecc_ca_len, payload,
                                        sizeof(payload), AES128CBCb, &ecc_env,
+                                       INVALID_DEVID,
                                        NULL);
         ecc_env_empty = (ecc_env.data == NULL);
     }
     if (made_rsa == 0) {
         rsa_rc = wolfcert_scep_envelop(rsa_ca, rsa_ca_len, payload,
                                        sizeof(payload), AES128CBCb, &rsa_env,
+                                       INVALID_DEVID,
                                        NULL);
         rsa_env_ok = (rsa_env.data != NULL && rsa_env.len > 0);
     }
@@ -422,14 +424,14 @@ static int check_no_envelope(const uint8_t* ca_der, size_t ca_len,
 
     REQUIRE(wolfcert_scep_build_pki_message(NULL, 0, ca_der, ca_len,
                                             key_der, key_len, hash_oid,
-                                            &attrs, &pki, NULL) == WOLFCERT_OK);
+                                            &attrs, &pki, INVALID_DEVID, NULL) == WOLFCERT_OK);
 
     REQUIRE(memmem(pki.data, pki.len, ENVELOPED_OID,
                    sizeof(ENVELOPED_OID)) == NULL);
 
     prc = wolfcert_scep_parse_pki_message(pki.data, pki.len, &env,
             &rx_tid, &rx_tid_len, &rx_sn, &rx_sn_len, &rx_rn, &rx_rn_len,
-            &mt, &status, NULL, NULL, &rx_fi, NULL);
+            &mt, &status, NULL, NULL, &rx_fi, INVALID_DEVID, NULL);
     /* Free the parsed outputs before the REQUIREs so a failure cannot leak. */
     env_ok    = (env.len == 0 && env.data == NULL);
     status_ok = (status != NULL && strcmp(status, "2") == 0);
@@ -512,11 +514,11 @@ static int test_long_transaction_id(void)
 
     brc = wolfcert_scep_build_pki_message(NULL, 0, ca_der, ca_len,
                                           key_der, key_len, SHA256h,
-                                          &attrs, &pki, NULL);
+                                          &attrs, &pki, INVALID_DEVID, NULL);
     if (brc == WOLFCERT_OK)
         prc = wolfcert_scep_parse_pki_message(pki.data, pki.len, &env,
                 &rx_tid, &rx_tid_len, &rx_sn, &rx_sn_len, NULL, NULL,
-                &mt, &status, NULL, NULL, NULL, NULL);
+                &mt, &status, NULL, NULL, NULL, INVALID_DEVID, NULL);
     else
         prc = brc;
 
@@ -608,7 +610,7 @@ static int test_signer_subject_matches_csr(void)
                      &csr_der, &csr_len) == 0);
 
     REQUIRE(wolfcert_scep_self_signed_rsa(&key, csr_der, csr_len,
-                                          &signer_der, &signer_len, NULL)
+                                          &signer_der, &signer_len, INVALID_DEVID, NULL)
             == WOLFCERT_OK);
 
     wc_InitDecodedCert(&csr_dc, csr_der, (word32)csr_len, NULL);
@@ -656,7 +658,7 @@ static int test_signer_key_usage(void)
                      &csr_der, &csr_len) == 0);
 
     REQUIRE(wolfcert_scep_self_signed_rsa(&key, csr_der, csr_len,
-                                          &signer_der, &signer_len, NULL)
+                                          &signer_der, &signer_len, INVALID_DEVID, NULL)
             == WOLFCERT_OK);
 
     wc_InitDecodedCert(&dc, signer_der, (word32)signer_len, NULL);
@@ -1520,7 +1522,7 @@ static int test_next_ca_response_is_signed(void)
 
     /* OK proves a signature; the parser refuses degenerate SignedData. */
     rc = wolfcert_scep_parse_pki_message(resp.data, resp.len, &content,
-            NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+            NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, INVALID_DEVID, NULL);
     REQUIRE(rc == WOLFCERT_OK);
     REQUIRE(content.data != NULL && content.len > 0);
 
@@ -1692,7 +1694,7 @@ static int test_signer_is_verified_cert(void)
 
     REQUIRE(wolfcert_scep_parse_pki_message(msg, msg_len, &env,
             NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
-            &signer, &signer_len, NULL, NULL) == WOLFCERT_OK);
+            &signer, &signer_len, NULL, INVALID_DEVID, NULL) == WOLFCERT_OK);
 
     /* The parser reports the cert that signed. */
     REQUIRE(signer != NULL);
@@ -1786,7 +1788,7 @@ static int test_signer_subject_fallback(void)
     REQUIRE(make_csr(&key, &rng, "", "", &csr, &csr_len) == 0);
 
     REQUIRE(wolfcert_scep_self_signed_rsa(&key, csr, csr_len,
-                                          &signer, &signer_len, NULL)
+                                          &signer, &signer_len, INVALID_DEVID, NULL)
             == WOLFCERT_OK);
 
     wc_InitDecodedCert(&dc, signer, (word32)signer_len, NULL);
@@ -2124,7 +2126,7 @@ static int test_envelop_cipher_oid(void)
 #if defined(WOLFSSL_AES_256)
     WolfCertBuffer env256 = { 0 };
     REQUIRE(wolfcert_scep_envelop(ca_der, ca_len, payload, sizeof(payload),
-                                  AES256CBCb, &env256, NULL) == WOLFCERT_OK);
+                                  AES256CBCb, &env256, INVALID_DEVID, NULL) == WOLFCERT_OK);
     REQUIRE(memmem(env256.data, env256.len, OID_AES256, sizeof(OID_AES256)) != NULL);
     REQUIRE(memmem(env256.data, env256.len, OID_AES128, sizeof(OID_AES128)) == NULL);
     wolfcert_buffer_free(&env256);
@@ -2132,7 +2134,7 @@ static int test_envelop_cipher_oid(void)
 
     WolfCertBuffer env128 = { 0 };
     REQUIRE(wolfcert_scep_envelop(ca_der, ca_len, payload, sizeof(payload),
-                                  AES128CBCb, &env128, NULL) == WOLFCERT_OK);
+                                  AES128CBCb, &env128, INVALID_DEVID, NULL) == WOLFCERT_OK);
     REQUIRE(memmem(env128.data, env128.len, OID_AES128, sizeof(OID_AES128)) != NULL);
     wolfcert_buffer_free(&env128);
 
@@ -2300,7 +2302,7 @@ static int test_duplicate_signed_attrib(void)
     /* Every output is requested so each can be checked after the reject. */
     rc = wolfcert_scep_parse_pki_message(msg, msg_len, &env,
             &tid, &tid_len, &snonce, &snonce_len, &rnonce, &rnonce_len,
-            &mt, &ps, &signer, &signer_len, &fi, NULL);
+            &mt, &ps, &signer, &signer_len, &fi, INVALID_DEVID, NULL);
     if (rc != WOLFCERT_ERR_PROTOCOL) {
         fprintf(stderr, "duplicate transactionID accepted: rc=%d tid=%.*s\n",
                 rc, (int)tid_len, tid == NULL ? "" : (const char*)tid);
@@ -2366,7 +2368,7 @@ static int test_multi_value_signed_attrib(void)
 
     rc = wolfcert_scep_parse_pki_message(msg, msg_len, &env,
             &tid, &tid_len, &snonce, &snonce_len, &rnonce, &rnonce_len,
-            &mt, &ps, &signer, &signer_len, &fi, NULL);
+            &mt, &ps, &signer, &signer_len, &fi, INVALID_DEVID, NULL);
     if (rc != WOLFCERT_ERR_PROTOCOL) {
         fprintf(stderr, "multi-valued transactionID accepted: rc=%d tid=%.*s\n",
                 rc, (int)tid_len, tid == NULL ? "" : (const char*)tid);
@@ -2430,7 +2432,7 @@ static int check_text_attrib(const uint8_t* ca_der, size_t ca_len,
     wolfcert_clear_error();
     rc = wolfcert_scep_parse_pki_message(msg, msg_len, &env,
             NULL, NULL, NULL, NULL, NULL, NULL,
-            &mt, &ps, NULL, NULL, &fi, NULL);
+            &mt, &ps, NULL, NULL, &fi, INVALID_DEVID, NULL);
 
     got = mt != NULL ? mt : (ps != NULL ? ps : fi);
     if (expect_rc == WOLFCERT_OK)
@@ -2885,7 +2887,7 @@ static int test_parse_reports_oom(void)
         REQUIRE(oom_arm(fails) == 0);
         rc = wolfcert_scep_parse_pki_message(msg, msg_len, &env, &t, &t_len,
                 NULL, NULL, NULL, NULL, &mt, NULL, &signer, &signer_len,
-                NULL, NULL);
+                NULL, INVALID_DEVID, NULL);
         REQUIRE((failed = oom_disarm()) >= 0);
         /* wolfSSL's PKCS#7 verify can report a failed allocation as a parse
          * error, so only wolfCert's own allocations must give ERR_MEMORY. */

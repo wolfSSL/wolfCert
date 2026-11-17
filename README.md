@@ -99,7 +99,11 @@ Start the bundled test server (issues from an auto-generated local CA):
 # listen address; SCEP authenticates at the pkiMessage layer instead.
 # EST also needs --basic USER:PASS, --tls-client-ca PEM, or
 # --est-allow-anonymous to issue to any client; /simplereenroll
-# also needs --tls-client-ca and the KEEP_PEER_CERT build above.
+# also needs --tls-client-ca or --tls-trust-issued (accept certificates
+# this CA issued; --ca-dir DIR keeps the CA across restarts) and the
+# KEEP_PEER_CERT build above. --tls-trust-issued with a --ca-dir that
+# already holds the CA, and no other option, gives a server that only
+# renews.
 ./wolfcert-server --proto est  --listen 127.0.0.1:8443 \
     --tls-cert server.crt --tls-key server.key --est-allow-anonymous
 ./wolfcert-server --proto scep --listen 127.0.0.1:8088
@@ -179,7 +183,11 @@ trusted. The signature digest floors at SHA-256 and needs no such
 override.
 
 To call the library directly, see `examples/enroll_est.c`,
-`examples/enroll_scep.c`, and `examples/enroll_cryptocb.c`.
+`examples/enroll_scep.c`, `examples/enroll_cryptocb.c` and
+`examples/enroll_tpm.c`. CMake builds the TPM example as
+`example_enroll_tpm` when it finds a wolfTPM with its CryptoCb (pass
+`-Dwolftpm_DIR=<prefix>/lib/cmake/wolftpm`). See
+[wolfTPM](https://github.com/wolfSSL/wolfTPM).
 
 ### Integrating with a wolfSSL static-memory pool
 
@@ -193,7 +201,7 @@ wolfcert_init(my_static_heap_hint);
 
 /* Per-object override (here: force a specific pool for a device key): */
 WolfCertKeyCfg cfg = { .type = WOLFCERT_KEY_ECC, .param = 256,
-                       .dev_id = WOLFCERT_DEVID_SOFTWARE,
+                       .dev_id = INVALID_DEVID,
                        .heap = slow_path_pool };
 wolfcert_key_generate(&cfg, &key);
 ```

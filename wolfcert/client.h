@@ -52,7 +52,11 @@ WOLFCERT_API int  wolfcert_client_fetch_meta(WolfCertClient* client,
 /* Generate a new key (honoring cfg->dev_id for CryptoCb offloading), build
  * a CSR from meta, and enroll. On success out_key owns the key and
  * out_cert_pem owns the issued certificate. A pending enrollment returns
- * WOLFCERT_ERR_PENDING and hands out neither. */
+ * WOLFCERT_ERR_PENDING. On any failure neither is handed out, except that a
+ * key generated under a key_id stays in the backend and out_key still owns
+ * it, so the caller can delete it there under wolfcert_key_id. Every call
+ * generates a new key, so polling a pending request with that key takes
+ * wolfcert_csr_build and wolfcert_est_simple_enroll. */
 WOLFCERT_API int  wolfcert_client_enroll(WolfCertClient* client,
                                          const WolfCertServerCfg* srv,
                                          const WolfCertKeyCfg* key_cfg,
@@ -63,8 +67,8 @@ WOLFCERT_API int  wolfcert_client_enroll(WolfCertClient* client,
 /* Re-enroll using an existing cert/key; a NULL new_key_cfg reuses the key.
  * The CSR copies current_cert's Subject and SAN: WOLFCERT_ERR_BAD_ARG if meta
  * sets them, _PARSE for a bad cert, _UNSUPPORTED if one cannot be carried.
- * A pending renewal returns WOLFCERT_ERR_PENDING and hands out neither
- * out_key nor out_cert_pem. */
+ * A pending renewal returns WOLFCERT_ERR_PENDING. On failure a new key with a
+ * key_id stays in the backend and in out_key, as for enroll. */
 WOLFCERT_API int  wolfcert_client_reenroll(WolfCertClient* client,
                                            const WolfCertServerCfg* srv,
                                            const uint8_t* current_cert, size_t current_cert_len,

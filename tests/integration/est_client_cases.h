@@ -51,7 +51,7 @@ static inline int enroll_one(const WolfCertServerCfg* client_cfg,
                              const WolfCertBuffer* ca_pem)
 {
     WolfCertKeyCfg kcfg = { .type = kt, .param = param,
-                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                            .dev_id = INVALID_DEVID };
     const char* dns[] = { "device-7.local" };
     WolfCertCertMeta meta = { .subject_dn = "CN=device-7,O=Acme",
                               .san_dns = dns, .san_dns_len = 1 };
@@ -114,7 +114,7 @@ static inline int has_alt(const DNS_entry* list, int type, const char* val,
 static inline int enroll_check_san(const WolfCertServerCfg* client_cfg)
 {
     WolfCertKeyCfg kcfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
-                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                            .dev_id = INVALID_DEVID };
     const char* dns[]    = { "device-san.local" };
     const char* ips[]    = { "10.20.30.40" };
     const char* emails[] = { "dev-san@example.com" };
@@ -174,7 +174,7 @@ static inline int enroll_check_san(const WolfCertServerCfg* client_cfg)
 static inline int session_basic_auth(const WolfCertServerCfg* client_cfg)
 {
     WolfCertKeyCfg kcfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
-                            .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                            .dev_id = INVALID_DEVID };
     WolfCertCertMeta meta = { .subject_dn = "CN=session-basic-auth" };
     WolfCertServerCfg bad_cfg = *client_cfg;
     WolfCertKey* dk = NULL;

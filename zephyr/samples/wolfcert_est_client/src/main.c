@@ -72,7 +72,7 @@ static int enroll(void)
         .verify_server     = 1,
     };
     WolfCertKeyCfg key_cfg = { .type = WOLFCERT_KEY_ECC, .param = 256,
-                               .dev_id = WOLFCERT_DEVID_SOFTWARE };
+                               .dev_id = INVALID_DEVID };
     WolfCertCertMeta meta = { .subject_dn = CONFIG_WOLFCERT_SAMPLE_SUBJECT };
     WolfCertClient* client = NULL;
     WolfCertKey* key = NULL;

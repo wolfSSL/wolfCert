@@ -17,10 +17,12 @@ Because a failed dependency *build* also ends in a 77 skip (the binary never lan
 | `est_globalsign.sh` | globalsign/est (Go) | wolfcert-client <-> globalsign estserver/estclient, both directions. |
 | `est_libest.sh` | cisco/libest (built from source) | wolfcert-client -> libest estserver, libest estclient -> wolfcert-server. |
 | `est_stepca.sh` | smallstep/step-ca (Go) | EST probe + SCEP enrollment against step-ca, plus a `--ca-id` GetCACert check. |
+| `tpm_wolftpm.sh` | wolfTPM's fwTPM (`scripts/ci/build-wolftpm.sh`) | `examples/enroll_tpm` with keys in the fwTPM against wolfcert-server, for ECC P-256 and P-384, RSA-2048 and ML-DSA-44/65/87: enroll, renew in place, rekey, cleanup after a failure, a restart of both servers, and transient handles. Also runs in `pr.yml` at a pinned wolfTPM commit. |
 
 ## Dependency build notes
 
 - **cisco/libest** is archived and written for OpenSSL 1.x. On a modern OpenSSL 3.0 host it needs two build tweaks (applied in `interop.yml`): `--disable-safec` (its configure now demands an explicit safec choice) and a force-included compat header defining `FIPS_mode()` / `FIPS_mode_set()` as no-ops (OpenSSL 3.0 removed both symbols, which libest still references).
+- **wolfTPM** needs a wolfSSL built with `--enable-wolftpm` (the `wolftpm` config of `build-wolfssl.sh`). `build-wolftpm.sh` builds the library and `fwtpm_server` with `WOLFTPM_V185=yes`, so ML-DSA cannot drop out unnoticed. The fwTPM holds 8 persistent objects, so `tpm_wolftpm.sh` gives each key type its own NV state.
 - **smallstep/step-ca** links `libpcsclite` via cgo (PC/SC, for its PIV/YubiKey provisioners); install `libpcsclite-dev` before `go install`, or the build aborts at pkg-config.
 
 ## Notes

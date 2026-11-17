@@ -6,6 +6,7 @@ target_link_libraries(test_smoke PRIVATE wolfcert Threads::Threads)
 add_test(NAME smoke COMMAND test_smoke)
 
 add_executable(test_keygen unit/test_keygen.c)
+target_include_directories(test_keygen PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(test_keygen PRIVATE wolfcert)
 add_test(NAME keygen COMMAND test_keygen)
 
@@ -68,6 +69,11 @@ if(WOLFCERT_ENABLE_EST)
         add_executable(test_est_mtls_roundtrip integration/test_est_mtls_roundtrip.c)
         target_link_libraries(test_est_mtls_roundtrip PRIVATE wolfcert Threads::Threads)
         add_test(NAME est_mtls_roundtrip COMMAND test_est_mtls_roundtrip)
+
+        add_executable(test_est_devid_roundtrip integration/test_est_devid_roundtrip.c)
+        target_link_libraries(test_est_devid_roundtrip PRIVATE wolfcert Threads::Threads)
+        add_test(NAME est_devid_roundtrip COMMAND test_est_devid_roundtrip)
+        set_tests_properties(est_devid_roundtrip PROPERTIES SKIP_RETURN_CODE 77)
 
         add_executable(test_est_pha_roundtrip integration/test_est_pha_roundtrip.c)
         target_link_libraries(test_est_pha_roundtrip PRIVATE wolfcert Threads::Threads)

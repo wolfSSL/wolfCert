@@ -52,7 +52,7 @@ endif
 endif
 
 libwolfcert_la_LIBADD  = $(WOLFSSL_LIBS)
-libwolfcert_la_LDFLAGS = -version-info 0:0:0 -no-undefined
+libwolfcert_la_LDFLAGS = -version-info 1:0:0 -no-undefined
 
 wolfcertincludedir = $(includedir)/wolfcert
 wolfcertinclude_HEADERS = \
@@ -130,6 +130,7 @@ endif
 test_smoke_SOURCES  = tests/unit/test_smoke.c
 test_smoke_LDADD    = libwolfcert.la $(WOLFSSL_LIBS) -lpthread
 test_keygen_SOURCES = tests/unit/test_keygen.c
+test_keygen_CPPFLAGS = $(AM_CPPFLAGS) -I$(top_srcdir)/src
 test_keygen_LDADD   = libwolfcert.la $(WOLFSSL_LIBS)
 test_csr_SOURCES    = tests/unit/test_csr.c
 test_csr_CPPFLAGS = $(AM_CPPFLAGS) -I$(top_srcdir)/src
@@ -164,7 +165,8 @@ check_PROGRAMS += test_est_roundtrip test_est_tls_roundtrip test_est_mtls_roundt
                   test_est_pha_roundtrip test_est_async_roundtrip \
                   test_est_csr_attrs_roundtrip test_est_csr_attrs_apply_roundtrip \
                   test_est_csr_attrs_enforce test_est_chunked_robustness \
-                  test_est_pending_roundtrip test_est_mldsa_roundtrip
+                  test_est_pending_roundtrip test_est_mldsa_roundtrip \
+                  test_est_devid_roundtrip
 test_est_roundtrip_SOURCES = tests/integration/test_est_roundtrip.c
 test_est_roundtrip_LDADD   = libwolfcert.la $(WOLFSSL_LIBS) -lpthread
 test_est_tls_roundtrip_SOURCES = tests/integration/test_est_tls_roundtrip.c
@@ -173,6 +175,8 @@ test_est_mtls_roundtrip_SOURCES = tests/integration/test_est_mtls_roundtrip.c
 test_est_mtls_roundtrip_LDADD   = libwolfcert.la $(WOLFSSL_LIBS) -lpthread
 test_est_mldsa_roundtrip_SOURCES = tests/integration/test_est_mldsa_roundtrip.c
 test_est_mldsa_roundtrip_LDADD   = libwolfcert.la $(WOLFSSL_LIBS) -lpthread
+test_est_devid_roundtrip_SOURCES = tests/integration/test_est_devid_roundtrip.c
+test_est_devid_roundtrip_LDADD   = libwolfcert.la $(WOLFSSL_LIBS) -lpthread
 test_est_pha_roundtrip_SOURCES = tests/integration/test_est_pha_roundtrip.c
 test_est_pha_roundtrip_LDADD   = libwolfcert.la $(WOLFSSL_LIBS) -lpthread
 test_est_async_roundtrip_SOURCES = tests/integration/test_est_async_roundtrip.c
@@ -259,6 +263,7 @@ EXTRA_DIST = \
     wolfcert/options.h.in \
     examples/user_settings.h.example \
     examples/CMakeLists.txt \
+    examples/enroll_tpm.c \
     examples/certs/README.md \
     examples/certs/gen-certs.sh \
     examples/certs/gen-server-cert.sh \

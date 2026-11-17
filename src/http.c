@@ -133,6 +133,11 @@ static size_t host_ip_len(const char* host)
     return ip_len;
 }
 
+static int authority_ends(char c)
+{
+    return c == '\0' || c == '/' || c == '?' || c == '#';
+}
+
 static char* dup_range(const char* s, const char* e, void* heap)
 {
     size_t n = (size_t)(e - s);
@@ -153,6 +158,11 @@ WOLFCERT_TEST_VIS int wolfcert_http_url_parse(const char* url, WolfCertUrl* out,
     out->heap = heap;
     if (url == NULL)
         return WOLFCERT_ERR_BAD_ARG;
+
+    for (const char* c = url; *c != '\0'; ++c) {
+        if ((unsigned char)*c <= 0x20 || (unsigned char)*c >= 0x7f)
+            return WOLFCERT_ERR_PARSE;
+    }
 
     /* A URL without a scheme is https. */
     const char* sep = strstr(url, "://");
@@ -205,17 +215,28 @@ WOLFCERT_TEST_VIS int wolfcert_http_url_parse(const char* url, WolfCertUrl* out,
             return WOLFCERT_ERR_PARSE;
         }
 
-        out->host = dup_range(host_start + 1, close, heap);
         host_end = close + 1;
+        if (*host_end != ':' && !authority_ends(*host_end)) {
+            wolfcert_http_url_free(out);
+            return WOLFCERT_ERR_PARSE;
+        }
+
+        out->host = dup_range(host_start + 1, close, heap);
+        if (out->host != NULL && host_ip_len(out->host) != 16) {
+            wolfcert_http_url_free(out);
+            return WOLFCERT_ERR_PARSE;
+        }
     }
     else {
         host_end = host_start;
-        while (*host_end && *host_end != ':' && *host_end != '/'
-                && *host_end != '?' && *host_end != '#') {
+        while (*host_end != ':' && !authority_ends(*host_end)) {
             ++host_end;
         }
 
-        if ((size_t)(host_end - host_start) > WOLFCERT_HTTP_MAX_HOST_LEN) {
+        /* RFC 9110 section 4.2.4: no userinfo in an http(s) URI. */
+        if (host_end == host_start ||
+                (size_t)(host_end - host_start) > WOLFCERT_HTTP_MAX_HOST_LEN ||
+                memchr(host_start, '@', (size_t)(host_end - host_start))) {
             wolfcert_http_url_free(out);
             return WOLFCERT_ERR_PARSE;
         }
@@ -231,7 +252,7 @@ WOLFCERT_TEST_VIS int wolfcert_http_url_parse(const char* url, WolfCertUrl* out,
     if (*host_end == ':') {
         char* end;
         long p = strtol(host_end + 1, &end, 10);
-        if (p <= 0 || p > 65535) {
+        if (host_end[1] < '0' || host_end[1] > '9' || p <= 0 || p > 65535 || !authority_ends(*end)) {
             wolfcert_http_url_free(out);
             return WOLFCERT_ERR_PARSE;
         }

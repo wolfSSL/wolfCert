@@ -505,6 +505,9 @@ int main(void)
     REQUIRE(get_as(&sc, "estserver", 1, &open_rc) == WOLFCERT_ERR_TLS);
     REQUIRE(get_as(&sc, "estserver.", 1, &open_rc) == WOLFCERT_ERR_TLS);
 #endif
+    /* A URL the parser rejects fails the open before any connect. */
+    REQUIRE(get_as(&sc, "ca example", 1, &open_rc) == WOLFCERT_ERR_PARSE);
+    REQUIRE(open_rc == WOLFCERT_ERR_PARSE);
 
     /* The name check takes an absolute name with its trailing dot. */
     REQUIRE(get_as(&dns, "ca.example", 1, &open_rc) == WOLFCERT_OK);

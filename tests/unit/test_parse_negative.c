@@ -56,6 +56,33 @@ static int test_url(void)
     /* Port out of range. */
     REQUIRE(wolfcert_http_url_parse("http://x:0/", &u, NULL) == WOLFCERT_ERR_PARSE);
     REQUIRE(wolfcert_http_url_parse("http://x:99999/", &u, NULL) == WOLFCERT_ERR_PARSE);
+    /* Bytes that would reach the request line or Host header raw. */
+    static const char* const bad[] = {
+        "http://x/a\r\nX-Injected: 1",
+        "http://x/a b",
+        "http://x/a\tb",
+        "http://x\r\nX-Injected: 1/",
+        "http://x/a\x7f",
+        "http://x/\xc3\xa4",
+        "http://user@x/",
+        "http://user:pw@x/",
+        "http://[::1]junk/",
+        "http://x:80junk/",
+        "http://x:+80/",
+        "http://[ca.example]/",
+        "http://[127.0.0.1]/",
+        "http://[::1/x]",
+        "http://[]/",
+        "http:///x",
+        "https://:8443/",
+        "/x",
+    };
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        if (wolfcert_http_url_parse(bad[i], &u, NULL) != WOLFCERT_ERR_PARSE) {
+            fprintf(stderr, "accepted bad URL #%zu\n", i);
+            return 1;
+        }
+    }
     /* Hostname longer than the cap. */
     char big[400];
     memset(big, 'a', sizeof(big) - 1);

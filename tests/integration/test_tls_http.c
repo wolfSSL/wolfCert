@@ -24,6 +24,7 @@
 #define _DARWIN_C_SOURCE   /* expose memmem/strcasestr/INADDR_LOOPBACK on macOS */
 
 #include <wolfcert/wolfcert.h>
+#include "internal.h"
 
 #include <wolfssl/ssl.h>
 #include <wolfssl/wolfcrypt/asn_public.h>
@@ -37,6 +38,7 @@
 #include <netinet/in.h>
 #include <poll.h>
 #include <pthread.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -185,6 +187,78 @@ static int get_once(struct srv_ctx* sc, const uint8_t* ta, size_t ta_len,
     return rc;
 }
 
+static int lo_dialed;
+
+/* Transport that reaches srv_thread on 127.0.0.1 whatever host the URL
+ * names, so the name the client checks can differ from where it connects. */
+static int lo_connect(void* ctx, const char* host, int port, int timeout_ms,
+                      void** conn)
+{
+    (void)host;
+    lo_dialed = 1;
+    return wolfcert_posix_transport.connect(ctx, "127.0.0.1", port,
+                                            timeout_ms, conn);
+}
+
+static WolfCertTransport lo_transport(void)
+{
+    WolfCertTransport t = wolfcert_posix_transport;
+
+    t.connect = lo_connect;
+    return t;
+}
+
+/* Connect to port once and close, so a srv_thread still in accept() exits. */
+static void unblock_srv(int port)
+{
+    struct sockaddr_in sa = { .sin_family = AF_INET,
+                              .sin_addr.s_addr = htonl(INADDR_LOOPBACK) };
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+
+    if (fd < 0)
+        return;
+    sa.sin_port = htons((uint16_t)port);
+    (void)connect(fd, (struct sockaddr*)&sa, sizeof(sa));
+    close(fd);
+}
+
+/* GET https://<host>:<port>/ over lo_connect, trusting sc's own cert; the
+ * session open's result goes to open_rc. */
+static int get_as(struct srv_ctx* sc, const char* host, int verify,
+                  int* open_rc)
+{
+    WolfCertTransport t = lo_transport();
+    WolfCertHttpSessionCfg cfg = { .verify_server = verify };
+    WolfCertHttpRequest req = { .method = "GET" };
+    WolfCertHttpResponse resp = { 0 };
+    WolfCertHttpSession* s = NULL;
+    pthread_t tid;
+    char url[128];
+    int rc;
+
+    if (start_srv(sc, &tid, url, sizeof(url)) != 0)
+        return WOLFCERT_ERR_GENERIC;
+    snprintf(url, sizeof(url), "https://%s:%d/", host,
+             WOLFSSL_ATOMIC_LOAD(sc->port));
+    cfg.base_url          = url;
+    cfg.trust_anchors     = sc->cert_pem;
+    cfg.trust_anchors_len = sc->cert_pem_len;
+    cfg.transport         = t;
+    req.url               = url;
+
+    lo_dialed = 0;
+    rc = *open_rc = wolfcert_http_session_open(&cfg, &s);
+    if (rc == WOLFCERT_OK)
+        rc = wolfcert_http_session_request(s, &req, &resp);
+    wolfcert_http_response_free(&resp);
+    wolfcert_http_session_close(s);
+    if (!lo_dialed)
+        unblock_srv(WOLFSSL_ATOMIC_LOAD(sc->port));
+    pthread_join(tid, NULL);
+
+    return rc;
+}
+
 #if defined(USE_WOLFSSL_MEMORY) && !defined(WOLFSSL_STATIC_MEMORY) && \
     !defined(WOLFSSL_DEBUG_MEMORY)
 #define TEST_ALLOC_FAILURES
@@ -286,6 +360,51 @@ static int handshake_oom_case(struct srv_ctx* sc, int nb)
     REQUIRE(found);
     return 0;
 }
+
+/* Failing each allocation of a session open in turn: the one storing the
+ * name to check gives WOLFCERT_ERR_MEMORY with wolfSSL's MEMORY_ERROR. */
+static int name_check_oom_case(struct srv_ctx* sc)
+{
+    WolfCertTransport t = lo_transport();
+    WolfCertHttpSessionCfg cfg = { .verify_server = 1 };
+    WolfCertHttpSession* s = NULL;
+    struct pollfd pfd;
+    uint16_t port;
+    char url[64];
+    int failed = 1;
+    int found = 0;
+    int fails;
+    int ls;
+    int fd;
+    int rc;
+
+    ls = black_hole_listener(&port);
+    REQUIRE(ls >= 0);
+    snprintf(url, sizeof(url), "https://ca.example:%d/", port);
+    cfg.base_url          = url;
+    cfg.trust_anchors     = sc->cert_pem;
+    cfg.trust_anchors_len = sc->cert_pem_len;
+    cfg.transport         = t;
+
+    for (fails = 0; !found && failed == 1; fails++) {
+        wolfcert_clear_error();
+        oom_arm(fails);
+        rc = wolfcert_http_session_open(&cfg, &s);
+        failed = oom_disarm();
+        found = rc == WOLFCERT_ERR_MEMORY &&
+                wolfcert_last_wolfssl_err() == MEMORY_ERROR;
+        wolfcert_http_session_close(s);
+        s = NULL;
+        pfd.fd = ls;
+        pfd.events = POLLIN;
+        while (poll(&pfd, 1, 0) > 0 && (fd = accept(ls, NULL, NULL)) >= 0)
+            close(fd);
+    }
+    close(ls);
+
+    REQUIRE(found);
+    return 0;
+}
 #endif
 
 int main(void)
@@ -327,9 +446,24 @@ int main(void)
     REQUIRE(wolfcert_last_wolfssl_err() != 0);
     REQUIRE(resp.body == NULL && resp.status_code == 0);
 
+    /* A trusted cert for 127.0.0.1 does not pass as ca.example. */
+    REQUIRE(get_as(&sc, "ca.example", 1, &open_rc) == WOLFCERT_ERR_TLS);
+    REQUIRE(open_rc == WOLFCERT_OK);
+    /* A name wolfSSL will not check fails the open, before any handshake. */
+    wolfcert_clear_error();
+    REQUIRE(get_as(&sc, "ca.bad_label", 1, &open_rc) == WOLFCERT_ERR_TLS);
+    REQUIRE(open_rc == WOLFCERT_ERR_TLS);
+    REQUIRE(wolfcert_last_wolfssl_err() == BAD_FUNC_ARG);
+    REQUIRE(get_as(&sc, "est_ca", 1, &open_rc) == WOLFCERT_ERR_TLS);
+#ifndef WOLFSSL_ALLOW_SINGLE_LABEL_HOSTNAME
+    REQUIRE(get_as(&sc, "estserver", 1, &open_rc) == WOLFCERT_ERR_TLS);
+    REQUIRE(get_as(&sc, "estserver.", 1, &open_rc) == WOLFCERT_ERR_TLS);
+#endif
+
 #ifdef TEST_ALLOC_FAILURES
     REQUIRE(handshake_oom_case(&sc, 0) == 0);
     REQUIRE(handshake_oom_case(&sc, 1) == 0);
+    REQUIRE(name_check_oom_case(&sc) == 0);
 #endif
 
     free(sc.cert_pem);

@@ -121,13 +121,16 @@ WOLFCERT_TEST_VIS void wolfcert_http_url_free(WolfCertUrl* u)
     u->scheme = u->host = u->path = NULL;
 }
 
-/* IPv6 hosts are stored unbracketed; URLs and Host headers need brackets. */
-static int host_is_ip_literal(const char* host)
+/* Address length of an IP-literal host, else 0. IPv6 hosts are stored
+ * unbracketed; URLs and Host headers need brackets. */
+static size_t host_ip_len(const char* host)
 {
     uint8_t ip[16];
     size_t  ip_len = 0;
 
-    return wolfcert_parse_ip(host, ip, &ip_len) == WOLFCERT_OK && ip_len == 16;
+    if (wolfcert_parse_ip(host, ip, &ip_len) != WOLFCERT_OK)
+        return 0;
+    return ip_len;
 }
 
 static char* dup_range(const char* s, const char* e, void* heap)
@@ -1077,10 +1080,31 @@ static int setup_tls_ex(WolfCertConn* c, const TlsDials* dials,
              * entries only. */
             uint8_t ipbuf[16];
             size_t  iplen;
-            if (wolfcert_parse_ip(sni_host, ipbuf, &iplen) == WOLFCERT_OK) {
-                wolfSSL_check_ip_address(ssl, sni_host);
-            } else {
-                wolfSSL_check_domain_name(ssl, sni_host);
+            int     is_ip;
+            int     rc;
+
+            is_ip = wolfcert_parse_ip(sni_host, ipbuf, &iplen) == WOLFCERT_OK;
+            rc = is_ip ? wolfSSL_check_ip_address(ssl, sni_host)
+                       : wolfSSL_check_domain_name(ssl, sni_host);
+            if (rc != WOLFSSL_SUCCESS) {
+                int err = wolfSSL_get_error(ssl, rc);
+
+                wolfSSL_free(ssl);
+                wolfSSL_CTX_free(ctx);
+                if (err == MEMORY_ERROR)
+                    return WOLFCERT_ERR_RC_WC(WOLFCERT_ERR_MEMORY, err, "http",
+                        "http: cannot store the name to check");
+                /* wolfSSL refuses a malformed name without setting an error. */
+                if (err == 0)
+                    err = BAD_FUNC_ARG;
+                if (!is_ip)
+                    return WOLFCERT_ERR_RC_WC(WOLFCERT_ERR_TLS, err, "http",
+                        "http: wolfSSL cannot check the server certificate "
+                        "against %s (not an FQDN; a single-label name needs "
+                        "WOLFSSL_ALLOW_SINGLE_LABEL_HOSTNAME)", sni_host);
+                return WOLFCERT_ERR_RC_WC(WOLFCERT_ERR_TLS, err, "http",
+                    "http: wolfSSL cannot check the server certificate "
+                    "against %s", sni_host);
             }
         }
     }
@@ -1425,8 +1449,8 @@ static int build_head(WolfCertHttpSession* s, const WolfCertHttpRequest* req,
     if ((u->tls && u->port != 443) || (!u->tls && u->port != 80))
         snprintf(port_frag, sizeof(port_frag), ":%d", u->port);
 
-    const char* open_br  = host_is_ip_literal(u->host) ? "[" : "";
-    const char* close_br = host_is_ip_literal(u->host) ? "]" : "";
+    const char* open_br  = host_ip_len(u->host) == 16 ? "[" : "";
+    const char* close_br = host_ip_len(u->host) == 16 ? "]" : "";
 
     size_t head_cap = 1024 + (req->content_type ? strlen(req->content_type) : 0)
                            + (req->content_transfer_encoding ?

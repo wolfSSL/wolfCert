@@ -42,6 +42,7 @@ target_link_libraries(test_parse_negative PRIVATE wolfcert)
 add_test(NAME parse_negative COMMAND test_parse_negative)
 
 add_executable(test_tls_http integration/test_tls_http.c)
+target_include_directories(test_tls_http PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(test_tls_http PRIVATE wolfcert Threads::Threads)
 add_test(NAME tls_http COMMAND test_tls_http)
 set_tests_properties(tls_http PROPERTIES SKIP_RETURN_CODE 77)

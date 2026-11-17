@@ -151,6 +151,7 @@ test_parse_negative_CPPFLAGS = $(AM_CPPFLAGS) -I$(top_srcdir)/src
 test_parse_negative_LDADD    = libwolfcert.la $(WOLFSSL_LIBS)
 
 test_tls_http_SOURCES = tests/integration/test_tls_http.c
+test_tls_http_CPPFLAGS = $(AM_CPPFLAGS) -I$(top_srcdir)/src
 test_tls_http_LDADD   = libwolfcert.la $(WOLFSSL_LIBS) -lpthread
 
 if WOLFCERT_HAVE_EST

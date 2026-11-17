@@ -254,6 +254,10 @@ contract, alone or in a group comment.
 - **The HTTPS transport needs TLS 1.2 or newer**, or TLS 1.3 when wolfSSL
   is built with `WOLFSSL_NO_TLS12`. A server limited to older versions
   fails the handshake.
+- **With `verify_server`, a host wolfSSL does not accept as an FQDN fails
+  the session open** with `WOLFCERT_ERR_TLS`. A single-label name such as
+  `https://est-server/` needs wolfSSL built with
+  `WOLFSSL_ALLOW_SINGLE_LABEL_HOSTNAME`.
 - **Session open still blocks for DNS and the initial TCP connect**, even
   when every later call is `_nb`.
 - **The test server is for development and interop only**, not a production

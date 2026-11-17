@@ -536,6 +536,16 @@ WOLFCERT_TEST_VIS int wolfcert_buffer_is_der(const uint8_t* buf, size_t len)
     return (buf != NULL && len > 0 && buf[0] == 0x30) ? 1 : 0;
 }
 
+int wolfcert_der_is_single(const uint8_t* in, size_t in_len)
+{
+    word32 idx = 1;
+    int len = 0;
+
+    return (size_t)(word32)in_len == in_len &&
+           GetLength(in, &idx, &len, (word32)in_len) >= 0 &&
+           (size_t)idx + (size_t)len == in_len;
+}
+
 int wolfcert_pem_cert_to_der(const uint8_t* pem, size_t pem_len,
                               WolfCertBuffer* out_der, void* heap)
 {

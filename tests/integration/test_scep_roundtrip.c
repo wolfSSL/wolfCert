@@ -38,10 +38,13 @@
 
 #include "internal.h"                       /* whitebox SCEP pkiMessage helpers */
 #include "tls_test_util.h"
+#include "../test_certs.h"
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <poll.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -689,15 +692,9 @@ static int listen_loopback(int* port)
     return ls;
 }
 
-/* Answers one request with canned_ctx's Content-Type and body. */
-static void* canned_srv_thread(void* arg)
+/* Answers the request on cs with canned_ctx's Content-Type and body. */
+static void canned_serve(struct canned_ctx* cc, int cs)
 {
-    struct canned_ctx* cc = (struct canned_ctx*)arg;
-    int cs = accept(cc->listen_fd, NULL, NULL);
-    close(cc->listen_fd);
-    if (cs < 0)
-        return NULL;
-
     char buf[1024];
     size_t n = 0;
     while (n < sizeof(buf) - 1) {
@@ -724,6 +721,16 @@ static void* canned_srv_thread(void* arg)
         (void)write_all_fd(cs, cc->body, cc->body_len);
     shutdown(cs, SHUT_WR);
     close(cs);
+}
+
+/* Answers one request with canned_ctx's Content-Type and body. */
+static void* canned_srv_thread(void* arg)
+{
+    struct canned_ctx* cc = (struct canned_ctx*)arg;
+    int cs = accept(cc->listen_fd, NULL, NULL);
+    close(cc->listen_fd);
+    if (cs >= 0)
+        canned_serve(cc, cs);
     return NULL;
 }
 
@@ -894,26 +901,232 @@ static int check_getca_media_type(const uint8_t* ca_der_buf, size_t ca_der_len)
     return fails;
 }
 
-static int get_ca_cert_empty(WolfCertEncoding enc)
+static int get_ca_cert_fails(const char* content_type, const void* body,
+                             size_t len, WolfCertEncoding enc, int want)
 {
     WolfCertBuffer ca = { 0 };
     int rc;
     int empty;
 
-    rc = fetch_ca("text/plain", NULL, 0, enc, &ca);
+    rc = fetch_ca(content_type, (const uint8_t*)body, len, enc, &ca);
     empty = (ca.data == NULL && ca.len == 0);
     wolfcert_buffer_free(&ca);
-    REQUIRE(rc == WOLFCERT_ERR_HTTP);
+    REQUIRE(rc == want);
     REQUIRE(empty);
     return 0;
 }
 
-static int test_get_ca_cert_empty_body(void)
+/* An empty body, or one that is not a certificate, yields no CA. */
+static int test_get_ca_cert_bad_body(void)
 {
-    REQUIRE(get_ca_cert_empty(WOLFCERT_ENCODING_DER) == 0);
-    REQUIRE(get_ca_cert_empty(WOLFCERT_ENCODING_PEM) == 0);
+    static const char html[] = "<html><body>Sign in</body></html>";
+    static const uint8_t not_cert[] = { 0x30, 0x03, 0x02, 0x01, 0x00 };
+    static const WolfCertEncoding encs[] = {
+        WOLFCERT_ENCODING_DER, WOLFCERT_ENCODING_PEM
+    };
+    size_t i;
+
+    for (i = 0; i < sizeof(encs) / sizeof(encs[0]); i++) {
+        REQUIRE(get_ca_cert_fails("text/plain", NULL, 0, encs[i],
+                                  WOLFCERT_ERR_HTTP) == 0);
+        REQUIRE(get_ca_cert_fails("text/html", html, strlen(html), encs[i],
+                                  WOLFCERT_ERR_PARSE) == 0);
+        REQUIRE(get_ca_cert_fails("application/x-x509-ca-cert", not_cert,
+                                  sizeof(not_cert), encs[i],
+                                  WOLFCERT_ERR_PARSE) == 0);
+    }
     return 0;
 }
+
+/* A certificate followed by other bytes is not a single certificate. */
+static int check_getca_trailing(const uint8_t* ca_der_buf, size_t ca_der_len)
+{
+    WolfCertBuffer ca = { 0 };
+    uint8_t* body;
+    int rc;
+
+    body = (uint8_t*)malloc(ca_der_len + 2);
+    REQUIRE(body != NULL);
+    memcpy(body, ca_der_buf, ca_der_len);
+    memcpy(body + ca_der_len, "\r\n", 2);
+    rc = fetch_ca("application/x-x509-ca-cert", body, ca_der_len + 2,
+                  WOLFCERT_ENCODING_DER, &ca);
+    free(body);
+    REQUIRE(rc == WOLFCERT_ERR_PARSE);
+    REQUIRE(ca.data == NULL && ca.len == 0);
+    return 0;
+}
+
+#ifdef WOLFCERT_HAVE_ECC
+/* An unknown critical extension does not stop a reply being a certificate. */
+static int test_get_ca_cert_crit_ext(void)
+{
+    WolfCertBuffer ca = { 0 };
+    int same;
+    int rc;
+
+    rc = fetch_ca("application/x-x509-ca-cert", crit_ext_cert,
+                  sizeof(crit_ext_cert), WOLFCERT_ENCODING_DER, &ca);
+    same = ca.len == sizeof(crit_ext_cert) &&
+           memcmp(ca.data, crit_ext_cert, ca.len) == 0;
+    wolfcert_buffer_free(&ca);
+    REQUIRE(rc == WOLFCERT_OK);
+    REQUIRE(same);
+    return 0;
+}
+#endif
+
+#if defined(WOLFCERT_HAVE_ECC) && defined(USE_WOLFSSL_MEMORY) && \
+    !defined(WOLFSSL_STATIC_MEMORY) && !defined(WOLFSSL_DEBUG_MEMORY) && \
+    !defined(OPENSSL_EXTRA) && !defined(OPENSSL_EXTRA_X509_SMALL)
+#define TEST_ALLOC_FAILURES
+#endif
+
+#ifdef TEST_ALLOC_FAILURES
+static wolfSSL_Malloc_cb  g_saved_malloc;
+static wolfSSL_Free_cb    g_saved_free;
+static wolfSSL_Realloc_cb g_saved_realloc;
+static int g_allocs_left = -1;
+static int g_alloc_failed;
+
+static void* failing_malloc(size_t sz)
+{
+    if (g_allocs_left == 0) {
+        g_alloc_failed = 1;
+        return NULL;
+    }
+    if (g_allocs_left > 0)
+        g_allocs_left--;
+    return malloc(sz);
+}
+
+static void failing_free(void* ptr)
+{
+    free(ptr);
+}
+
+static void* failing_realloc(void* ptr, size_t sz)
+{
+    if (g_allocs_left == 0) {
+        g_alloc_failed = 1;
+        return NULL;
+    }
+    if (g_allocs_left > 0)
+        g_allocs_left--;
+    return realloc(ptr, sz);
+}
+
+/* The canned reply, plus the read end of a pipe whose close ends the wait for
+ * a client that never connected. */
+struct sweep_ctx {
+    struct canned_ctx cc;
+    int stop_fd;
+};
+
+static void* sweep_srv_thread(void* arg)
+{
+    struct sweep_ctx* sc = (struct sweep_ctx*)arg;
+    struct pollfd pfd[2] = { { .fd = sc->cc.listen_fd, .events = POLLIN },
+                             { .fd = sc->stop_fd, .events = POLLIN } };
+    int cs = -1;
+
+    if (poll(pfd, 2, -1) > 0 && (pfd[0].revents & POLLIN))
+        cs = accept(sc->cc.listen_fd, NULL, NULL);
+    close(sc->cc.listen_fd);
+    if (cs >= 0)
+        canned_serve(&sc->cc, cs);
+    return NULL;
+}
+
+/* 1 if ca holds crit_ext_cert in encoding enc. */
+static int same_ca(const WolfCertBuffer* ca, WolfCertEncoding enc)
+{
+    DerBuffer* der = NULL;
+    int same;
+
+    if (enc != WOLFCERT_ENCODING_PEM)
+        return ca->len == sizeof(crit_ext_cert) &&
+               memcmp(ca->data, crit_ext_cert, ca->len) == 0;
+    if (wc_PemToDer(ca->data, (long)ca->len, CERT_TYPE, &der, NULL, NULL,
+                    NULL) != 0)
+        return 0;
+    same = der->length == sizeof(crit_ext_cert) &&
+           memcmp(der->buffer, crit_ext_cert, der->length) == 0;
+    wc_FreeDer(&der);
+    return same;
+}
+
+/* GetCACert of crit_ext_cert with n allocations allowed; *failed is set
+ * when one was refused, and an OK reply that is not crit_ext_cert gives
+ * GENERIC. */
+static int fetch_ca_oom(WolfCertEncoding enc, int n, int* failed)
+{
+    struct sweep_ctx sc = { .cc = { .listen_fd = -1, .body = crit_ext_cert,
+                                    .body_len = sizeof(crit_ext_cert) } };
+    WolfCertServerCfg cli = { .protocol = WOLFCERT_PROTO_SCEP };
+    WolfCertBuffer ca = { 0 };
+    pthread_t tid;
+    char url[128];
+    int stop[2];
+    int rc;
+
+    REQUIRE(pipe(stop) == 0);
+    sc.cc.content_type = "application/x-x509-ca-cert";
+    sc.stop_fd = stop[0];
+    REQUIRE(start_canned(sweep_srv_thread, &sc, &sc.cc.listen_fd, &tid, url,
+                         sizeof(url)) == 0);
+    cli.server_url = url;
+
+    REQUIRE(wolfSSL_GetAllocators(&g_saved_malloc, &g_saved_free,
+                                  &g_saved_realloc) == 0);
+    g_allocs_left = n;
+    g_alloc_failed = 0;
+    REQUIRE(wolfSSL_SetAllocators(failing_malloc, failing_free,
+                                  failing_realloc) == 0);
+    rc = wolfcert_scep_get_ca_cert(&cli, enc, &ca);
+    g_allocs_left = -1;
+    REQUIRE(wolfSSL_SetAllocators(g_saved_malloc, g_saved_free,
+                                  g_saved_realloc) == 0);
+    *failed = g_alloc_failed;
+
+    close(stop[1]);
+    pthread_join(tid, NULL);
+    close(stop[0]);
+    if (rc == WOLFCERT_OK && !same_ca(&ca, enc))
+        rc = WOLFCERT_ERR_GENERIC;
+    wolfcert_buffer_free(&ca);
+    return rc;
+}
+
+/* Failing each allocation in turn gives WOLFCERT_ERR_MEMORY or the CA. */
+static int test_get_ca_cert_oom(void)
+{
+    static const WolfCertEncoding encs[] = {
+        WOLFCERT_ENCODING_DER, WOLFCERT_ENCODING_PEM
+    };
+    void (*old_pipe)(int) = signal(SIGPIPE, SIG_IGN);
+    size_t i;
+
+    for (i = 0; i < sizeof(encs) / sizeof(encs[0]); i++) {
+        int failed = 1;
+        int fails;
+        int rc = WOLFCERT_OK;
+
+        for (fails = 0; failed; fails++) {
+            rc = fetch_ca_oom(encs[i], fails, &failed);
+            if (rc != WOLFCERT_OK && rc != WOLFCERT_ERR_MEMORY) {
+                fprintf(stderr, "GetCACert OOM at %d: %d\n", fails, rc);
+                break;
+            }
+        }
+        REQUIRE(rc == WOLFCERT_OK);
+        REQUIRE(fails > 1);
+    }
+
+    signal(SIGPIPE, old_pipe);
+    return 0;
+}
+#endif
 
 /* Captures one request and the pkiMessage fields it carried. Every instance
  * has an initializer, so the strings stay "" if the thread bails early. */
@@ -2038,8 +2251,16 @@ int main(void)
         return 1;
     if (test_caps_scep_standard())
         return 1;
-    if (test_get_ca_cert_empty_body())
+    if (test_get_ca_cert_bad_body())
         return 1;
+#ifdef WOLFCERT_HAVE_ECC
+    if (test_get_ca_cert_crit_ext())
+        return 1;
+#endif
+#ifdef TEST_ALLOC_FAILURES
+    if (test_get_ca_cert_oom())
+        return 1;
+#endif
     if (test_split_ra())
         return 1;
 #ifdef HAVE_ECC
@@ -2083,6 +2304,7 @@ int main(void)
 
     /* A CA/RA bundle is recognised whatever the media type's case. */
     REQUIRE(check_getca_media_type(ca_der->buffer, ca_der->length) == 0);
+    REQUIRE(check_getca_trailing(ca_der->buffer, ca_der->length) == 0);
 
     WolfCertKeyCfg kcfg = { .type = WOLFCERT_KEY_RSA, .param = 2048,
                             .dev_id = INVALID_DEVID };

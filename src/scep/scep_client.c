@@ -502,6 +502,34 @@ static void scep_finish_caps(const WolfCertHttpResponse* resp,
     }
 }
 
+static int scep_check_ca_cert(const uint8_t* der, size_t der_len, void* heap)
+{
+    DecodedCert* dc;
+    int wrc = ASN_PARSE_E;
+
+    /* wc_ParseCert accepts trailing data under WOLFSSL_NO_ASN_STRICT. */
+    if (wolfcert_buffer_is_der(der, der_len) &&
+            wolfcert_der_is_single(der, der_len)) {
+        dc = (DecodedCert*)WOLFCERT_XMALLOC(sizeof(*dc), heap);
+        if (dc == NULL)
+            return WOLFCERT_ERR(WOLFCERT_ERR_MEMORY, "scep",
+                "GetCACert: cannot allocate a DecodedCert");
+
+        wc_InitDecodedCert(dc, der, (word32)der_len, heap);
+        wrc = wc_ParseCert(dc, CERT_TYPE, NO_VERIFY, NULL);
+        wc_FreeDecodedCert(dc);
+        WOLFCERT_XFREE(dc, heap);
+    }
+
+    if (wrc == MEMORY_E)
+        return WOLFCERT_ERR_WC(wrc, "scep", "GetCACert: parse certificate");
+    if (wrc != 0 && wrc != ASN_CRIT_EXT_E)
+        return WOLFCERT_ERR_RC_WC(WOLFCERT_ERR_PARSE, wrc, "scep",
+            "GetCACert: response is neither a certs-only PKCS#7 nor a "
+            "certificate this wolfSSL build can parse");
+    return WOLFCERT_OK;
+}
+
 /* GetCACert reply into *out_ca: a certs-only PKCS#7, or one raw DER cert. */
 static int scep_finish_ca_cert(const WolfCertHttpResponse* resp,
                                WolfCertEncoding enc, WolfCertBuffer* out_ca,
@@ -513,6 +541,7 @@ static int scep_finish_ca_cert(const WolfCertHttpResponse* resp,
     size_t cap;
     size_t len;
     int is_p7 = 0;
+    int rc;
     int n;
 
     if (resp->body_len == 0)
@@ -537,6 +566,10 @@ static int scep_finish_ca_cert(const WolfCertHttpResponse* resp,
     if (is_p7)
         return wolfcert_pkcs7_certs_to_pem(resp->body, resp->body_len, out_ca,
                                            heap);
+
+    rc = scep_check_ca_cert(resp->body, resp->body_len, heap);
+    if (rc != WOLFCERT_OK)
+        return rc;
 
     cap = (enc == WOLFCERT_ENCODING_DER) ? resp->body_len
                                          : resp->body_len * 2 + 256;

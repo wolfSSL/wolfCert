@@ -50,7 +50,8 @@ WOLFCERT_API int wolfcert_scep_get_ca_caps(const WolfCertServerCfg* srv,
  * WOLFCERT_ENCODING_PEM, or for WOLFCERT_ENCODING_DER the whole bundle as
  * concatenated DER, usable as ca_bundle for the enroll and GetNextCACert
  * calls. An application/x-x509-ca-ra-cert response or a signedData body under
- * any Content-Type is read as a bundle. */
+ * any Content-Type is read as a bundle; any other reply that is not a
+ * certificate returns WOLFCERT_ERR_PARSE. */
 WOLFCERT_API int wolfcert_scep_get_ca_cert(const WolfCertServerCfg* srv,
                                            WolfCertEncoding enc,
                                            WolfCertBuffer* out_ca);

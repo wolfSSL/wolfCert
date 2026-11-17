@@ -56,12 +56,10 @@
     #define CA_TEST_NEEDS_TLS 0
 #endif
 
-#if CA_TEST_NEEDS_TLS
 static uint8_t* srv_cert_pem;
 static size_t   srv_cert_pem_len;
 static uint8_t* srv_key_pem;
 static size_t   srv_key_pem_len;
-#endif
 
 /* A server config issuing from cert and key; both NULL generates a CA. */
 static void ca_cfg(WolfCertServerCfgSrv* cfg, const WolfCertBuffer* cert,
@@ -947,15 +945,99 @@ static int test_bad_bind_host_rejected(void)
     return 0;
 }
 
+/* A valid TLS identity with no client CA; each case below starts from it. */
+static void tls_base_cfg(WolfCertServerCfgSrv* cfg, WolfCertProtocol proto)
+{
+    ca_cfg(cfg, NULL, NULL);
+    cfg->protocol = proto;
+    if (proto == WOLFCERT_PROTO_SCEP) {
+        cfg->ca_cert     = test_ca()->cert;
+        cfg->ca_cert_len = test_ca()->cert_len;
+        cfg->ca_key      = test_ca()->key;
+        cfg->ca_key_len  = test_ca()->key_len;
+    }
+    cfg->tls_cert_pem     = srv_cert_pem;
+    cfg->tls_cert_pem_len = srv_cert_pem_len;
+    cfg->tls_key_pem      = srv_key_pem;
+    cfg->tls_key_pem_len  = srv_key_pem_len;
+}
+
+static int start_rejected(const WolfCertServerCfgSrv* cfg, const char* msg)
+{
+    WolfCertServer* srv = NULL;
+
+    REQUIRE(wolfcert_server_start(cfg, &srv) == WOLFCERT_ERR_BAD_ARG);
+    REQUIRE(srv == NULL);
+    REQUIRE(strstr(wolfcert_last_error_message(), msg) != NULL);
+    return 0;
+}
+
+/* TLS settings that are half set, or a pointer that disagrees with its
+ * length, are refused before the server starts. */
+static int test_partial_tls_rejected(WolfCertProtocol proto)
+{
+    WolfCertServerCfgSrv cfg;
+    WolfCertServer* srv = NULL;
+
+    tls_base_cfg(&cfg, proto);
+    cfg.tls_key_pem     = NULL;
+    cfg.tls_key_pem_len = 0;
+    REQUIRE(start_rejected(&cfg, "both be set") == 0);
+
+    tls_base_cfg(&cfg, proto);
+    cfg.tls_cert_pem     = NULL;
+    cfg.tls_cert_pem_len = 0;
+    REQUIRE(start_rejected(&cfg, "both be set") == 0);
+
+    tls_base_cfg(&cfg, proto);
+    cfg.tls_cert_pem = NULL;
+    cfg.tls_key_pem  = NULL;
+    REQUIRE(start_rejected(&cfg, "without its length") == 0);
+
+    tls_base_cfg(&cfg, proto);
+    cfg.tls_cert_pem_len = 0;
+    REQUIRE(start_rejected(&cfg, "without its length") == 0);
+
+    tls_base_cfg(&cfg, proto);
+    cfg.tls_key_pem_len = 0;
+    REQUIRE(start_rejected(&cfg, "without its length") == 0);
+
+    tls_base_cfg(&cfg, proto);
+    cfg.tls_cert_pem          = NULL;
+    cfg.tls_cert_pem_len      = 0;
+    cfg.tls_key_pem           = NULL;
+    cfg.tls_key_pem_len       = 0;
+    cfg.tls_client_ca_pem     = srv_cert_pem;
+    cfg.tls_client_ca_pem_len = srv_cert_pem_len;
+    REQUIRE(start_rejected(&cfg, "needs tls_cert_pem") == 0);
+
+    tls_base_cfg(&cfg, proto);
+    cfg.tls_client_ca_pem     = srv_cert_pem;
+    cfg.tls_client_ca_pem_len = 0;
+    REQUIRE(start_rejected(&cfg, "tls_client_ca_pem and its length") == 0);
+
+    tls_base_cfg(&cfg, proto);
+    cfg.tls_client_ca_pem_len = srv_cert_pem_len;
+    REQUIRE(start_rejected(&cfg, "tls_client_ca_pem and its length") == 0);
+
+    if (proto == WOLFCERT_PROTO_SCEP) {
+        tls_base_cfg(&cfg, proto);
+        cfg.tls_client_ca_pem     = srv_cert_pem;
+        cfg.tls_client_ca_pem_len = srv_cert_pem_len;
+        REQUIRE(wolfcert_server_start(&cfg, &srv) == WOLFCERT_OK);
+        wolfcert_server_free(srv);
+    }
+
+    return 0;
+}
+
 int main(void)
 {
     REQUIRE(test_static_mem_init() == 0);
     REQUIRE(wolfcert_init(test_heap_hint()) == WOLFCERT_OK);
 
-#if CA_TEST_NEEDS_TLS
     REQUIRE(gen_server_identity(&srv_cert_pem, &srv_cert_pem_len,
                                 &srv_key_pem, &srv_key_pem_len) == 0);
-#endif
 
     if (test_corrupt_ca_rejected())
         return 1;
@@ -1001,11 +1083,18 @@ int main(void)
         return 1;
     if (test_bad_bind_host_rejected())
         return 1;
+#ifdef WOLFCERT_HAVE_SCEP
+    if (test_partial_tls_rejected(WOLFCERT_PROTO_SCEP))
+        return 1;
+#endif
+#ifdef WOLFCERT_HAVE_EST
+    if (test_partial_tls_rejected(WOLFCERT_PROTO_EST))
+        return 1;
+#endif
 
-#if CA_TEST_NEEDS_TLS
     free(srv_cert_pem);
     free(srv_key_pem);
-#endif
+    test_ca_close();
     wolfcert_cleanup();
     printf("OK\n");
     return 0;

@@ -324,9 +324,6 @@ static int tls_setup(WolfCertServer* s, const WolfCertServerCfgSrv* cfg)
     if (cfg->tls_cert_pem == NULL || cfg->tls_key_pem == NULL)
         return WOLFCERT_OK;
 
-    if (cfg->tls_cert_pem_len == 0 || cfg->tls_key_pem_len == 0) {
-        return WOLFCERT_ERR_BAD_ARG;
-    }
     WOLFSSL_CTX* ctx = wolfSSL_CTX_new(wolfTLS_server_method());
     if (ctx == NULL)
         return WOLFCERT_ERR_CRYPTO;
@@ -466,8 +463,26 @@ int wolfcert_server_start(const WolfCertServerCfgSrv* cfg, WolfCertServer** out)
     if (ops == NULL)
         return WOLFCERT_ERR_UNSUPPORTED;
 
-    if (cfg->protocol == WOLFCERT_PROTO_EST &&
-            (cfg->tls_cert_pem == NULL || cfg->tls_key_pem == NULL))
+    if ((cfg->tls_cert_pem == NULL) != (cfg->tls_cert_pem_len == 0) ||
+            (cfg->tls_key_pem == NULL) != (cfg->tls_key_pem_len == 0))
+        return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "server",
+            "tls_cert_pem/tls_key_pem: a pointer without its length or a "
+            "length without its pointer");
+
+    if ((cfg->tls_cert_pem == NULL) != (cfg->tls_key_pem == NULL))
+        return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "server",
+            "tls_cert_pem and tls_key_pem must both be set, or both NULL");
+
+    if ((cfg->tls_client_ca_pem == NULL) != (cfg->tls_client_ca_pem_len == 0))
+        return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "server",
+            "tls_client_ca_pem and its length must both be set, or both "
+            "empty");
+
+    if (cfg->tls_cert_pem == NULL && cfg->tls_client_ca_pem != NULL)
+        return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "server",
+            "tls_client_ca_pem needs tls_cert_pem and tls_key_pem");
+
+    if (cfg->protocol == WOLFCERT_PROTO_EST && cfg->tls_cert_pem == NULL)
         return WOLFCERT_ERR(WOLFCERT_ERR_TLS, "server",
             "EST requires TLS: set tls_cert_pem and tls_key_pem (RFC 7030)");
 

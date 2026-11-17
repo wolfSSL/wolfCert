@@ -279,6 +279,8 @@ if [ -x "$SERVER" ]; then
     done
     expect_server_reject "--tls-trust-issued under scep" "only for EST" \
         --proto scep --tls-trust-issued
+    expect_server_reject "--tls-client-ca without a TLS identity" \
+        "--tls-client-ca requires" --proto scep --tls-client-ca "$0"
     # A wolfSSL without KEEP_PEER_CERT refuses --tls-trust-issued first.
     trust_issued_ok=1
     want_alone="needs ca_cert and ca_key"

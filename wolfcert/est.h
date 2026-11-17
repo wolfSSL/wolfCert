@@ -36,7 +36,8 @@ WOLFCERT_API int wolfcert_est_get_cacerts(const WolfCertServerCfg* srv,
 
 /* GET /.well-known/est/csrattrs - returns the CsrAttrs DER for
  * wolfcert_est_parse_csr_attrs, empty (NULL, 0) on 204, 404, 405, 501 or a
- * 200 with no body. A 401 or 403 returns WOLFCERT_ERR_AUTH, others _HTTP. */
+ * 200 whose body is empty or decodes to nothing. A 401 or 403 returns
+ * WOLFCERT_ERR_AUTH, others _HTTP. */
 WOLFCERT_API int wolfcert_est_get_csr_attrs(const WolfCertServerCfg* srv,
                                             WolfCertBuffer* out_attrs_der);
 
@@ -110,9 +111,10 @@ WOLFCERT_API int wolfcert_csr_attrs_build(const WolfCertCsrAttrItem* items,
  *   SUCCESS - returns WOLFCERT_OK; cert_pem holds the issued cert.
  *   PENDING - returns WOLFCERT_OK; cert_pem is empty and the caller re-POSTs
  *             the identical request after retry_after_sec (section 4.2.3).
- *   FAILURE - any other HTTP status; returns WOLFCERT_ERR_AUTH for 401/403,
- *             else WOLFCERT_ERR_HTTP.
- *   UNSET   - no usable reply; the int return code says why. */
+ *   FAILURE - a reply came back but cannot be used: an HTTP error status
+ *             (WOLFCERT_ERR_AUTH for 401/403, else WOLFCERT_ERR_HTTP) or a
+ *             body that is empty or does not parse.
+ *   UNSET   - no reply was received; the int return code says why. */
 typedef enum {
     WOLFCERT_EST_STATUS_UNSET   = 0,
     WOLFCERT_EST_STATUS_SUCCESS = 1,

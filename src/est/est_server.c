@@ -838,6 +838,10 @@ static int handler_enroll(WolfCertServer* s, int fd, const EstRequest* req,
         send_error(s, fd, 400, "Bad Request", "CSR is not valid base64\n");
         return rc;
     }
+    if (csr.len == 0) {
+        send_error(s, fd, 400, "Bad Request", "request body is empty\n");
+        return WOLFCERT_ERR_HTTP;
+    }
 
     if (reenroll) {
         rc = reenroll_identity_check(s, csr.data, csr.len);

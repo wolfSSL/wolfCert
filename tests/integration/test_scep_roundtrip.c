@@ -2296,6 +2296,18 @@ int main(void)
                 "/scep?operation=PKIOperation&message=%ZZ", NULL) == 400);  /* bad %-escape */
     REQUIRE(raw_http_status(wolfcert_server_port(s),
                 "/scep?operation=PKIOperation&message=@@@@", NULL) == 400); /* bad base64  */
+    {
+        uint8_t* eb = NULL;
+        size_t eb_len = 0;
+        int st = raw_http_req(wolfcert_server_port(s), "GET",
+                              "/scep?operation=PKIOperation&message=%0D%0A",
+                              NULL, NULL, 0, 0, &eb, &eb_len);
+        int empty_msg = eb != NULL && eb_len == strlen("message is empty\n") &&
+                        memcmp(eb, "message is empty\n", eb_len) == 0;
+        free(eb);
+        REQUIRE(st == 400);
+        REQUIRE(empty_msg);
+    }
 
     /* A GET with valid base64 message=QUJD and a body "XYZ" gets 400; ASan
      * reports the body if the server leaks it. */

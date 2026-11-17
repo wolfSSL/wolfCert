@@ -1262,6 +1262,11 @@ static int handle_pki_op_get(WolfCertServer* s, int fd, ScepRequest* req)
         send_text(s, fd, 400, "Bad Request", "text/plain", "");
         return rc;
     }
+    if (der.len == 0) {
+        send_text(s, fd, 400, "Bad Request", "text/plain",
+                  "message is empty\n");
+        return WOLFCERT_ERR_PROTOCOL;
+    }
 
     /* Free any body sent with a GET. */
     WOLFCERT_XFREE(req->body, req->heap);

@@ -502,6 +502,10 @@ WOLFCERT_TEST_VIS int wolfcert_base64_decode(const uint8_t* in, size_t in_len,
         WOLFCERT_XFREE(buf, heap);
         return wolfcert_map_wc_err(rc);
     }
+    if (len == 0) {
+        WOLFCERT_XFREE(buf, heap);
+        buf = NULL;
+    }
 
     out->data = buf;
     out->len = len;

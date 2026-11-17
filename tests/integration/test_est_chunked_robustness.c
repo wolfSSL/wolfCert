@@ -150,6 +150,33 @@ static int reject_oversized_chunk_size(uint16_t port)
     return 0;
 }
 
+static int reject_empty_decoded_csr(uint16_t port)
+{
+    const char req[] =
+        "POST /.well-known/est/simpleenroll HTTP/1.1\r\n"
+        "Host: 127.0.0.1\r\n"
+        "Content-Type: application/pkcs10\r\n"
+        "Content-Length: 2\r\n"
+        "Connection: close\r\n"
+        "\r\n"
+        "\r\n";
+    char resp[1024];
+    TestTlsConn c;
+    size_t n = 0;
+    int r;
+
+    REQUIRE(test_tls_connect(&c, port, g_tls_cert, g_tls_cert_len) == 0);
+    REQUIRE(test_tls_write(&c, req, sizeof(req) - 1) == 0);
+    while (n + 1 < sizeof(resp) &&
+           (r = test_tls_read(&c, resp + n, sizeof(resp) - 1 - n)) > 0)
+        n += (size_t)r;
+    test_tls_close(&c);
+    resp[n] = '\0';
+    REQUIRE(strncmp(resp, "HTTP/1.1 400", 12) == 0);
+    REQUIRE(strstr(resp, "request body is empty") != NULL);
+    return 0;
+}
+
 static int reject_corrupt_chunk_trailer(uint16_t port)
 {
     const char req[] =
@@ -634,6 +661,8 @@ int main(void)
         rc = reject_oversized_chunk_size(port);
     if (rc == 0)
         rc = reject_corrupt_chunk_trailer(port);
+    if (rc == 0)
+        rc = reject_empty_decoded_csr(port);
     if (rc == 0)
         rc = accept_wellformed_chunks(port);
     if (rc == 0)

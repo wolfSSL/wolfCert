@@ -72,6 +72,11 @@ static int test_base64(void)
     /* Garbage chars. */
     const uint8_t bad[] = "!!!!";
     REQUIRE(wolfcert_base64_decode(bad, sizeof(bad) - 1, &out, NULL) != WOLFCERT_OK);
+    /* Whitespace only decodes to nothing. */
+    const uint8_t ws[] = "\r\n";
+    out.data = (uint8_t*)1;
+    REQUIRE(wolfcert_base64_decode(ws, sizeof(ws) - 1, &out, NULL) == WOLFCERT_OK);
+    REQUIRE(out.data == NULL && out.len == 0);
     return 0;
 }
 

@@ -497,10 +497,12 @@ static int wolfcert_cbio_send(WOLFSSL* ssl, char* buf, int sz, void* ctx)
     }
 }
 
-static char* find_header(const char* headers, const char* name, void* heap)
+static int find_header(const char* headers, const char* name, char** out,
+                       void* heap)
 {
     const char* p = headers;
 
+    *out = NULL;
     while (*p) {
         const char* nl = strstr(p, "\r\n");
         if (nl == NULL)
@@ -513,17 +515,18 @@ static char* find_header(const char* headers, const char* name, void* heap)
             wolfcert_http_hdr_split(p, llen, &v, &n) == 0) {
             char* s = (char*)WOLFCERT_XMALLOC(n + 1, heap);
             if (s == NULL)
-                return NULL;
+                return WOLFCERT_ERR_MEMORY;
 
             memcpy(s, v, n);
             s[n] = '\0';
+            *out = s;
 
-            return s;
+            return WOLFCERT_OK;
         }
 
         p = nl + 2;
     }
-    return NULL;
+    return WOLFCERT_OK;
 }
 
 #define WOLFCERT_HTTP_MAX_RETRY_AFTER 86400
@@ -1572,11 +1575,22 @@ static int inspect_headers(WolfCertHttpSession* s)
         s->sm_content_length = 0;
     }
     else {
-        char* te = find_header(hdrs, "Transfer-Encoding", s->heap);
+        char* te;
+        char* cl;
+
+        rc = find_header(hdrs, "Transfer-Encoding", &te, s->heap);
+        if (rc != WOLFCERT_OK) {
+            WOLFCERT_XFREE(hdrs, s->heap);
+            return rc;
+        }
         chunked = (te != NULL && ci_cmp(te, "chunked") == 0);
         WOLFCERT_XFREE(te, s->heap);
 
-        char* cl = find_header(hdrs, "Content-Length", s->heap);
+        rc = find_header(hdrs, "Content-Length", &cl, s->heap);
+        if (rc != WOLFCERT_OK) {
+            WOLFCERT_XFREE(hdrs, s->heap);
+            return rc;
+        }
         s->sm_content_length = (cl != NULL) ? strtol(cl, NULL, 10) : -1;
         WOLFCERT_XFREE(cl, s->heap);
         if (s->sm_content_length >= 0 &&
@@ -1598,16 +1612,20 @@ static int inspect_headers(WolfCertHttpSession* s)
         s->sm_state = SM_READ_BODY_EOF;
     }
 
-    s->sm_content_type = find_header(hdrs, "Content-Type", s->heap);
     s->sm_retry_after_sec = 0;
-    char* ra = find_header(hdrs, "Retry-After", s->heap);
-    if (ra != NULL) {
-        s->sm_retry_after_sec = parse_retry_after(ra);
-        WOLFCERT_XFREE(ra, s->heap);
+    rc = find_header(hdrs, "Content-Type", &s->sm_content_type, s->heap);
+    if (rc == WOLFCERT_OK) {
+        char* ra;
+
+        rc = find_header(hdrs, "Retry-After", &ra, s->heap);
+        if (ra != NULL) {
+            s->sm_retry_after_sec = parse_retry_after(ra);
+            WOLFCERT_XFREE(ra, s->heap);
+        }
     }
 
     WOLFCERT_XFREE(hdrs, s->heap);
-    return WOLFCERT_OK;
+    return rc;
 }
 
 /* Move the body to the front of sm_rx and hand the buffer over. */

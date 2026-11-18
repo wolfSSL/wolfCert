@@ -180,6 +180,7 @@ test_est_chain_roundtrip_LDADD   = libwolfcert.la $(WOLFSSL_LIBS) -lpthread
 test_est_mldsa_roundtrip_SOURCES = tests/integration/test_est_mldsa_roundtrip.c
 test_est_mldsa_roundtrip_LDADD   = libwolfcert.la $(WOLFSSL_LIBS) -lpthread
 test_est_devid_roundtrip_SOURCES = tests/integration/test_est_devid_roundtrip.c
+test_est_devid_roundtrip_CPPFLAGS = $(AM_CPPFLAGS) -I$(top_srcdir)/src
 test_est_devid_roundtrip_LDADD   = libwolfcert.la $(WOLFSSL_LIBS) -lpthread
 test_est_pha_roundtrip_SOURCES = tests/integration/test_est_pha_roundtrip.c
 test_est_pha_roundtrip_LDADD   = libwolfcert.la $(WOLFSSL_LIBS) -lpthread

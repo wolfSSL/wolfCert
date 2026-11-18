@@ -642,6 +642,11 @@ WOLFCERT_TEST_VIS int wolfcert_der_is_cert(const uint8_t* item, size_t len)
            der_skip(item, &idx, (word32)len, 0x03, NULL) && idx == len;
 }
 
+int wolfcert_enc_ok(WolfCertEncoding enc)
+{
+    return enc == WOLFCERT_ENCODING_PEM || enc == WOLFCERT_ENCODING_DER;
+}
+
 int wolfcert_pem_cert_to_der(const uint8_t* pem, size_t pem_len,
                               WolfCertBuffer* out_der, void* heap)
 {
@@ -649,7 +654,7 @@ int wolfcert_pem_cert_to_der(const uint8_t* pem, size_t pem_len,
         return WOLFCERT_ERR_BAD_ARG;
 
     DerBuffer* der = NULL;
-    int rc = wc_PemToDer(pem, (long)pem_len, CERT_TYPE, &der, NULL, NULL, NULL);
+    int rc = wc_PemToDer(pem, (long)pem_len, CERT_TYPE, &der, heap, NULL, NULL);
     if (rc != 0 || der == NULL) {
         if (der != NULL)
             wc_FreeDer(&der);

@@ -407,7 +407,8 @@ static int reenroll_with(const char* url, const uint8_t* cur, size_t cur_len)
 
     REQUIRE(wolfcert_key_from_pem(g_cli.key_pem, (size_t)g_cli.key_pem_len,
                                   NULL, &cur_key) == WOLFCERT_OK);
-    rc = wolfcert_client_reenroll(NULL, &cli, cur, cur_len, cur_key, NULL,
+    rc = wolfcert_client_reenroll(NULL, &cli, WOLFCERT_ENCODING_PEM,
+                                  cur, cur_len, cur_key, NULL,
                                   &meta, &out_key, &out);
     if (rc != WOLFCERT_OK)
         fprintf(stderr, "chain reenroll rc=%d (%s): %s\n", rc,

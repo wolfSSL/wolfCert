@@ -105,14 +105,14 @@ static int wolfcert_client_auto_csrattrs(const WolfCertServerCfg* srv,
 }
 
 static int wolfcert_client_take_cert(int rc, WolfCertEstResult* r,
-                                     WolfCertBuffer* out_cert_pem)
+                                     WolfCertBuffer* out_cert)
 {
     if (rc == WOLFCERT_OK && r->status == WOLFCERT_EST_STATUS_PENDING) {
         rc = WOLFCERT_ERR_PENDING;
     }
     else if (rc == WOLFCERT_OK) {
-        *out_cert_pem = r->cert_pem;
-        memset(&r->cert_pem, 0, sizeof(r->cert_pem));
+        *out_cert = r->cert;
+        memset(&r->cert, 0, sizeof(r->cert));
     }
 
     wolfcert_est_result_free(r);
@@ -161,15 +161,18 @@ static int hand_back(WolfCertKey* key, int rc, WolfCertKey** out_key)
 }
 
 int wolfcert_client_enroll(WolfCertClient* client, const WolfCertServerCfg* srv,
-                           const WolfCertKeyCfg* key_cfg,
+                           WolfCertEncoding enc, const WolfCertKeyCfg* key_cfg,
                            const WolfCertCertMeta* meta,
-                           WolfCertKey** out_key, WolfCertBuffer* out_cert_pem)
+                           WolfCertKey** out_key, WolfCertBuffer* out_cert)
 {
     (void)client;
     if (srv == NULL || key_cfg == NULL || meta == NULL ||
-            out_key == NULL || out_cert_pem == NULL)
+            out_key == NULL || out_cert == NULL)
         return WOLFCERT_ERR_BAD_ARG;
     *out_key = NULL;
+    if (!wolfcert_enc_ok(enc))
+        return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "client", "bad encoding %d",
+                            (int)enc);
 
     int rc = client_proto_check(srv);
     if (rc != WOLFCERT_OK)
@@ -201,8 +204,8 @@ int wolfcert_client_enroll(WolfCertClient* client, const WolfCertServerCfg* srv,
 #ifdef WOLFCERT_HAVE_EST
     WolfCertEstResult r;
 
-    rc = wolfcert_est_simple_enroll(srv, csr.data, csr.len, &r);
-    rc = wolfcert_client_take_cert(rc, &r, out_cert_pem);
+    rc = wolfcert_est_simple_enroll(srv, enc, csr.data, csr.len, &r);
+    rc = wolfcert_client_take_cert(rc, &r, out_cert);
 #else
     rc = WOLFCERT_ERR_UNSUPPORTED;
 #endif
@@ -212,17 +215,21 @@ int wolfcert_client_enroll(WolfCertClient* client, const WolfCertServerCfg* srv,
 }
 
 int wolfcert_client_reenroll(WolfCertClient* client, const WolfCertServerCfg* srv,
+                             WolfCertEncoding enc,
                              const uint8_t* current_cert, size_t current_cert_len,
                              const WolfCertKey* current_key,
                              const WolfCertKeyCfg* new_key_cfg,
                              const WolfCertCertMeta* meta,
-                             WolfCertKey** out_key, WolfCertBuffer* out_cert_pem)
+                             WolfCertKey** out_key, WolfCertBuffer* out_cert)
 {
     (void)client;
     if (srv == NULL || current_cert == NULL || current_key == NULL ||
-        meta == NULL || out_key == NULL || out_cert_pem == NULL)
+        meta == NULL || out_key == NULL || out_cert == NULL)
         return WOLFCERT_ERR_BAD_ARG;
     *out_key = NULL;
+    if (!wolfcert_enc_ok(enc))
+        return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "client", "bad encoding %d",
+                            (int)enc);
     if (wolfcert_csr_meta_sets_identity(meta))
         return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "client",
             "a renewal keeps the certificate's subject and SAN");
@@ -248,9 +255,10 @@ int wolfcert_client_reenroll(WolfCertClient* client, const WolfCertServerCfg* sr
 #ifdef WOLFCERT_HAVE_EST
     WolfCertEstResult r;
 
-    rc = wolfcert_est_simple_reenroll(srv, current_cert, current_cert_len,
-                                      current_key, csr.data, csr.len, &r);
-    rc = wolfcert_client_take_cert(rc, &r, out_cert_pem);
+    rc = wolfcert_est_simple_reenroll(srv, enc, current_cert,
+                                      current_cert_len, current_key, csr.data,
+                                      csr.len, &r);
+    rc = wolfcert_client_take_cert(rc, &r, out_cert);
 #else
     rc = WOLFCERT_ERR_UNSUPPORTED;
 #endif

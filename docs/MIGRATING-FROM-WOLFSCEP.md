@@ -109,13 +109,13 @@ wolfcert_csr_build(key, &meta, &csr);
 
 /* 4) PKCSReq. One call: envelope, sign, POST, verify, de-envelope. */
 WolfCertScepResult res = { 0 };
-int rc = wolfcert_scep_pkcs_req(&srv, &caps,
+int rc = wolfcert_scep_pkcs_req(&srv, WOLFCERT_ENCODING_PEM, &caps,
                                 ca_der.data, ca_der.len,   /* envelope target */
                                 ca_der.data, ca_der.len,   /* trusted bundle  */
                                 key, csr.data, csr.len, &res);
 ```
 
-`res.status` is then `SUCCESS` with the certificate in `res.cert_pem`, `PENDING` with the transactionID in `res.transaction_id` to poll with `wolfcert_scep_get_cert_initial`, or `FAILURE` with `res.fail_info` carrying the RFC 8894 failInfo.
+`res.status` is then `SUCCESS` with the certificate in `res.cert`, `PENDING` with the transactionID in `res.transaction_id` to poll with `wolfcert_scep_get_cert_initial`, or `FAILURE` with `res.fail_info` carrying the RFC 8894 failInfo.
 
 In a split CA and RA deployment, pass the whole `GetCACert` bundle as `ca_bundle` and the RA encryption certificate as `ra_cert`; they are separate arguments because the response signer and the envelope recipient are not the same certificate.
 

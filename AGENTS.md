@@ -154,7 +154,8 @@ WolfCertCertMeta meta = { .subject_dn = "CN=device-0001" };
 WolfCertKey*     key  = NULL;
 WolfCertBuffer   cert = { 0 };
 
-int rc = wolfcert_client_enroll(client, &srv, &kcfg, &meta, &key, &cert);
+int rc = wolfcert_client_enroll(client, &srv, WOLFCERT_ENCODING_PEM,
+                                &kcfg, &meta, &key, &cert);
 if (rc != WOLFCERT_OK)
     printf("%s: %s\n", wolfcert_strerror(rc), wolfcert_last_error_message());
 

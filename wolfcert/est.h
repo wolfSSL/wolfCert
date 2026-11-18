@@ -27,9 +27,8 @@
 extern "C" {
 #endif
 
-/* GET /.well-known/est/cacerts - returns the CA chain as PEM for
- * WOLFCERT_ENCODING_PEM, or as concatenated DER for WOLFCERT_ENCODING_DER.
- * A 401 or 403 returns WOLFCERT_ERR_AUTH, any other non-200 _HTTP. */
+/* GET /.well-known/est/cacerts - returns the CA chain in enc. A 401 or 403
+ * returns WOLFCERT_ERR_AUTH, any other non-200 _HTTP. */
 WOLFCERT_API int wolfcert_est_get_cacerts(const WolfCertServerCfg* srv,
                                           WolfCertEncoding enc,
                                           WolfCertBuffer* out_ca);
@@ -108,11 +107,11 @@ WOLFCERT_API int wolfcert_csr_attrs_build(const WolfCertCsrAttrItem* items,
 
 /* Outcome of the enroll calls (RFC 7030 section 4.2), matching the
  * WolfCertScepStatus values:
- *   SUCCESS - returns WOLFCERT_OK; cert_pem starts with the cert whose
+ *   SUCCESS - returns WOLFCERT_OK; cert starts with the cert whose
  *             SubjectPublicKeyInfo equals the CSR's byte for byte, then any
- *             others as received. The TLS client cert never counts as that
- *             cert.
- *   PENDING - returns WOLFCERT_OK; cert_pem is empty and the caller re-POSTs
+ *             others as received, in the call's encoding. The TLS client
+ *             cert never counts as that cert.
+ *   PENDING - returns WOLFCERT_OK; cert is empty and the caller re-POSTs
  *             the identical request after retry_after_sec (section 4.2.3).
  *   FAILURE - a reply came back but cannot be used: an HTTP error status
  *             (WOLFCERT_ERR_AUTH for 401/403, else WOLFCERT_ERR_HTTP), a
@@ -131,7 +130,7 @@ typedef enum {
 typedef struct {
     WolfCertEstStatus status;
     /* Populated and owned iff status == SUCCESS. */
-    WolfCertBuffer    cert_pem;
+    WolfCertBuffer    cert;
     /* Seconds to wait before re-POSTing when PENDING; 0 if the server sent
      * no usable Retry-After. */
     int               retry_after_sec;
@@ -146,6 +145,7 @@ WOLFCERT_API void wolfcert_est_result_free(WolfCertEstResult* r);
 
 /* POST /.well-known/est/simpleenroll. */
 WOLFCERT_API int wolfcert_est_simple_enroll(const WolfCertServerCfg* srv,
+                                            WolfCertEncoding enc,
                                             const uint8_t* csr_der, size_t csr_der_len,
                                             WolfCertEstResult* out);
 
@@ -153,6 +153,7 @@ WOLFCERT_API int wolfcert_est_simple_enroll(const WolfCertServerCfg* srv,
  * as the TLS client credential; current_cert is laid out as
  * WolfCertServerCfg.client_cert. */
 WOLFCERT_API int wolfcert_est_simple_reenroll(const WolfCertServerCfg* srv,
+                                              WolfCertEncoding enc,
                                               const uint8_t* current_cert, size_t current_cert_len,
                                               const WolfCertKey* current_key,
                                               const uint8_t* csr_der, size_t csr_der_len,
@@ -184,6 +185,7 @@ WOLFCERT_API int wolfcert_est_session_get_csr_attrs(WolfCertEstSession* s,
                                                     WolfCertBuffer* out_attrs_der);
 
 WOLFCERT_API int wolfcert_est_session_simple_enroll(WolfCertEstSession* s,
+                                                    WolfCertEncoding enc,
                                                     const uint8_t* csr_der,
                                                     size_t csr_der_len,
                                                     WolfCertEstResult* out);
@@ -191,6 +193,7 @@ WOLFCERT_API int wolfcert_est_session_simple_enroll(WolfCertEstSession* s,
 /* The session's TLS client credential, srv->client_cert and client_key at
  * open, is the cert being renewed; WOLFCERT_ERR_BAD_ARG without one. */
 WOLFCERT_API int wolfcert_est_session_simple_reenroll(WolfCertEstSession* s,
+                                                      WolfCertEncoding enc,
                                                       const uint8_t* csr_der,
                                                       size_t csr_der_len,
                                                       WolfCertEstResult* out);
@@ -209,11 +212,13 @@ WOLFCERT_API int wolfcert_est_session_get_csr_attrs_nb(WolfCertEstSession* s,
                                                        WolfCertBuffer* out_attrs_der);
 
 WOLFCERT_API int wolfcert_est_session_simple_enroll_nb(WolfCertEstSession* s,
+                                                       WolfCertEncoding enc,
                                                        const uint8_t* csr_der,
                                                        size_t csr_der_len,
                                                        WolfCertEstResult* out);
 
 WOLFCERT_API int wolfcert_est_session_simple_reenroll_nb(WolfCertEstSession* s,
+                                                         WolfCertEncoding enc,
                                                          const uint8_t* csr_der,
                                                          size_t csr_der_len,
                                                          WolfCertEstResult* out);

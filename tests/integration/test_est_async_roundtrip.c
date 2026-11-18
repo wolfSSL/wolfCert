@@ -86,7 +86,8 @@ static int pump_simple_enroll(WolfCertEstSession* s,
                               WolfCertEstResult* out)
 {
     for (;;) {
-        int rc = wolfcert_est_session_simple_enroll_nb(s, csr, csr_len, out);
+        int rc = wolfcert_est_session_simple_enroll_nb(s, WOLFCERT_ENCODING_PEM,
+                                                       csr, csr_len, out);
         if (rc != WOLFCERT_ERR_WANT_READ && rc != WOLFCERT_ERR_WANT_WRITE)
             return rc;
         if (wait_io(s, rc) != 0)
@@ -168,7 +169,7 @@ int main(void)
         WolfCertEstResult issued = { 0 };
         REQUIRE(pump_simple_enroll(es, csr.data, csr.len, &issued) == 0);
         REQUIRE(issued.status == WOLFCERT_EST_STATUS_SUCCESS);
-        REQUIRE(memmem(issued.cert_pem.data, issued.cert_pem.len,
+        REQUIRE(memmem(issued.cert.data, issued.cert.len,
                        "BEGIN CERTIFICATE", 17) != NULL);
 
         wolfcert_buffer_free(&ca_pem);
@@ -217,7 +218,7 @@ int main(void)
     REQUIRE(bca.len > 0);
     REQUIRE(pump_simple_enroll(bes, csr.data, csr.len, &bissued) == 0);
     REQUIRE(bissued.status == WOLFCERT_EST_STATUS_SUCCESS);
-    REQUIRE(memmem(bissued.cert_pem.data, bissued.cert_pem.len,
+    REQUIRE(memmem(bissued.cert.data, bissued.cert.len,
                    "BEGIN CERTIFICATE", 17) != NULL);
 
     wolfcert_buffer_free(&bca);
@@ -234,7 +235,7 @@ int main(void)
     REQUIRE(pump_simple_enroll(bes, csr.data, csr.len, &wr)
             == WOLFCERT_ERR_AUTH);
     REQUIRE(wr.status == WOLFCERT_EST_STATUS_FAILURE);
-    REQUIRE(wr.cert_pem.data == NULL);
+    REQUIRE(wr.cert.data == NULL);
     wolfcert_est_result_free(&wr);
 
     /* The failed enroll no longer counts as in flight. */

@@ -35,9 +35,7 @@ typedef struct WolfCertClient WolfCertClient;
 WOLFCERT_API int  wolfcert_client_new(WolfCertClient** out);
 WOLFCERT_API void wolfcert_client_free(WolfCertClient* client);
 
-/* Fetch the CA chain unwrapped from its PKCS#7 envelope. PEM gives the
- * certificates as concatenated CERTIFICATE blocks; DER gives their DER
- * back-to-back, so a single ASN.1 load reads only the first one. */
+/* Fetch the CA chain in encoding, unwrapped from its PKCS#7 envelope. */
 WOLFCERT_API int  wolfcert_client_get_ca(WolfCertClient* client,
                                          const WolfCertServerCfg* srv,
                                          WolfCertEncoding encoding,
@@ -50,8 +48,9 @@ WOLFCERT_API int  wolfcert_client_fetch_meta(WolfCertClient* client,
                                              WolfCertCertMeta* meta);
 
 /* Generate a new key (honoring cfg->dev_id for CryptoCb offloading), build
- * a CSR from meta, and enroll. On success out_key owns the key and
- * out_cert_pem the certs, ordered as for WolfCertEstStatus SUCCESS (est.h).
+ * a CSR from meta, and enroll. On success out_key owns the key and out_cert
+ * the certs in enc, ordered as for WolfCertEstStatus SUCCESS (est.h). A bad
+ * enc is refused before any key is generated.
  * A pending enrollment returns WOLFCERT_ERR_PENDING. On any failure neither
  * is handed out, except that a key generated under a key_id stays in the
  * backend and out_key still owns it, so the caller can delete it there
@@ -60,27 +59,30 @@ WOLFCERT_API int  wolfcert_client_fetch_meta(WolfCertClient* client,
  * wolfcert_est_simple_enroll to re-POST one CSR. */
 WOLFCERT_API int  wolfcert_client_enroll(WolfCertClient* client,
                                          const WolfCertServerCfg* srv,
+                                         WolfCertEncoding enc,
                                          const WolfCertKeyCfg* key_cfg,
                                          const WolfCertCertMeta* meta,
                                          WolfCertKey** out_key,
-                                         WolfCertBuffer* out_cert_pem);
+                                         WolfCertBuffer* out_cert);
 
 /* Re-enroll using an existing cert/key; a NULL new_key_cfg reuses the key.
  * current_cert is laid out as WolfCertServerCfg.client_cert, and the CSR
  * copies its leaf's Subject and SAN: WOLFCERT_ERR_BAD_ARG if meta
  * sets them, _PARSE for a bad cert, _UNSUPPORTED if one cannot be carried.
+ * enc and out_cert are as for enroll.
  * A pending renewal returns WOLFCERT_ERR_PENDING. On failure a new key with a
  * key_id stays in the backend and in out_key, as for enroll. A CA that parks
  * renewals needs wolfcert_csr_build_ex and wolfcert_est_simple_reenroll, after
  * wolfcert_key_generate for a new key. */
 WOLFCERT_API int  wolfcert_client_reenroll(WolfCertClient* client,
                                            const WolfCertServerCfg* srv,
+                                           WolfCertEncoding enc,
                                            const uint8_t* current_cert, size_t current_cert_len,
                                            const WolfCertKey* current_key,
                                            const WolfCertKeyCfg* new_key_cfg,
                                            const WolfCertCertMeta* meta,
                                            WolfCertKey** out_key,
-                                           WolfCertBuffer* out_cert_pem);
+                                           WolfCertBuffer* out_cert);
 
 #ifdef __cplusplus
 }

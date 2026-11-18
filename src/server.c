@@ -791,7 +791,7 @@ int wolfcert_server_get_ca(const WolfCertServer* srv, WolfCertEncoding enc,
 {
     if (srv == NULL || out_cert == NULL)
         return WOLFCERT_ERR_BAD_ARG;
-    if (enc != WOLFCERT_ENCODING_PEM && enc != WOLFCERT_ENCODING_DER)
+    if (!wolfcert_enc_ok(enc))
         return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "server", "bad encoding %d",
                             (int)enc);
 

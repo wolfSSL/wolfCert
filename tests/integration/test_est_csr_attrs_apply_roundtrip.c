@@ -150,7 +150,8 @@ static int auto_apply_pins_everything(WolfCertServer* s)
 
     WolfCertKey* key = NULL;
     WolfCertBuffer cert_pem = { 0 };
-    int rc = wolfcert_client_enroll(cli, &srv, &key_cfg, &meta,
+    int rc = wolfcert_client_enroll(cli, &srv, WOLFCERT_ENCODING_PEM,
+                                    &key_cfg, &meta,
                                     &key, &cert_pem);
 #ifndef WOLFSSL_SHA384
     REQUIRE(rc == WOLFCERT_ERR_UNSUPPORTED);
@@ -202,7 +203,8 @@ static int explicit_caller_wins(WolfCertServer* s)
 
     WolfCertKey* key = NULL;
     WolfCertBuffer cert_pem = { 0 };
-    int rc = wolfcert_client_enroll(cli, &srv, &key_cfg, &meta,
+    int rc = wolfcert_client_enroll(cli, &srv, WOLFCERT_ENCODING_PEM,
+                                    &key_cfg, &meta,
                                     &key, &cert_pem);
 #ifndef WOLFSSL_SHA384
     REQUIRE(rc == WOLFCERT_ERR_UNSUPPORTED);

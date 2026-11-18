@@ -341,21 +341,61 @@ static inline int test_pem_cert_is(const WolfCertBuffer* pem, int n,
 }
 
 #ifdef WOLFCERT_INTERNAL_H
-/* 1 if the first cert in pem has the DER CSR's SubjectPublicKeyInfo. */
-static inline int test_first_has_csr_key(const WolfCertBuffer* pem,
+/* Offset and length of certificate n (from 0) of concatenated DER. */
+static inline int test_der_cert_at(const WolfCertBuffer* buf, int n,
+                                   size_t* out_off, size_t* out_len)
+{
+    const uint8_t* item = NULL;
+    size_t off = 0;
+
+    while (wolfcert_der_chain_next(buf->data, buf->len, &off, &item,
+                                   out_len) == 1) {
+        if (n-- == 0) {
+            *out_off = (size_t)(item - buf->data);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* 1 when certificate n (from 0) of concatenated DER is der. */
+static inline int test_der_cert_is(const WolfCertBuffer* buf, int n,
+                                   const uint8_t* der, size_t der_len)
+{
+    size_t off = 0;
+    size_t len = 0;
+
+    return test_der_cert_at(buf, n, &off, &len) && len == der_len &&
+           memcmp(buf->data + off, der, der_len) == 0;
+}
+
+/* 1 if the first cert in certs, PEM or concatenated DER, has the DER CSR's
+ * SubjectPublicKeyInfo. */
+static inline int test_first_has_csr_key(const WolfCertBuffer* certs,
                                          const WolfCertBuffer* csr)
 {
     uint8_t want[WC_SHA256_DIGEST_SIZE];
     uint8_t got[WC_SHA256_DIGEST_SIZE];
     DerBuffer* der = NULL;
+    const uint8_t* first = certs->data;
+    size_t first_len = 0;
     int same;
 
-    if (wc_PemToDer(pem->data, (long)pem->len, CERT_TYPE, &der, NULL, NULL,
-                    NULL) != 0)
-        return 0;
-    same = wolfcert_spki_hash(csr->data, csr->len, 1, want, NULL) ==
+    if (wolfcert_buffer_is_der(certs->data, certs->len)) {
+        size_t off = 0;
+
+        if (!test_der_cert_at(certs, 0, &off, &first_len))
+            first_len = 0;
+    }
+    else if (wc_PemToDer(certs->data, (long)certs->len, CERT_TYPE, &der,
+                         NULL, NULL, NULL) == 0) {
+        first = der->buffer;
+        first_len = der->length;
+    }
+    same = first_len > 0 &&
+           wolfcert_spki_hash(csr->data, csr->len, 1, want, NULL) ==
                WOLFCERT_OK &&
-           wolfcert_spki_hash(der->buffer, der->length, 0, got, NULL) ==
+           wolfcert_spki_hash(first, first_len, 0, got, NULL) ==
                WOLFCERT_OK &&
            memcmp(want, got, sizeof(want)) == 0;
     wc_FreeDer(&der);

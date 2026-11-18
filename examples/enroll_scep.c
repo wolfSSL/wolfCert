@@ -124,7 +124,8 @@ int main(int argc, char** argv)
 
     /* 4) PKCSReq, enveloped to and verified against the single CA cert. */
     WolfCertScepResult res = { 0 };
-    rc = wolfcert_scep_pkcs_req(&srv, &caps, ca_der->buffer, ca_der->length,
+    rc = wolfcert_scep_pkcs_req(&srv, WOLFCERT_ENCODING_PEM,
+                                &caps, ca_der->buffer, ca_der->length,
                                 ca_der->buffer, ca_der->length,
                                 key, csr.data, csr.len, &res);
     if (rc != WOLFCERT_OK) {
@@ -138,7 +139,7 @@ int main(int argc, char** argv)
                     : "rejected by the CA");
         return 2;
     }
-    fwrite(res.cert_pem.data, 1, res.cert_pem.len, stdout);
+    fwrite(res.cert.data, 1, res.cert.len, stdout);
 
     wc_FreeDer(&ca_der);
     wolfcert_buffer_free(&ca_pem);

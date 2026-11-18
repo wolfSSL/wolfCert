@@ -38,6 +38,7 @@
 
 #include "internal.h"                       /* whitebox SCEP pkiMessage helpers */
 #include "tls_test_util.h"
+#include "../http_test_util.h"
 #include "../test_certs.h"
 
 #include <arpa/inet.h>
@@ -2033,7 +2034,7 @@ static int check_malformed_dispatch(uint16_t port, const WolfCertKeyCfg* kcfg,
                 .body         = msg.data,
                 .body_len     = msg.len,
             };
-            int ok = wolfcert_http_request(&req, &resp) == WOLFCERT_OK &&
+            int ok = test_http_request(NULL, &req, &resp) == WOLFCERT_OK &&
                      resp.status_code == 200 && resp.body != NULL;
 
             ok = ok && wolfcert_scep_parse_pki_message(resp.body,

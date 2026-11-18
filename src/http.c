@@ -1229,7 +1229,7 @@ int wolfcert_http_session_open(const WolfCertHttpSessionCfg* cfg,
     return WOLFCERT_OK;
 }
 
-void wolfcert_http_session_set_close(WolfCertHttpSession* s)
+WOLFCERT_TEST_VIS void wolfcert_http_session_set_close(WolfCertHttpSession* s)
 {
     if (s != NULL)
         s->keep_alive = 0;

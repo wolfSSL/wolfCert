@@ -17,7 +17,7 @@
  * along with wolfCert.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-/* wolfcert_http_request over HTTPS to a one-shot loopback wolfSSL server. */
+/* HTTPS requests to a one-shot loopback wolfSSL server. */
 
 #define _POSIX_C_SOURCE 200809L
 #define _DEFAULT_SOURCE
@@ -33,6 +33,7 @@
 #include <wolfssl/wolfcrypt/wc_port.h>
 
 #include "tls_test_util.h"
+#include "../http_test_util.h"
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -170,12 +171,12 @@ static int start_srv(struct srv_ctx* sc, pthread_t* tid, char* url,
 }
 
 /* Start srv_thread on sc, then GET https://127.0.0.1:port/ with verify_server
- * set and ta as the only trust anchor: as a one-shot, or on a session when
- * open_rc is not NULL, which then gets the session open's result. */
+ * set and ta as the only trust anchor, on a session that closes after the
+ * request; open_rc, when not NULL, gets the session open's result. */
 static int get_once(struct srv_ctx* sc, const uint8_t* ta, size_t ta_len,
                     int* open_rc, WolfCertHttpResponse* resp)
 {
-    WolfCertHttpRequest req = { .method = "GET", .verify_server = 1 };
+    WolfCertHttpRequest req = { .method = "GET" };
     WolfCertHttpSessionCfg cfg = { .verify_server = 1 };
     WolfCertHttpSession* s = NULL;
     pthread_t tid;
@@ -185,16 +186,14 @@ static int get_once(struct srv_ctx* sc, const uint8_t* ta, size_t ta_len,
     if (start_srv(sc, &tid, url, sizeof(url)) != 0)
         return WOLFCERT_ERR_GENERIC;
     req.url               = url;
-    req.trust_anchors     = ta;
-    req.trust_anchors_len = ta_len;
+    cfg.base_url          = url;
+    cfg.trust_anchors     = ta;
+    cfg.trust_anchors_len = ta_len;
 
     if (open_rc == NULL) {
-        rc = wolfcert_http_request(&req, resp);
+        rc = test_http_request(&cfg, &req, resp);
     }
     else {
-        cfg.base_url          = url;
-        cfg.trust_anchors     = ta;
-        cfg.trust_anchors_len = ta_len;
         rc = *open_rc = wolfcert_http_session_open(&cfg, &s);
         if (rc == WOLFCERT_OK)
             rc = wolfcert_http_session_request(s, &req, resp);

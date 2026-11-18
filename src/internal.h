@@ -324,7 +324,7 @@ int wolfcert_http_hdr_is(const char* line, size_t llen, const char* name);
 int wolfcert_http_hdr_split(const char* line, size_t llen, const char** val,
                             size_t* vlen);
 /* Send Connection: close on the session's requests. */
-void wolfcert_http_session_set_close(WolfCertHttpSession* s);
+WOLFCERT_TEST_VIS void wolfcert_http_session_set_close(WolfCertHttpSession* s);
 
 /* `_encode` emits one line; `_encode_mime` wraps at 64 columns, which libest's
  * BIO_f_base64 body parser requires. `_decode` accepts both. */

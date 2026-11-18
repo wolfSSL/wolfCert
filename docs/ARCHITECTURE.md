@@ -467,12 +467,12 @@ for (;;) {
 
 Key points:
 
-- **One-shots block; a session takes either style.** One-shot
-  `wolfcert_http_request` / `wolfcert_est_*` / `wolfcert_scep_*` calls are
-  blocking by design. A session takes blocking and `_nb` calls, and the style
-  may change between requests; a blocking call while an `_nb` request is in
-  flight returns `WOLFCERT_ERR_BAD_ARG`. The SCEP session additionally does
-  not require TLS, since SCEP authenticates at the pkiMessage layer.
+- **One-shots block; a session takes either style.** One-shot `wolfcert_est_*`
+  / `wolfcert_scep_*` calls are blocking by design. A session takes blocking
+  and `_nb` calls, and the style may change between requests; a blocking call
+  while an `_nb` request is in flight returns `WOLFCERT_ERR_BAD_ARG`. The SCEP
+  session additionally does not require TLS, since SCEP authenticates at the
+  pkiMessage layer.
 - **DNS and the initial TCP connect stay synchronous.** Session open resolves
   and connects; the TLS handshake runs on the first request, so it is
   non-blocking under `_nb`. If you can't afford a blocking connect, resolve and
@@ -547,10 +547,10 @@ typedef struct WolfCertTransport {
 } WolfCertTransport;
 ```
 
-Set it on `WolfCertServerCfg.transport` (or `WolfCertHttpRequest` /
-`WolfCertHttpSessionCfg`). Leaving it zeroed selects the built-in POSIX
-instance in `src/net_posix.c`, which is an ordinary implementation of this
-same vtable rather than a privileged path.
+Set it on `WolfCertServerCfg.transport` (or
+`WolfCertHttpSessionCfg.transport`). Leaving it zeroed selects the built-in
+POSIX instance in `src/net_posix.c`, which is an ordinary implementation of
+this same vtable rather than a privileged path.
 
 The contract:
 
@@ -566,9 +566,9 @@ The contract:
   up to `WOLFCERT_HTTP_MAX_INTERIM` (8) before the final one; a ninth, or a
   `101`, fails the request with `WOLFCERT_ERR_PROTOCOL`.
 - **`connect`'s `timeout_ms` is the caller's**, passed through from
-  `WolfCertServerCfg.timeout_ms` / `WolfCertHttpRequest.timeout_ms`. A value
-  above zero bounds the whole connect attempt. Zero or less imposes no limit
-  of wolfCert's, leaving the stack's own default.
+  `WolfCertServerCfg.timeout_ms` / `WolfCertHttpSessionCfg.timeout_ms`. A value
+  above zero bounds the whole connect attempt. Zero or less imposes no limit of
+  wolfCert's, leaving the stack's own default.
 - **`read` / `write`'s `timeout_ms` carries the blocking mode**, and means
   something different from `connect`'s. It takes two values and no others.
   `0` asks the call never to block: return `WOLFCERT_ERR_WANT_READ` or

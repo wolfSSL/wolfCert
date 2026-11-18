@@ -2009,44 +2009,6 @@ int wolfcert_http_session_request_nb(WolfCertHttpSession* s,
     return http_session_call(s, req, resp, 1);
 }
 
-int wolfcert_http_request(const WolfCertHttpRequest* req, WolfCertHttpResponse* resp)
-{
-    WolfCertHttpSessionCfg cfg;
-    WolfCertHttpSession*   s = NULL;
-    int rc;
-
-    if (req == NULL || resp == NULL || req->url == NULL || req->method == NULL)
-        return WOLFCERT_ERR_BAD_ARG;
-
-    memset(resp, 0, sizeof(*resp));
-    resp->heap = req->heap ? req->heap : wolfcert_default_heap();
-
-    memset(&cfg, 0, sizeof(cfg));
-    cfg.base_url           = req->url;
-    cfg.trust_anchors      = req->trust_anchors;
-    cfg.trust_anchors_len  = req->trust_anchors_len;
-    cfg.verify_server      = req->verify_server;
-    cfg.timeout_ms         = req->timeout_ms;
-    cfg.max_response_bytes = req->max_response_bytes;
-    cfg.client_cert        = req->client_cert;
-    cfg.client_cert_len    = req->client_cert_len;
-    cfg.client_key         = req->client_key;
-    cfg.client_key_len     = req->client_key_len;
-    cfg.client_key_obj     = req->client_key_obj;
-    cfg.heap               = req->heap;
-    cfg.transport          = req->transport;
-
-    rc = wolfcert_http_session_open(&cfg, &s);
-    if (rc == WOLFCERT_OK) {
-        wolfcert_http_session_set_close(s);
-        rc = http_session_call(s, req, resp, 0);
-    }
-
-    wolfcert_http_session_close(s);
-
-    return rc;
-}
-
 void wolfcert_http_response_free(WolfCertHttpResponse* resp)
 {
     if (resp == NULL)

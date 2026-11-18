@@ -277,8 +277,8 @@ headers and read room included, and a response that needs more fails with
 `WOLFCERT_ERR_MEMORY`. A `Content-Length` response takes one block of its
 exact size. For larger responses, give the pool one block of that sum per
 session receiving at the same time, or lower `max_response_bytes` (per
-request, or per session at open) or `WOLFCERT_HTTP_HEADER_BUDGET` (at build
-time) until their sum fits wolfSSL's largest bucket (`LARGEST_MEM_BUCKET`,
+session at open) or `WOLFCERT_HTTP_HEADER_BUDGET` (at build time) until
+their sum fits wolfSSL's largest bucket (`LARGEST_MEM_BUCKET`,
 16128 bytes unless ML-DSA or `SESSION_CERTS` raises it): 7936 + 8192, for
 example.
 

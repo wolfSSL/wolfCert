@@ -5,3 +5,7 @@ name: wolfcert
 build:
   cmake: zephyr
   kconfig: zephyr/Kconfig
+# Identifiers for west spdx.
+security:
+  external-references:
+    - pkg:github/wolfssl/wolfcert@v0.1.0

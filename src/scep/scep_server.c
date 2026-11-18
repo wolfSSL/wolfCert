@@ -578,11 +578,15 @@ static int send_cert_rep(WolfCertServer* s, int fd,
     WolfCertBuffer resp_env = { 0 };
 
     if (strcmp(pki_status, "0") == 0) {
-        const uint8_t* cs[1] = { issued_cert };
-        size_t         cl[1] = { issued_cert_len };
         WolfCertBuffer p7 = { 0 };
+        int signed_by_ca = env_target_len == s->ca.cert_der_len &&
+                           memcmp(env_target, s->ca.cert_der,
+                                  env_target_len) == 0;
 
-        rc = wolfcert_pkcs7_build_certs_only(cs, cl, 1, &p7, s->heap);
+        rc = wolfcert_server_issued_p7(s, issued_cert, issued_cert_len,
+                                       signed_by_ca ? NULL : env_target,
+                                       signed_by_ca ? 0 : env_target_len,
+                                       &p7);
         if (rc != WOLFCERT_OK) {
             send_text(s, fd, 500, "Server Error", "text/plain", "");
             return rc;

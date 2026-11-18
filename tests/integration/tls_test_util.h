@@ -311,6 +311,34 @@ static inline void test_ca_close(void)
 }
 #endif /* WOLFCERT_HAVE_SERVER */
 
+/* 1 when certificate n (from 0) of a PEM bundle is der. */
+static inline int test_pem_cert_is(const WolfCertBuffer* pem, int n,
+                                   const uint8_t* der, size_t der_len)
+{
+    static const char tag[] = "-----BEGIN CERTIFICATE-----";
+    const size_t tag_len = sizeof(tag) - 1;
+    DerBuffer* got = NULL;
+    size_t off = 0;
+    int same;
+
+    for (;;) {
+        while (off + tag_len <= pem->len &&
+               memcmp(pem->data + off, tag, tag_len) != 0)
+            off++;
+        if (off + tag_len > pem->len)
+            return 0;
+        if (n-- == 0)
+            break;
+        off += tag_len;
+    }
+    if (wc_PemToDer(pem->data + off, (long)(pem->len - off), CERT_TYPE, &got,
+                    NULL, NULL, NULL) != 0)
+        return 0;
+    same = got->length == der_len && memcmp(got->buffer, der, der_len) == 0;
+    wc_FreeDer(&got);
+    return same;
+}
+
 /* Raw TLS client; each test_tls_write() is one TLS record, so one
  * wolfSSL_read() on the server, which the split-request tests need. */
 typedef struct {

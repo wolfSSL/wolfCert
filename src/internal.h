@@ -42,6 +42,7 @@
 #include <wolfssl/wolfcrypt/asn_public.h>
 #include <wolfssl/wolfcrypt/ecc.h>
 #include <wolfssl/wolfcrypt/rsa.h>
+#include <wolfssl/wolfcrypt/sha256.h>
 #include <wolfssl/wolfcrypt/random.h>
 #include <wolfssl/wolfcrypt/wc_port.h>
 #include <wolfssl/ssl.h>
@@ -165,8 +166,19 @@ struct WolfCertServer {
 #if defined(WOLFCERT_BUILD_TESTING)
     /* Set by wolfcert_server_set_request_timeout(). */
     int                     request_timeout_ms;
+    /* Set by wolfcert_server_set_issue_fault(), _first() and _echo(). */
+    int                     issue_fault;
+    int                     issue_echo;
+    const uint8_t*          issue_first;
+    size_t                  issue_first_len;
 #endif
 };
+
+/* Certs-only PKCS#7 carrying an issued certificate; signer is the request's
+ * SCEP signer cert, or NULL. */
+int wolfcert_server_issued_p7(WolfCertServer* srv, const uint8_t* issued,
+                              size_t issued_len, const uint8_t* signer,
+                              size_t signer_len, WolfCertBuffer* out_p7);
 
 /* wolfSSL_read/write on a TLS connection, else recv()/send(). */
 ssize_t wolfcert_io_recv(WolfCertServer* srv, int fd, void* buf, size_t len);
@@ -211,6 +223,20 @@ WOLFCERT_API const WolfCertServerOps* wolfcert_scep_server_ops(void);
  * 0 restores it and a negative value disables the deadline. */
 WOLFCERT_TEST_VIS void wolfcert_server_set_request_timeout(WolfCertServer* srv,
                                                            int ms);
+
+/* Issued-cert and SCEP GetCert replies leave the issued cert out while on,
+ * sending the _issue_first or echoed cert, else the CA cert, alone. */
+WOLFCERT_TEST_VIS void wolfcert_server_set_issue_fault(WolfCertServer* srv,
+                                                       int on);
+
+/* While on, those SCEP replies put the request's signer cert first. */
+WOLFCERT_TEST_VIS void wolfcert_server_set_issue_echo(WolfCertServer* srv,
+                                                      int on);
+
+/* Those replies put der ahead of the issued cert; NULL clears it. */
+WOLFCERT_TEST_VIS void wolfcert_server_set_issue_first(WolfCertServer* srv,
+                                                       const uint8_t* der,
+                                                       size_t der_len);
 
 /* GetCert faults: answer with the CA cert, or drop the signer cert. */
 WOLFCERT_TEST_VIS void wolfcert_scep_server_set_getcert_fault(WolfCertServer* s,
@@ -361,6 +387,8 @@ WOLFCERT_TEST_VIS int wolfcert_find_san(const DecodedCert* dc,
 
 WOLFCERT_TEST_VIS int wolfcert_buffer_is_der(const uint8_t* buf, size_t len);
 
+/* Length of the DER element starting at in[0], 0 if it does not parse. */
+size_t wolfcert_der_first_len(const uint8_t* in, size_t in_len);
 /* 1 if the DER element starting at in[0] spans exactly in_len bytes. */
 int wolfcert_der_is_single(const uint8_t* in, size_t in_len);
 
@@ -374,6 +402,50 @@ WOLFCERT_TEST_VIS int wolfcert_pkcs7_certs_to_pem(const uint8_t* p7_der, size_t 
                                                   WolfCertBuffer* out_pem, void* heap);
 WOLFCERT_TEST_VIS int wolfcert_pkcs7_certs_to_der(const uint8_t* p7_der, size_t p7_der_len,
                                                   WolfCertBuffer* out_der, void* heap);
+/* The key an issued cert must hold, and the cert a renewal replaces. */
+typedef struct {
+    word32  key_oid;
+    uint8_t key_hash[WC_SHA256_DIGEST_SIZE];   /* of DecodedCert.publicKey */
+    uint8_t spki_hash[WC_SHA256_DIGEST_SIZE];  /* of the SPKI DER */
+    uint8_t old_hash[WC_SHA256_DIGEST_SIZE];   /* of the old cert's DER */
+    int     has_old;
+    int     allow_old;  /* a renewal may get back the old cert alone */
+    int     has_spki;
+    int     raw_spki;   /* only spki_hash is set: wolfSSL lacks the key */
+} WolfCertIssuedMatch;
+
+/* SHA-256 of a CERT_TYPE or CERTREQ_TYPE object's public key, the curve and
+ * uncompressed point for ECC; what an issued-cert match compares. */
+WOLFCERT_TEST_VIS int wolfcert_public_key_hash(const uint8_t* der,
+    size_t der_len, int type, word32* key_oid,
+    uint8_t hash[WC_SHA256_DIGEST_SIZE], void* heap);
+
+/* SubjectPublicKeyInfo of a PEM or DER cert; free *out with WOLFCERT_XFREE. */
+int wolfcert_cert_spki(const uint8_t* cert, size_t cert_len, void* heap,
+                       uint8_t** out, word32* out_len);
+
+#ifdef WOLFCERT_HAVE_ECC
+/* An ECC SubjectPublicKeyInfo or raw X9.63 point as its uncompressed point. */
+int wolfcert_ecc_pub_x963(const uint8_t* pub, word32 pub_len, int dev_id,
+                          uint8_t* out, word32* out_len, int* curve_id,
+                          void* heap);
+#endif
+
+/* SHA-256 of the DER encoding of a PEM or DER buffer's first cert. */
+int wolfcert_cert_der_hash(const uint8_t* cert, size_t cert_len,
+                           uint8_t hash[WC_SHA256_DIGEST_SIZE], void* heap);
+
+/* old_hash, from wolfcert_cert_der_hash, may be NULL; allow_old takes the old
+ * cert when it is the only match. WOLFCERT_ERR_PARSE for an unreadable CSR. */
+WOLFCERT_TEST_VIS int wolfcert_issued_match_init(WolfCertIssuedMatch* m,
+    const uint8_t* csr, size_t csr_len, const uint8_t* old_hash,
+    int allow_old, void* heap);
+
+/* As _to_pem, with the cert matching m first; WOLFCERT_ERR_PROTOCOL when
+ * none does. */
+WOLFCERT_TEST_VIS int wolfcert_pkcs7_issued_to_pem(const uint8_t* p7_der, size_t p7_der_len,
+                                                   const WolfCertIssuedMatch* match,
+                                                   WolfCertBuffer* out_pem, void* heap);
 
 WOLFCERT_TEST_VIS int wolfcert_pkcs7_build_certs_only(const uint8_t* const* certs_der,
                                                       const size_t* certs_len, size_t count,

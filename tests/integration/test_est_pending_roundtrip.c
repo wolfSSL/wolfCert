@@ -182,15 +182,21 @@ static int pending_path(WolfCertServer* s)
 
     wolfcert_est_result_free(&r2);
 
-    /* A non-PKCS#10 body and a CSR with a flipped signature bit each get
-     * FAILURE on the first POST. */
+    /* The client refuses a non-PKCS#10 body and the server answers it 400; a
+     * CSR with a flipped signature bit gets FAILURE on the first POST. */
     static const uint8_t not_a_csr[] = "this is not a PKCS#10 request";
     WolfCertEstResult bad = { 0 };
     rc = wolfcert_est_simple_enroll(&cli, not_a_csr, sizeof(not_a_csr),
                                     &bad);
-    REQUIRE(rc == WOLFCERT_ERR_HTTP);
-    REQUIRE(bad.status == WOLFCERT_EST_STATUS_FAILURE);
+    REQUIRE(rc == WOLFCERT_ERR_PARSE);
+    REQUIRE(bad.status == WOLFCERT_EST_STATUS_UNSET);
     wolfcert_est_result_free(&bad);
+    byte bad_b64[128];
+    word32 bad_b64_len = sizeof(bad_b64);
+    REQUIRE(Base64_Encode_NoNl(not_a_csr, sizeof(not_a_csr), bad_b64,
+                               &bad_b64_len) == 0);
+    REQUIRE(post_enroll_raw(wolfcert_server_port(s), bad_b64, bad_b64_len)
+            == 400);
 
     csr_ex.data[csr_ex.len - 1] ^= 0x01;
     rc = wolfcert_est_simple_enroll(&cli, csr_ex.data, csr_ex.len, &bad);

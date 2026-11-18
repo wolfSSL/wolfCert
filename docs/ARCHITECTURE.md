@@ -131,6 +131,11 @@ The layering rules that matter to an integrator:
 
 ## 3. Protocols: EST and SCEP
 
+**Issued certificate first.** Every enroll and renewal result, EST and SCEP,
+starts with the certificate that holds the CSR's public key, followed by any
+other certificates in the order the server sent them. A reply with no such
+certificate fails with `WOLFCERT_ERR_PROTOCOL`.
+
 ### EST (RFC 7030)
 
 EST is a REST-shaped enrollment protocol over HTTPS. wolfCert implements the

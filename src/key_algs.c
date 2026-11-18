@@ -294,63 +294,71 @@ static const uint8_t* ecc_impl_id(const struct WolfCertKey* k, int* len)
 /* Uncompressed X9.63 point: the 0x04 marker plus two coordinates. */
 #define ECC_X963_CAP (1 + 2 * MAX_ECC_BYTES)
 
+int wolfcert_ecc_pub_x963(const uint8_t* pub, word32 pub_len, int dev_id,
+                          uint8_t* out, word32* out_len, int* curve_id,
+                          void* heap)
+{
+    word32 idx = 0;
+    int rc;
+
+    ecc_key* key = (ecc_key*)WOLFCERT_XMALLOC(sizeof(*key), heap);
+    if (key == NULL)
+        return WOLFCERT_ERR_MEMORY;
+
+    rc = wc_ecc_init_ex(key, heap, dev_id);
+    if (rc != 0) {
+        WOLFCERT_XFREE(key, heap);
+        return WOLFCERT_ERR_WC(rc, "ecc", "ecc_init_ex");
+    }
+
+    rc = wc_EccPublicKeyDecode(pub, &idx, key, pub_len);
+    if (rc != 0 && rc != MEMORY_E)
+        rc = wc_ecc_import_x963(pub, pub_len, key);
+    if (rc == MEMORY_E)
+        rc = WOLFCERT_ERR_MEMORY;
+    else if (rc != 0)
+        rc = WOLFCERT_ERR_PARSE;
+    else if (wc_ecc_export_x963(key, out, out_len) != 0)
+        rc = WOLFCERT_ERR_CRYPTO;
+    else if (curve_id != NULL)
+        *curve_id = wc_ecc_get_curve_id(key->idx);
+
+    wc_ecc_free(key);
+    WOLFCERT_XFREE(key, heap);
+    return rc;
+}
+
 static int ecc_pub_check(struct WolfCertKey* k, const uint8_t* pub,
                          word32 pub_len)
 {
-    ecc_key* cert_key;
     byte* mine;
     byte* theirs;
     word32 mine_len = ECC_X963_CAP;
     word32 theirs_len = ECC_X963_CAP;
-    word32 idx = 0;
-    int rc;
+    int rc = WOLFCERT_OK;
 
     mine = (byte*)WOLFCERT_XMALLOC(2 * ECC_X963_CAP, k->heap);
     if (mine == NULL)
         return WOLFCERT_ERR_MEMORY;
     theirs = mine + ECC_X963_CAP;
 
-    cert_key = (ecc_key*)WOLFCERT_XMALLOC(sizeof(*cert_key), k->heap);
-    if (cert_key == NULL) {
-        WOLFCERT_XFREE(mine, k->heap);
-        return WOLFCERT_ERR_MEMORY;
-    }
-
-    rc = wc_ecc_init_ex(cert_key, k->heap, k->dev_id);
-    if (rc != 0) {
-        WOLFCERT_XFREE(cert_key, k->heap);
-        WOLFCERT_XFREE(mine, k->heap);
-        return WOLFCERT_ERR_WC(rc, "keygen", "ecc_init_ex");
-    }
-
     /* A SEC1 private key need not carry its public point. */
     if (((ecc_key*)k->impl)->type == ECC_PRIVATEKEY_ONLY) {
         rc = wc_ecc_make_pub((ecc_key*)k->impl, NULL);
-        if (rc != 0) {
+        if (rc != 0)
             rc = WOLFCERT_ERR_WC(rc, "keygen", "ecc_make_pub");
-            goto out;
-        }
     }
 
-    rc = wc_EccPublicKeyDecode(pub, &idx, cert_key, pub_len);
-    if (rc != 0)
-        rc = wc_ecc_import_x963(pub, pub_len, cert_key);
-    if (rc != 0) {
-        rc = WOLFCERT_ERR_PARSE;
-        goto out;
-    }
-
-    if (wc_ecc_export_x963((ecc_key*)k->impl, mine, &mine_len) != 0 ||
-        wc_ecc_export_x963(cert_key, theirs, &theirs_len) != 0)
+    if (rc == WOLFCERT_OK)
+        rc = wolfcert_ecc_pub_x963(pub, pub_len, k->dev_id, theirs,
+                                   &theirs_len, NULL, k->heap);
+    if (rc == WOLFCERT_OK &&
+            wc_ecc_export_x963((ecc_key*)k->impl, mine, &mine_len) != 0)
         rc = WOLFCERT_ERR_CRYPTO;
-    else if (mine_len != theirs_len || memcmp(mine, theirs, mine_len) != 0)
+    if (rc == WOLFCERT_OK &&
+            (mine_len != theirs_len || memcmp(mine, theirs, mine_len) != 0))
         rc = WOLFCERT_ERR_PARSE;
-    else
-        rc = WOLFCERT_OK;
 
-out:
-    wc_ecc_free(cert_key);
-    WOLFCERT_XFREE(cert_key, k->heap);
     WOLFCERT_XFREE(mine, k->heap);
     return rc;
 }

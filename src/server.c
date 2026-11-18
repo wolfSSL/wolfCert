@@ -798,10 +798,66 @@ int wolfcert_server_get_ca(const WolfCertServer* srv, WolfCertEncoding enc,
     return wolfcert_ca_export(&srv->ca, enc, out_cert, out_key);
 }
 
+#if defined(WOLFCERT_HAVE_EST) || defined(WOLFCERT_HAVE_SCEP)
+int wolfcert_server_issued_p7(WolfCertServer* srv, const uint8_t* issued,
+                              size_t issued_len, const uint8_t* signer,
+                              size_t signer_len, WolfCertBuffer* out_p7)
+{
+    const uint8_t* certs[2] = { issued, NULL };
+    size_t         lens[2]  = { issued_len, 0 };
+    size_t         n = 1;
+
+#if defined(WOLFCERT_BUILD_TESTING)
+    const uint8_t* first = srv->issue_first;
+    size_t         first_len = srv->issue_first_len;
+
+    if (srv->issue_echo && signer != NULL) {
+        first     = signer;
+        first_len = signer_len;
+    }
+    if (srv->issue_fault != 0) {
+        certs[0] = first != NULL ? first : srv->ca.cert_der;
+        lens[0]  = first != NULL ? first_len : srv->ca.cert_der_len;
+    }
+    else if (first != NULL) {
+        certs[0] = first;
+        lens[0]  = first_len;
+        certs[1] = issued;
+        lens[1]  = issued_len;
+        n = 2;
+    }
+#else
+    (void)signer;
+    (void)signer_len;
+#endif
+    return wolfcert_pkcs7_build_certs_only(certs, lens, n, out_p7, srv->heap);
+}
+#endif
+
 #if defined(WOLFCERT_BUILD_TESTING)
 WOLFCERT_TEST_VIS void wolfcert_server_set_request_timeout(WolfCertServer* srv,
                                                            int ms)
 {
     srv->request_timeout_ms = ms;
+}
+
+WOLFCERT_TEST_VIS void wolfcert_server_set_issue_fault(WolfCertServer* srv,
+                                                       int on)
+{
+    srv->issue_fault = on;
+}
+
+WOLFCERT_TEST_VIS void wolfcert_server_set_issue_echo(WolfCertServer* srv,
+                                                      int on)
+{
+    srv->issue_echo = on;
+}
+
+WOLFCERT_TEST_VIS void wolfcert_server_set_issue_first(WolfCertServer* srv,
+                                                       const uint8_t* der,
+                                                       size_t der_len)
+{
+    srv->issue_first     = der;
+    srv->issue_first_len = der_len;
 }
 #endif

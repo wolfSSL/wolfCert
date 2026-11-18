@@ -68,6 +68,7 @@ if(WOLFCERT_ENABLE_EST)
         add_test(NAME est_tls_roundtrip COMMAND test_est_tls_roundtrip)
 
         add_executable(test_est_mtls_roundtrip integration/test_est_mtls_roundtrip.c)
+        target_include_directories(test_est_mtls_roundtrip PRIVATE ${CMAKE_SOURCE_DIR}/src)
         target_link_libraries(test_est_mtls_roundtrip PRIVATE wolfcert Threads::Threads)
         add_test(NAME est_mtls_roundtrip COMMAND test_est_mtls_roundtrip)
 

@@ -450,6 +450,172 @@ static int check_default_dev_id(const WolfCertServerCfg* cli,
 }
 #endif /* WOLF_CRYPTO_CB */
 
+/* 1 when the n-th cert of a PEM bundle is self-signed, 0 when not, -1 when
+ * there is no such cert. */
+static int pem_cert_self_signed(const WolfCertBuffer* pem, int n)
+{
+    static const char tag[] = "-----BEGIN CERTIFICATE-----";
+    const size_t tag_len = sizeof(tag) - 1;
+    DerBuffer* der = NULL;
+    DecodedCert dc;
+    size_t off = 0;
+    int self = -1;
+
+    for (;;) {
+        while (off + tag_len <= pem->len &&
+               memcmp(pem->data + off, tag, tag_len) != 0)
+            off++;
+        if (off + tag_len > pem->len)
+            return -1;
+        if (n-- == 0)
+            break;
+        off += tag_len;
+    }
+    if (wc_PemToDer(pem->data + off, (long)(pem->len - off), CERT_TYPE, &der,
+                    NULL, NULL, NULL) != 0)
+        return -1;
+    wc_InitDecodedCert(&dc, der->buffer, der->length, NULL);
+    if (wc_ParseCert(&dc, CERT_TYPE, NO_VERIFY, NULL) == 0)
+        self = dc.selfSigned ? 1 : 0;
+    wc_FreeDecodedCert(&dc);
+    wc_FreeDer(&der);
+    return self;
+}
+
+/* A CertRep with the CA cert first still hands out the device cert first,
+ * and one without the device cert fails. */
+static int check_issued_first(WolfCertServer* s, const WolfCertServerCfg* cli,
+                              const WolfCertScepCaps* caps, WolfCertKey* dk,
+                              const WolfCertBuffer* csr,
+                              const uint8_t* ca_der_buf, size_t ca_der_len)
+{
+    WolfCertScepResult r = { 0 };
+    int rc;
+
+    wolfcert_server_set_issue_first(s, ca_der_buf, ca_der_len);
+    rc = wolfcert_scep_pkcs_req(cli, caps, ca_der_buf, ca_der_len,
+                                ca_der_buf, ca_der_len,
+                                dk, csr->data, csr->len, &r);
+    wolfcert_server_set_issue_first(s, NULL, 0);
+    REQUIRE(rc == WOLFCERT_OK);
+    REQUIRE(r.status == WOLFCERT_SCEP_STATUS_SUCCESS);
+    REQUIRE(!test_pem_cert_is(&r.cert_pem, 0, ca_der_buf, ca_der_len));
+    REQUIRE(test_pem_cert_is(&r.cert_pem, 1, ca_der_buf, ca_der_len));
+    wolfcert_scep_result_free(&r);
+
+    /* The same through an _nb session. */
+    WolfCertScepSession* sess = NULL;
+    REQUIRE(wolfcert_scep_session_open(cli, &sess) == WOLFCERT_OK);
+    wolfcert_server_set_issue_first(s, ca_der_buf, ca_der_len);
+    do {
+        rc = wolfcert_scep_session_pkcs_req_nb(sess, caps, ca_der_buf,
+                                               ca_der_len, ca_der_buf,
+                                               ca_der_len, dk, csr->data,
+                                               csr->len, &r);
+        if (rc == WOLFCERT_ERR_WANT_READ || rc == WOLFCERT_ERR_WANT_WRITE) {
+            struct pollfd p = { .fd = wolfcert_scep_session_fd(sess),
+                .events = rc == WOLFCERT_ERR_WANT_WRITE ? POLLOUT : POLLIN };
+            (void)poll(&p, 1, 5000);
+        }
+    } while (rc == WOLFCERT_ERR_WANT_READ || rc == WOLFCERT_ERR_WANT_WRITE);
+    wolfcert_server_set_issue_first(s, NULL, 0);
+    wolfcert_scep_session_close(sess);
+    REQUIRE(rc == WOLFCERT_OK);
+    REQUIRE(!test_pem_cert_is(&r.cert_pem, 0, ca_der_buf, ca_der_len));
+    REQUIRE(test_pem_cert_is(&r.cert_pem, 1, ca_der_buf, ca_der_len));
+    wolfcert_scep_result_free(&r);
+
+    wolfcert_server_set_issue_fault(s, 1);
+    rc = wolfcert_scep_pkcs_req(cli, caps, ca_der_buf, ca_der_len,
+                                ca_der_buf, ca_der_len,
+                                dk, csr->data, csr->len, &r);
+    wolfcert_server_set_issue_fault(s, 0);
+    REQUIRE(rc == WOLFCERT_ERR_PROTOCOL);
+    REQUIRE(r.status == WOLFCERT_SCEP_STATUS_UNSET && r.fail_info == -1);
+    REQUIRE(test_pem_cert_is(&r.cert_pem, 0, ca_der_buf, ca_der_len));
+    wolfcert_scep_result_free(&r);
+
+    /* The CA echoes the generated self-signed signer, which also holds the
+     * key, ahead of the device cert. */
+    wolfcert_server_set_issue_echo(s, 1);
+    rc = wolfcert_scep_pkcs_req(cli, caps, ca_der_buf, ca_der_len,
+                                ca_der_buf, ca_der_len,
+                                dk, csr->data, csr->len, &r);
+    wolfcert_server_set_issue_echo(s, 0);
+    REQUIRE(rc == WOLFCERT_OK);
+    REQUIRE(r.status == WOLFCERT_SCEP_STATUS_SUCCESS);
+    REQUIRE(pem_cert_self_signed(&r.cert_pem, 0) == 0);
+    REQUIRE(pem_cert_self_signed(&r.cert_pem, 1) == 1);
+    wolfcert_scep_result_free(&r);
+    return 0;
+}
+
+/* A same-key RenewalReq skips the cert being renewed when the CA sends it
+ * first, and takes it when it is the only one. */
+static int check_renewal_skips_old(WolfCertServer* s,
+                                   const WolfCertServerCfg* cli,
+                                   const WolfCertScepCaps* caps,
+                                   WolfCertKey* dk, const WolfCertBuffer* csr,
+                                   const uint8_t* ca_der_buf, size_t ca_der_len,
+                                   const uint8_t* old, size_t old_len)
+{
+    WolfCertScepResult r = { 0 };
+    int rc;
+
+    wolfcert_server_set_issue_first(s, old, old_len);
+    rc = wolfcert_scep_renewal_req(cli, caps, ca_der_buf, ca_der_len,
+                                   ca_der_buf, ca_der_len, old, old_len, dk,
+                                   csr->data, csr->len, &r);
+    wolfcert_server_set_issue_first(s, NULL, 0);
+    REQUIRE(rc == WOLFCERT_OK);
+    REQUIRE(r.status == WOLFCERT_SCEP_STATUS_SUCCESS);
+    REQUIRE(!test_pem_cert_is(&r.cert_pem, 0, old, old_len));
+    REQUIRE(test_pem_cert_is(&r.cert_pem, 1, old, old_len));
+    wolfcert_scep_result_free(&r);
+
+    /* A CertRep holding only the unchanged cert returns it. */
+    wolfcert_server_set_issue_first(s, old, old_len);
+    wolfcert_server_set_issue_fault(s, 1);
+    rc = wolfcert_scep_renewal_req(cli, caps, ca_der_buf, ca_der_len,
+                                   ca_der_buf, ca_der_len, old, old_len, dk,
+                                   csr->data, csr->len, &r);
+    wolfcert_server_set_issue_fault(s, 0);
+    wolfcert_server_set_issue_first(s, NULL, 0);
+    REQUIRE(rc == WOLFCERT_OK);
+    REQUIRE(r.status == WOLFCERT_SCEP_STATUS_SUCCESS);
+    REQUIRE(test_pem_cert_is(&r.cert_pem, 0, old, old_len));
+    REQUIRE(pem_cert_self_signed(&r.cert_pem, 1) == -1);
+    wolfcert_scep_result_free(&r);
+    return 0;
+}
+
+/* A RenewalReq with a CSR wolfSSL cannot parse fails without sending it; the
+ * listener never answers, so a request that went out would time out. */
+static int check_unparseable_csr(const WolfCertScepCaps* caps, WolfCertKey* dk,
+                                 const uint8_t* ca_der_buf, size_t ca_der_len,
+                                 const uint8_t* old, size_t old_len)
+{
+    static const uint8_t not_csr[] = { 0x30, 0x03, 0x02, 0x01, 0x00 };
+    WolfCertScepResult r = { 0 };
+    uint16_t port = 0;
+    char url[128];
+    int fd = black_hole_listener(&port);
+    int rc;
+
+    REQUIRE(fd >= 0);
+    snprintf(url, sizeof(url), "http://127.0.0.1:%u/scep", port);
+    WolfCertServerCfg cli = { .protocol = WOLFCERT_PROTO_SCEP,
+                              .server_url = url, .timeout_ms = 2000 };
+    rc = wolfcert_scep_renewal_req(&cli, caps, ca_der_buf, ca_der_len,
+                                   ca_der_buf, ca_der_len, old, old_len, dk,
+                                   not_csr, sizeof(not_csr), &r);
+    close(fd);
+    REQUIRE(rc == WOLFCERT_ERR_PARSE);
+    REQUIRE(r.status == WOLFCERT_SCEP_STATUS_UNSET);
+    wolfcert_scep_result_free(&r);
+    return 0;
+}
+
 /* Two PKCSReqs of one key under txid_mode PUBKEY_HASH carry the same
  * transactionID, the upper-case hex SHA-256 of the CSR's SPKI. */
 static int check_pubkey_txid(const WolfCertServerCfg* cli,
@@ -2337,6 +2503,9 @@ int main(void)
                                             WOLFSSL_FILETYPE_ASN1) == WOLFSSL_SUCCESS);
     wolfSSL_CertManagerFree(cm);
 
+    REQUIRE(check_issued_first(s, &cli, &caps, dk, &csr, ca_der->buffer,
+                               ca_der->length) == 0);
+
     REQUIRE(check_get_fallback(&cli, &caps, &kcfg,
                                ca_der->buffer, ca_der->length) == WOLFCERT_OK);
 
@@ -2406,6 +2575,13 @@ int main(void)
     REQUIRE(check_content_cipher(&cli, &caps, &kcfg, ca_der->buffer,
                                  ca_der->length, WOLFCERT_SCEP_CIPHER_AES128)
             == WOLFCERT_OK);
+
+    REQUIRE(check_renewal_skips_old(s, &cli, &caps, dk, &csr, ca_der->buffer,
+                                    ca_der->length, issued_der->buffer,
+                                    issued_der->length) == 0);
+    REQUIRE(check_unparseable_csr(&caps, dk, ca_der->buffer, ca_der->length,
+                                  issued_der->buffer,
+                                  issued_der->length) == 0);
 
     REQUIRE(check_renewal_msg_type(&caps, ca_der->buffer, ca_der->length,
                                    issued_der->buffer, issued_der->length, dk,

@@ -56,13 +56,14 @@ static void* server_thread(void* arg)
     return NULL;
 }
 
-/* POST a pkiMessage of type `mt` for `tid`, signed by `dk`, with `content`
- * as its signed content, and return the CertRep's pkiStatus and failInfo. */
-static int post_signed(const char* url, WolfCertKey* dk,
-                       const WolfCertBuffer* csr, const char* mt,
-                       const uint8_t* tid, size_t tid_len,
-                       const uint8_t* content, size_t content_len,
-                       char** out_status, char** out_fail_info)
+/* POST a pkiMessage of type `mt` for `tid`, signed by `dk` under signer_cert
+ * (NULL: a fresh self-signed one), and return pkiStatus and failInfo. */
+static int post_signed_as(const char* url, WolfCertKey* dk,
+                          const WolfCertBuffer* csr,
+                          const uint8_t* signer_cert, size_t signer_cert_len,
+                          const char* mt, const uint8_t* tid, size_t tid_len,
+                          const uint8_t* content, size_t content_len,
+                          char** out_status, char** out_fail_info)
 {
     uint8_t* signer = NULL;
     size_t signer_len = 0;
@@ -75,10 +76,18 @@ static int post_signed(const char* url, WolfCertKey* dk,
     WolfCertBuffer env = { 0 };
     WolfCertHttpResponse resp = { 0 };
 
-    REQUIRE(wolfcert_scep_self_signed_rsa((RsaKey*)dk->impl, csr->data,
-                                          csr->len, &signer, &signer_len,
-                                          INVALID_DEVID,
-                                          NULL) == WOLFCERT_OK);
+    if (signer_cert != NULL) {
+        signer = (uint8_t*)WOLFCERT_XMALLOC(signer_cert_len, NULL);
+        REQUIRE(signer != NULL);
+        memcpy(signer, signer_cert, signer_cert_len);
+        signer_len = signer_cert_len;
+    }
+    else {
+        REQUIRE(wolfcert_scep_self_signed_rsa((RsaKey*)dk->impl, csr->data,
+                                              csr->len, &signer, &signer_len,
+                                              INVALID_DEVID,
+                                              NULL) == WOLFCERT_OK);
+    }
     key_len = wc_RsaKeyToDer((RsaKey*)dk->impl, key_der, sizeof(key_der));
     REQUIRE(key_len > 0);
 
@@ -109,6 +118,129 @@ static int post_signed(const char* url, WolfCertKey* dk,
     wolfcert_buffer_free(&pki);
     wc_ForceZero(key_der, sizeof(key_der));
     WOLFCERT_XFREE(signer, NULL);
+    return 0;
+}
+
+static int post_signed(const char* url, WolfCertKey* dk,
+                       const WolfCertBuffer* csr, const char* mt,
+                       const uint8_t* tid, size_t tid_len,
+                       const uint8_t* content, size_t content_len,
+                       char** out_status, char** out_fail_info)
+{
+    return post_signed_as(url, dk, csr, NULL, 0, mt, tid, tid_len, content,
+                          content_len, out_status, out_fail_info);
+}
+
+/* A GetCertInitial never takes its own signer cert as the issued one: not
+ * for a first enrollment, where the CertRep holds only that self-signed
+ * cert, and not for a renewal, where the cert being renewed comes first. */
+static int poll_skips_signer(WolfCertServer* s, const WolfCertServerCfg* cli,
+                             const WolfCertScepCaps* caps, WolfCertKey* dk,
+                             const WolfCertBuffer* csr,
+                             const uint8_t* ca_der, size_t ca_len,
+                             const uint8_t* old, size_t old_len)
+{
+    static const uint8_t tid[] = "poll-self-signed";
+    WolfCertBuffer env = { 0 };
+    WolfCertScepResult r = { 0 };
+    WolfCertScepResult rr = { 0 };
+    uint8_t* self = NULL;
+    size_t self_len = 0;
+    char* status = NULL;
+    char* fail_info = NULL;
+    int parked;
+    int rc;
+
+    REQUIRE(wolfcert_scep_self_signed_rsa((RsaKey*)dk->impl, csr->data,
+                                          csr->len, &self, &self_len,
+                                          INVALID_DEVID, NULL) == WOLFCERT_OK);
+    REQUIRE(wolfcert_scep_envelop(ca_der, ca_len, csr->data, csr->len,
+                                  AES128CBCb, &env, INVALID_DEVID, NULL)
+            == WOLFCERT_OK);
+    REQUIRE(post_signed_as(cli->server_url, dk, csr, self, self_len, "19",
+                           tid, sizeof(tid) - 1, env.data, env.len, &status,
+                           &fail_info) == 0);
+    parked = status != NULL && strcmp(status, "3") == 0;
+    WOLFCERT_XFREE(status, NULL);
+    WOLFCERT_XFREE(fail_info, NULL);
+    wolfcert_buffer_free(&env);
+    REQUIRE(parked);
+
+    wolfcert_server_set_issue_echo(s, 1);
+    wolfcert_server_set_issue_fault(s, 1);
+    rc = wolfcert_scep_get_cert_initial(cli, caps, ca_der, ca_len, ca_der,
+                                        ca_len, self, self_len, dk, csr->data,
+                                        csr->len, tid, sizeof(tid) - 1, &r);
+    wolfcert_server_set_issue_fault(s, 0);
+    wolfcert_server_set_issue_echo(s, 0);
+    REQUIRE(rc == WOLFCERT_ERR_PROTOCOL);
+    REQUIRE(r.status == WOLFCERT_SCEP_STATUS_UNSET && r.fail_info == -1);
+    REQUIRE(test_pem_cert_is(&r.cert_pem, 0, self, self_len));
+    wolfcert_scep_result_free(&r);
+    WOLFCERT_XFREE(self, NULL);
+
+    rc = wolfcert_scep_renewal_req(cli, caps, ca_der, ca_len, ca_der, ca_len,
+                                   old, old_len, dk, csr->data, csr->len, &r);
+    REQUIRE(rc == WOLFCERT_OK);
+    REQUIRE(r.status == WOLFCERT_SCEP_STATUS_PENDING);
+    wolfcert_server_set_issue_echo(s, 1);
+    rc = wolfcert_scep_get_cert_initial(cli, caps, ca_der, ca_len, ca_der,
+                                        ca_len, old, old_len, dk, csr->data,
+                                        csr->len, r.transaction_id,
+                                        r.transaction_id_len, &rr);
+    wolfcert_server_set_issue_echo(s, 0);
+    wolfcert_scep_result_free(&r);
+    REQUIRE(rc == WOLFCERT_OK);
+    REQUIRE(rr.status == WOLFCERT_SCEP_STATUS_SUCCESS);
+    REQUIRE(!test_pem_cert_is(&rr.cert_pem, 0, old, old_len));
+    REQUIRE(test_pem_cert_is(&rr.cert_pem, 1, old, old_len));
+    wolfcert_scep_result_free(&rr);
+
+    /* A polled same-key renewal takes back the unchanged cert. */
+    rc = wolfcert_scep_renewal_req(cli, caps, ca_der, ca_len, ca_der, ca_len,
+                                   old, old_len, dk, csr->data, csr->len, &r);
+    REQUIRE(rc == WOLFCERT_OK);
+    REQUIRE(r.status == WOLFCERT_SCEP_STATUS_PENDING);
+    wolfcert_server_set_issue_first(s, old, old_len);
+    wolfcert_server_set_issue_fault(s, 1);
+    rc = wolfcert_scep_get_cert_initial(cli, caps, ca_der, ca_len, ca_der,
+                                        ca_len, old, old_len, dk, csr->data,
+                                        csr->len, r.transaction_id,
+                                        r.transaction_id_len, &rr);
+    wolfcert_server_set_issue_fault(s, 0);
+    wolfcert_server_set_issue_first(s, NULL, 0);
+    wolfcert_scep_result_free(&r);
+    REQUIRE(rc == WOLFCERT_OK);
+    REQUIRE(rr.status == WOLFCERT_SCEP_STATUS_SUCCESS);
+    REQUIRE(test_pem_cert_is(&rr.cert_pem, 0, old, old_len));
+    wolfcert_scep_result_free(&rr);
+
+    /* So does the poll of a PKCSReq signed with the CA-issued cert. */
+    static const uint8_t tid2[] = "poll-ca-signed";
+    REQUIRE(wolfcert_scep_envelop(ca_der, ca_len, csr->data, csr->len,
+                                  AES128CBCb, &env, INVALID_DEVID, NULL)
+            == WOLFCERT_OK);
+    REQUIRE(post_signed_as(cli->server_url, dk, csr, old, old_len, "19",
+                           tid2, sizeof(tid2) - 1, env.data, env.len, &status,
+                           &fail_info) == 0);
+    parked = status != NULL && strcmp(status, "3") == 0;
+    WOLFCERT_XFREE(status, NULL);
+    WOLFCERT_XFREE(fail_info, NULL);
+    status = NULL;
+    fail_info = NULL;
+    wolfcert_buffer_free(&env);
+    REQUIRE(parked);
+    wolfcert_server_set_issue_first(s, old, old_len);
+    wolfcert_server_set_issue_fault(s, 1);
+    rc = wolfcert_scep_get_cert_initial(cli, caps, ca_der, ca_len, ca_der,
+                                        ca_len, old, old_len, dk, csr->data,
+                                        csr->len, tid2, sizeof(tid2) - 1, &rr);
+    wolfcert_server_set_issue_fault(s, 0);
+    wolfcert_server_set_issue_first(s, NULL, 0);
+    REQUIRE(rc == WOLFCERT_OK);
+    REQUIRE(rr.status == WOLFCERT_SCEP_STATUS_SUCCESS);
+    REQUIRE(test_pem_cert_is(&rr.cert_pem, 0, old, old_len));
+    wolfcert_scep_result_free(&rr);
     return 0;
 }
 
@@ -334,8 +466,10 @@ static int poll_path(WolfCertServer* s)
         wolfcert_scep_result_free(&rm);
     }
 
-    /* Step 2: GetCertInitial with signer_cert NULL -> SUCCESS, chains to CA. */
+    /* Step 2: GetCertInitial with signer_cert NULL -> SUCCESS, chains to CA.
+     * The CA cert comes first in the CertRep and last in the result. */
     WolfCertScepResult r2 = { 0 };
+    wolfcert_server_set_issue_first(s, ca_der->buffer, ca_der->length);
     rc = wolfcert_scep_get_cert_initial(&cli, &caps,
                                         ca_der->buffer, ca_der->length,
                                         ca_der->buffer, ca_der->length,
@@ -343,11 +477,13 @@ static int poll_path(WolfCertServer* s)
                                         dk, csr.data, csr.len,
                                         r1.transaction_id, r1.transaction_id_len,
                                         &r2);
+    wolfcert_server_set_issue_first(s, NULL, 0);
     REQUIRE(rc == WOLFCERT_OK);
     REQUIRE(r2.status == WOLFCERT_SCEP_STATUS_SUCCESS);
-    REQUIRE(r2.cert_pem.data != NULL);
-    REQUIRE(memmem(r2.cert_pem.data, r2.cert_pem.len,
-                   "BEGIN CERTIFICATE", 17) != NULL);
+    REQUIRE(!test_pem_cert_is(&r2.cert_pem, 0, ca_der->buffer,
+                              ca_der->length));
+    REQUIRE(test_pem_cert_is(&r2.cert_pem, 1, ca_der->buffer,
+                             ca_der->length));
 
     WOLFSSL_CERT_MANAGER* cm = wolfSSL_CertManagerNew();
     REQUIRE(cm != NULL);
@@ -359,8 +495,11 @@ static int poll_path(WolfCertServer* s)
     REQUIRE(wolfSSL_CertManagerVerifyBuffer(cm, issued_der->buffer,
                                             (long)issued_der->length,
                                             WOLFSSL_FILETYPE_ASN1) == WOLFSSL_SUCCESS);
-    wc_FreeDer(&issued_der);
     wolfSSL_CertManagerFree(cm);
+    REQUIRE(poll_skips_signer(s, &cli, &caps, dk, &csr, ca_der->buffer,
+                              ca_der->length, issued_der->buffer,
+                              issued_der->length) == 0);
+    wc_FreeDer(&issued_der);
 
     /* Out of memory after issuing must not leave the entry to issue again. */
     WolfCertScepResult r7 = { 0 };

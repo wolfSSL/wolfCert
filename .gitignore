@@ -82,6 +82,8 @@ cmake/wolfCertTargets.cmake
 /wolfcert-*.spdx.json
 /wolfcert-*.spdx
 /_sbom_staging/
+/_sbom_staging-*/
+/_sbom_stage_rule-*/
 /sbom-options.h
 
 # CI scratch: wolfSSL sources/installs and compiler caches produced by

@@ -14,11 +14,11 @@ cmake -S . -B build -DWITH_WOLFSSL=/path/to/wolfssl/prefix
 cmake --build build --target sbom
 ```
 
-Both need `python3` and `pyspdxtools` (`pip install spdx-tools`). They write `wolfcert-<version>.cdx.json`, `wolfcert-<version>.spdx.json` and the SPDX tag-value file `wolfcert-<version>.spdx` to the build directory. `make install-sbom` installs the three files under `$(docdir)`. When wolfCert is built with `add_subdirectory()`, the CMake target is `wolfcert-sbom`.
+Both need `python3` and `pyspdxtools` (`pip install spdx-tools`). They write `wolfcert-<version>.cdx.json`, `wolfcert-<version>.spdx.json` and the SPDX tag-value file `wolfcert-<version>.spdx` to the build directory. `install-sbom` installs the three files in `share/doc/wolfcert`, or in `$(docdir)` or `CMAKE_INSTALL_DOCDIR` when set on the command line, and `uninstall-sbom` removes them. The CMake targets install under `CMAKE_STAGING_PREFIX` when set, otherwise under the `CMAKE_INSTALL_PREFIX` chosen at configure time, plus `DESTDIR`; `cmake --install --prefix` does not move them. When wolfCert is built with `add_subdirectory()`, the CMake targets are `wolfcert-sbom`, `wolfcert-install-sbom` and `wolfcert-uninstall-sbom`.
 
 The SBOM records:
 
-- the SHA-256 of `libwolfcert` as `make install` or `cmake --install` lays it out, taken from a private install into `_sbom_staging/`;
+- the SHA-256 of `libwolfcert` as `make install` or `cmake --install` lays it out, taken from a private install into the build directory that is removed afterwards;
 - the feature set from `wolfcert/options.h`, or from `user_settings.h` as described below, as `wolfssl:build:WOLFCERT_*` properties;
 - wolfSSL as a dependency, with the version of the wolfSSL headers the build compiled against. If the build cannot read it, the SBOM target fails; set it with `make sbom SBOM_WOLFSSL_VERSION=...` or `-DWOLFCERT_SBOM_WOLFSSL_VERSION=...`. The CMake value stays in the cache, so clear it after updating wolfSSL;
 - the license, read from `LICENSING`: `GPL-3.0-or-later`. A commercial bundle replaces `LICENSING`, so its SBOM records `NOASSERTION` unless the licensee sets an SPDX expression with `make sbom SBOM_LICENSE_OVERRIDE=...` or `-DWOLFCERT_SBOM_LICENSE=...`. A `LicenseRef-*` identifier also needs a file with the license text, passed as `SBOM_LICENSE_TEXT=<file>` or `-DWOLFCERT_SBOM_LICENSE_TEXT=<file>`.

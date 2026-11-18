@@ -62,6 +62,7 @@ jobs:
           make -j "$(nproc)"
           make sbom
           make install DESTDIR="$RUNNER_TEMP/am-inst"
+          make install-sbom DESTDIR="$RUNNER_TEMP/am-sbom"
           ../tools/sbom/validate_sbom.py --name-prefix wolfcert \
             --require-dep-version wolfssl wolfcert-*.cdx.json wolfcert-*.spdx.json
           ../scripts/ci/check-sbom.py wolfcert-*.cdx.json wolfcert-*.spdx.json \
@@ -81,8 +82,9 @@ jobs:
           set -euo pipefail
           cmake -S . -B build -DWITH_WOLFSSL="$WOLFSSL_PREFIX" \
             -DWOLFCERT_WERROR=ON
+          cmake --build build -j "$(nproc)"
           SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" \
-            cmake --build build --target sbom -j "$(nproc)"
+            cmake --build build --target sbom
           DESTDIR="$RUNNER_TEMP/cmake-inst" cmake --install build
           cd build
           ../tools/sbom/validate_sbom.py --name-prefix wolfcert \
@@ -95,9 +97,20 @@ jobs:
         run: |
           set -euo pipefail
           (cd build && sha256sum wolfcert-*.json) > "$RUNNER_TEMP/cmake.sums"
-          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" \
-            cmake --build build --target sbom
+          cmake --build build --target sbom
           (cd build && sha256sum -c "$RUNNER_TEMP/cmake.sums")
+
+      - name: cmake install-sbom and uninstall-sbom
+        run: |
+          set -euo pipefail
+          d="$RUNNER_TEMP/sbom-inst/usr/local/share/doc/wolfcert"
+          DESTDIR="$RUNNER_TEMP/sbom-inst" cmake --build build --target install-sbom
+          for f in "$d"/wolfcert-*.cdx.json "$d"/wolfcert-*.spdx.json \
+                   "$d"/wolfcert-*.spdx; do test -s "$f"; done
+          diff <(ls "$RUNNER_TEMP/am-sbom/usr/local/share/doc/wolfcert") \
+            <(ls "$d")
+          DESTDIR="$RUNNER_TEMP/sbom-inst" cmake --build build --target uninstall-sbom
+          test ! -e "$d" || test -z "$(ls -A "$d")"
 
       - name: autoconf and CMake record the same configuration
         run: |

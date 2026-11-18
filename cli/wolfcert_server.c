@@ -553,6 +553,12 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    if (tls_ca != NULL && tls_cert == NULL) {
+        fprintf(stderr, "wolfcert-server: --tls-client-ca requires --tls-cert "
+                "and --tls-key\n");
+        return 1;
+    }
+
     if (sel == WOLFCERT_PROTO_EST && user == NULL && tls_ca == NULL &&
             !est_allow_anonymous && !tls_trust_issued) {
         fprintf(stderr, "wolfcert-server: --proto est requires --basic, "

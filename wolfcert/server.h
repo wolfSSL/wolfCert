@@ -46,11 +46,12 @@ typedef struct {
     int              ca_key_param;       /* 2048 default for RSA, 256 for ECC */
 
     /* TLS identity, required for EST (wolfcert_server_start() returns
-     * WOLFCERT_ERR_TLS without it) and optional for SCEP. tls_client_ca_pem
-     * enables mutual TLS; EST /simplereenroll needs it or
-     * tls_client_trust_issued (else 403) and a wolfSSL built with
-     * KEEP_PEER_CERT (else 500). All three PEM buffers are copied by
-     * wolfcert_server_start(). */
+     * WOLFCERT_ERR_TLS without it) and optional for SCEP; half an identity,
+     * a pointer without its length or the reverse, or tls_client_ca_pem
+     * without an identity, is WOLFCERT_ERR_BAD_ARG. EST /simplereenroll
+     * needs tls_client_ca_pem or tls_client_trust_issued (else 403) and a
+     * wolfSSL built with KEEP_PEER_CERT (else 500). All three PEM buffers
+     * are copied by wolfcert_server_start(). */
     const uint8_t*   tls_cert_pem;
     size_t           tls_cert_pem_len;
     const uint8_t*   tls_key_pem;

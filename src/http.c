@@ -121,13 +121,21 @@ WOLFCERT_TEST_VIS void wolfcert_http_url_free(WolfCertUrl* u)
     u->scheme = u->host = u->path = NULL;
 }
 
-/* IPv6 hosts are stored unbracketed; URLs and Host headers need brackets. */
-static int host_is_ip_literal(const char* host)
+/* Address length of an IP-literal host, else 0. IPv6 hosts are stored
+ * unbracketed; URLs and Host headers need brackets. */
+static size_t host_ip_len(const char* host)
 {
     uint8_t ip[16];
     size_t  ip_len = 0;
 
-    return wolfcert_parse_ip(host, ip, &ip_len) == WOLFCERT_OK && ip_len == 16;
+    if (wolfcert_parse_ip(host, ip, &ip_len) != WOLFCERT_OK)
+        return 0;
+    return ip_len;
+}
+
+static int authority_ends(char c)
+{
+    return c == '\0' || c == '/' || c == '?' || c == '#';
 }
 
 static char* dup_range(const char* s, const char* e, void* heap)
@@ -150,6 +158,11 @@ WOLFCERT_TEST_VIS int wolfcert_http_url_parse(const char* url, WolfCertUrl* out,
     out->heap = heap;
     if (url == NULL)
         return WOLFCERT_ERR_BAD_ARG;
+
+    for (const char* c = url; *c != '\0'; ++c) {
+        if ((unsigned char)*c <= 0x20 || (unsigned char)*c >= 0x7f)
+            return WOLFCERT_ERR_PARSE;
+    }
 
     /* A URL without a scheme is https. */
     const char* sep = strstr(url, "://");
@@ -202,17 +215,28 @@ WOLFCERT_TEST_VIS int wolfcert_http_url_parse(const char* url, WolfCertUrl* out,
             return WOLFCERT_ERR_PARSE;
         }
 
-        out->host = dup_range(host_start + 1, close, heap);
         host_end = close + 1;
+        if (*host_end != ':' && !authority_ends(*host_end)) {
+            wolfcert_http_url_free(out);
+            return WOLFCERT_ERR_PARSE;
+        }
+
+        out->host = dup_range(host_start + 1, close, heap);
+        if (out->host != NULL && host_ip_len(out->host) != 16) {
+            wolfcert_http_url_free(out);
+            return WOLFCERT_ERR_PARSE;
+        }
     }
     else {
         host_end = host_start;
-        while (*host_end && *host_end != ':' && *host_end != '/'
-                && *host_end != '?' && *host_end != '#') {
+        while (*host_end != ':' && !authority_ends(*host_end)) {
             ++host_end;
         }
 
-        if ((size_t)(host_end - host_start) > WOLFCERT_HTTP_MAX_HOST_LEN) {
+        /* RFC 9110 section 4.2.4: no userinfo in an http(s) URI. */
+        if (host_end == host_start ||
+                (size_t)(host_end - host_start) > WOLFCERT_HTTP_MAX_HOST_LEN ||
+                memchr(host_start, '@', (size_t)(host_end - host_start))) {
             wolfcert_http_url_free(out);
             return WOLFCERT_ERR_PARSE;
         }
@@ -228,7 +252,7 @@ WOLFCERT_TEST_VIS int wolfcert_http_url_parse(const char* url, WolfCertUrl* out,
     if (*host_end == ':') {
         char* end;
         long p = strtol(host_end + 1, &end, 10);
-        if (p <= 0 || p > 65535) {
+        if (host_end[1] < '0' || host_end[1] > '9' || p <= 0 || p > 65535 || !authority_ends(*end)) {
             wolfcert_http_url_free(out);
             return WOLFCERT_ERR_PARSE;
         }
@@ -473,10 +497,12 @@ static int wolfcert_cbio_send(WOLFSSL* ssl, char* buf, int sz, void* ctx)
     }
 }
 
-static char* find_header(const char* headers, const char* name, void* heap)
+static int find_header(const char* headers, const char* name, char** out,
+                       void* heap)
 {
     const char* p = headers;
 
+    *out = NULL;
     while (*p) {
         const char* nl = strstr(p, "\r\n");
         if (nl == NULL)
@@ -489,17 +515,18 @@ static char* find_header(const char* headers, const char* name, void* heap)
             wolfcert_http_hdr_split(p, llen, &v, &n) == 0) {
             char* s = (char*)WOLFCERT_XMALLOC(n + 1, heap);
             if (s == NULL)
-                return NULL;
+                return WOLFCERT_ERR_MEMORY;
 
             memcpy(s, v, n);
             s[n] = '\0';
+            *out = s;
 
-            return s;
+            return WOLFCERT_OK;
         }
 
         p = nl + 2;
     }
-    return NULL;
+    return WOLFCERT_OK;
 }
 
 #define WOLFCERT_HTTP_MAX_RETRY_AFTER 86400
@@ -1068,19 +1095,52 @@ static int setup_tls_ex(WolfCertConn* c, const TlsDials* dials,
     }
 
     if (sni_host != NULL) {
+        int is_ip = host_ip_len(sni_host) != 0;
+        int rc;
+
 #if defined(HAVE_SNI) && !defined(WOLFCERT_NO_SNI)
-        wolfSSL_UseSNI(ssl, 0, sni_host, (word16)strlen(sni_host));
+        /* RFC 6066 section 3: HostName never carries an IP literal. */
+        if (!is_ip) {
+            size_t sni_len = strlen(sni_host);
+
+            if (sni_len > 0 && sni_host[sni_len - 1] == '.')
+                --sni_len;
+            rc = wolfSSL_UseSNI(ssl, WOLFSSL_SNI_HOST_NAME, sni_host,
+                                (word16)sni_len);
+            if (rc != WOLFSSL_SUCCESS) {
+                wolfSSL_free(ssl);
+                wolfSSL_CTX_free(ctx);
+                return WOLFCERT_ERR_RC_WC(rc == MEMORY_E ? WOLFCERT_ERR_MEMORY
+                                          : WOLFCERT_ERR_TLS, rc, "http",
+                    "http: cannot set SNI to %s", sni_host);
+            }
+        }
 #endif
 
         if (dials->verify_server) {
             /* RFC 2818 section 3.1: an IP literal matches iPAddress SAN
              * entries only. */
-            uint8_t ipbuf[16];
-            size_t  iplen;
-            if (wolfcert_parse_ip(sni_host, ipbuf, &iplen) == WOLFCERT_OK) {
-                wolfSSL_check_ip_address(ssl, sni_host);
-            } else {
-                wolfSSL_check_domain_name(ssl, sni_host);
+            rc = is_ip ? wolfSSL_check_ip_address(ssl, sni_host)
+                       : wolfSSL_check_domain_name(ssl, sni_host);
+            if (rc != WOLFSSL_SUCCESS) {
+                int err = wolfSSL_get_error(ssl, rc);
+
+                wolfSSL_free(ssl);
+                wolfSSL_CTX_free(ctx);
+                if (err == MEMORY_ERROR)
+                    return WOLFCERT_ERR_RC_WC(WOLFCERT_ERR_MEMORY, err, "http",
+                        "http: cannot store the name to check");
+                /* wolfSSL refuses a malformed name without setting an error. */
+                if (err == 0)
+                    err = BAD_FUNC_ARG;
+                if (!is_ip)
+                    return WOLFCERT_ERR_RC_WC(WOLFCERT_ERR_TLS, err, "http",
+                        "http: wolfSSL cannot check the server certificate "
+                        "against %s (not an FQDN; a single-label name needs "
+                        "WOLFSSL_ALLOW_SINGLE_LABEL_HOSTNAME)", sni_host);
+                return WOLFCERT_ERR_RC_WC(WOLFCERT_ERR_TLS, err, "http",
+                    "http: wolfSSL cannot check the server certificate "
+                    "against %s", sni_host);
             }
         }
     }
@@ -1425,8 +1485,8 @@ static int build_head(WolfCertHttpSession* s, const WolfCertHttpRequest* req,
     if ((u->tls && u->port != 443) || (!u->tls && u->port != 80))
         snprintf(port_frag, sizeof(port_frag), ":%d", u->port);
 
-    const char* open_br  = host_is_ip_literal(u->host) ? "[" : "";
-    const char* close_br = host_is_ip_literal(u->host) ? "]" : "";
+    const char* open_br  = host_ip_len(u->host) == 16 ? "[" : "";
+    const char* close_br = host_ip_len(u->host) == 16 ? "]" : "";
 
     size_t head_cap = 1024 + (req->content_type ? strlen(req->content_type) : 0)
                            + (req->content_transfer_encoding ?
@@ -1515,11 +1575,22 @@ static int inspect_headers(WolfCertHttpSession* s)
         s->sm_content_length = 0;
     }
     else {
-        char* te = find_header(hdrs, "Transfer-Encoding", s->heap);
+        char* te;
+        char* cl;
+
+        rc = find_header(hdrs, "Transfer-Encoding", &te, s->heap);
+        if (rc != WOLFCERT_OK) {
+            WOLFCERT_XFREE(hdrs, s->heap);
+            return rc;
+        }
         chunked = (te != NULL && ci_cmp(te, "chunked") == 0);
         WOLFCERT_XFREE(te, s->heap);
 
-        char* cl = find_header(hdrs, "Content-Length", s->heap);
+        rc = find_header(hdrs, "Content-Length", &cl, s->heap);
+        if (rc != WOLFCERT_OK) {
+            WOLFCERT_XFREE(hdrs, s->heap);
+            return rc;
+        }
         s->sm_content_length = (cl != NULL) ? strtol(cl, NULL, 10) : -1;
         WOLFCERT_XFREE(cl, s->heap);
         if (s->sm_content_length >= 0 &&
@@ -1541,16 +1612,20 @@ static int inspect_headers(WolfCertHttpSession* s)
         s->sm_state = SM_READ_BODY_EOF;
     }
 
-    s->sm_content_type = find_header(hdrs, "Content-Type", s->heap);
     s->sm_retry_after_sec = 0;
-    char* ra = find_header(hdrs, "Retry-After", s->heap);
-    if (ra != NULL) {
-        s->sm_retry_after_sec = parse_retry_after(ra);
-        WOLFCERT_XFREE(ra, s->heap);
+    rc = find_header(hdrs, "Content-Type", &s->sm_content_type, s->heap);
+    if (rc == WOLFCERT_OK) {
+        char* ra;
+
+        rc = find_header(hdrs, "Retry-After", &ra, s->heap);
+        if (ra != NULL) {
+            s->sm_retry_after_sec = parse_retry_after(ra);
+            WOLFCERT_XFREE(ra, s->heap);
+        }
     }
 
     WOLFCERT_XFREE(hdrs, s->heap);
-    return WOLFCERT_OK;
+    return rc;
 }
 
 /* Move the body to the front of sm_rx and hand the buffer over. */

@@ -27,6 +27,7 @@
 #include "internal.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
@@ -1270,6 +1271,80 @@ static int test_no_builtin_transport(void)
 }
 #endif
 
+#if defined(USE_WOLFSSL_MEMORY) && !defined(WOLFSSL_STATIC_MEMORY) && \
+    !defined(WOLFSSL_DEBUG_MEMORY)
+#define TEST_ALLOC_FAILURES
+
+static int g_allocs_left = -1;
+static int g_alloc_failed;
+
+/* Fails only the allocation g_allocs_left counts down to. */
+static int alloc_fails(void)
+{
+    if (g_allocs_left < 0)
+        return 0;
+    if (g_allocs_left-- == 0) {
+        g_alloc_failed = 1;
+        return 1;
+    }
+    return 0;
+}
+
+static void* failing_malloc(size_t sz)
+{
+    return alloc_fails() ? NULL : malloc(sz);
+}
+
+static void* failing_realloc(void* ptr, size_t sz)
+{
+    return alloc_fails() ? NULL : realloc(ptr, sz);
+}
+
+/* Each failed allocation gives ERR_MEMORY. */
+static int test_header_oom(void)
+{
+    static const char resp_hdrs[] =
+        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n"
+        "Retry-After: 120\r\nContent-Length: 2\r\n\r\nokEXTRA";
+    WolfCertHttpResponse resp = { 0 };
+    wolfSSL_Malloc_cb  saved_malloc;
+    wolfSSL_Free_cb    saved_free;
+    wolfSSL_Realloc_cb saved_realloc;
+    int fails;
+    int rc;
+
+    REQUIRE(wolfSSL_GetAllocators(&saved_malloc, &saved_free,
+                                  &saved_realloc) == 0);
+    REQUIRE(wolfSSL_SetAllocators(failing_malloc, free,
+                                  failing_realloc) == 0);
+    for (fails = 0; ; fails++) {
+        Peer p = { 0 };
+
+        g_allocs_left = fails;
+        g_alloc_failed = 0;
+        rc = fetch(&p, resp_hdrs, sizeof(resp_hdrs), &resp);
+        g_allocs_left = -1;
+        if (!g_alloc_failed || rc != WOLFCERT_ERR_MEMORY)
+            break;
+    }
+    REQUIRE(wolfSSL_SetAllocators(saved_malloc, saved_free,
+                                  saved_realloc) == 0);
+    if (g_alloc_failed) {
+        fprintf(stderr, "FAIL fetch with allocation %d failing: %d\n",
+                fails, rc);
+        return 1;
+    }
+    REQUIRE(rc == WOLFCERT_OK);
+    REQUIRE(resp.body_len == 2);
+    REQUIRE(resp.content_type != NULL &&
+            strcmp(resp.content_type, "text/plain") == 0);
+    REQUIRE(resp.retry_after_sec == 120);
+    wolfcert_http_response_free(&resp);
+    REQUIRE(fails > 4);
+    return 0;
+}
+#endif
+
 int main(void)
 {
     REQUIRE(test_static_mem_init() == 0);
@@ -1362,6 +1437,10 @@ int main(void)
         return 1;
     if (test_no_fd())
         return 1;
+#ifdef TEST_ALLOC_FAILURES
+    if (test_header_oom())
+        return 1;
+#endif
 #ifndef WOLFCERT_HAVE_BUILTIN_TRANSPORT
     if (test_no_builtin_transport())
         return 1;

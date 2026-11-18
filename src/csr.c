@@ -135,10 +135,29 @@ static int parse_subject_dn(const char* dn, CertName* subject)
     return WOLFCERT_OK;
 }
 
+/* 1 when list holds len non-empty strings. */
+static int san_list_valid(const char* const* list, size_t len)
+{
+    if (len != 0 && list == NULL)
+        return 0;
+    for (size_t i = 0; i < len; ++i) {
+        if (list[i] == NULL || list[i][0] == '\0')
+            return 0;
+    }
+    return 1;
+}
+
 static int build_san_seq(const WolfCertCertMeta* meta, Cert* cert, void* heap)
 {
     DNS_entry* list = NULL;
     int rc = 0;
+
+    if (!san_list_valid(meta->san_dns, meta->san_dns_len) ||
+            !san_list_valid(meta->san_uri, meta->san_uri_len) ||
+            !san_list_valid(meta->san_email, meta->san_email_len) ||
+            !san_list_valid(meta->san_ip, meta->san_ip_len))
+        return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "csr",
+                            "SAN list is NULL or holds a NULL or empty entry");
 
     for (size_t i = 0; i < meta->san_dns_len && rc == 0; ++i) {
         rc = wc_SetDNSEntry(heap, meta->san_dns[i],
@@ -464,7 +483,7 @@ int wolfcert_csr_build_ex(const WolfCertKey* key, const WolfCertCertMeta* meta,
 
     int body_sz = wc_MakeCertReq_ex(cert, der, (word32)der_cap,
                                     alg->wc_keytype_enum, key->impl);
-    if (body_sz < 0) {
+    if (body_sz <= 0) {
         WOLFCERT_XFREE(der, heap);
         wc_CertFree(cert);
         return WOLFCERT_ERR_WC(body_sz, "csr", "MakeCertReq_ex");
@@ -483,7 +502,7 @@ int wolfcert_csr_build_ex(const WolfCertKey* key, const WolfCertCertMeta* meta,
 
     wc_FreeRng(&rng);
     wc_CertFree(cert);
-    if (sig_sz < 0) {
+    if (sig_sz <= 0) {
         WOLFCERT_XFREE(der, heap);
         return WOLFCERT_ERR_WC(sig_sz, "csr", "SignCert");
     }

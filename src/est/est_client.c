@@ -89,8 +89,6 @@ static int est_finish(void* heap, WolfCertHttpResponse* resp,
         memset(out, 0, sizeof(*out));
     }
     else if (status != 200) {
-        if (res != NULL)
-            res->status = WOLFCERT_EST_STATUS_FAILURE;
         rc = WOLFCERT_ERR(status == 401 || status == 403 ? WOLFCERT_ERR_AUTH
                                                          : WOLFCERT_ERR_HTTP,
                           "est", "%s rejected: HTTP %d", est_ops[op].path,
@@ -111,6 +109,10 @@ static int est_finish(void* heap, WolfCertHttpResponse* resp,
         *out = der;
         memset(&der, 0, sizeof(der));
     }
+    else if (decoded && der.len == 0) {
+        rc = WOLFCERT_ERR(WOLFCERT_ERR_HTTP, "est",
+            "200 response carried no certificate");
+    }
     else if (decoded && enc == WOLFCERT_ENCODING_DER) {
         rc = wolfcert_pkcs7_certs_to_der(der.data, der.len, out, heap);
     }
@@ -118,7 +120,9 @@ static int est_finish(void* heap, WolfCertHttpResponse* resp,
         rc = wolfcert_pkcs7_certs_to_pem(der.data, der.len, out, heap);
     }
 
-    if (decoded && rc == WOLFCERT_OK && res != NULL)
+    if (res != NULL && rc != WOLFCERT_OK)
+        res->status = WOLFCERT_EST_STATUS_FAILURE;
+    else if (res != NULL && decoded)
         res->status = WOLFCERT_EST_STATUS_SUCCESS;
 
     wolfcert_buffer_free(&der);

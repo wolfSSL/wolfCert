@@ -634,6 +634,48 @@ static int check_error_status(WOLFSSL_CTX* ctx, const WolfCertServerCfg* tmpl)
     return 0;
 }
 
+/* A body that decodes to nothing is (NULL, 0) for /csrattrs and an HTTP
+ * error for a certificate request. */
+static int check_body_decodes_empty(WOLFSSL_CTX* ctx,
+                                    const WolfCertServerCfg* tmpl)
+{
+    static uint8_t body[] = "\r\n";
+    static const uint8_t csr[] = { 0x30, 0x00 };
+    struct srv_ctx sc = { .body = body, .len = sizeof(body) - 1, .ctx = ctx,
+                          .conns = 5 };
+    WolfCertServerCfg srv = *tmpl;
+    WolfCertCertMeta meta = { 0 };
+    WolfCertBuffer attrs = { .data = (uint8_t*)1, .len = 1 };
+    WolfCertBuffer certs = { 0 };
+    WolfCertEstResult res = { 0 };
+    pthread_t tid;
+    char url[128];
+    int port = 0;
+
+    sc.listen_fd = listen_loopback(&port);
+    REQUIRE(sc.listen_fd >= 0);
+    REQUIRE(pthread_create(&tid, NULL, srv_thread, &sc) == 0);
+    snprintf(url, sizeof(url), "https://127.0.0.1:%d/.well-known/est", port);
+    srv.server_url = url;
+
+    REQUIRE(wolfcert_est_get_csr_attrs(&srv, &attrs) == WOLFCERT_OK);
+    REQUIRE(attrs.data == NULL && attrs.len == 0);
+    REQUIRE(wolfcert_client_fetch_meta(NULL, &srv, &meta) == WOLFCERT_OK);
+    REQUIRE(wolfcert_est_get_cacerts(&srv, WOLFCERT_ENCODING_PEM,
+                                     &certs) == WOLFCERT_ERR_HTTP);
+    REQUIRE(certs.data == NULL);
+    REQUIRE(wolfcert_est_get_cacerts(&srv, WOLFCERT_ENCODING_DER,
+                                     &certs) == WOLFCERT_ERR_HTTP);
+    REQUIRE(certs.data == NULL);
+    REQUIRE(wolfcert_est_simple_enroll(&srv, csr, sizeof(csr), &res)
+            == WOLFCERT_ERR_HTTP);
+    REQUIRE(res.status == WOLFCERT_EST_STATUS_FAILURE);
+    REQUIRE(res.cert_pem.data == NULL);
+    pthread_join(tid, NULL);
+    REQUIRE(meta.subject_dn == NULL && meta.key_usage == NULL);
+    return 0;
+}
+
 int main(void)
 {
     /* The mock responder may write after the client closed the connection. */
@@ -753,6 +795,7 @@ int main(void)
     REQUIRE(check_empty_body(ctx, &srv, csr.data, csr.len, ca_der, ca_len,
                              dk) == 0);
     REQUIRE(check_error_status(ctx, &srv) == 0);
+    REQUIRE(check_body_decodes_empty(ctx, &srv) == 0);
 
     wolfcert_buffer_free(&csr);
     wolfcert_key_free(dk);

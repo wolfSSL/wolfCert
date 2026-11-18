@@ -99,6 +99,11 @@ static int test_base64(void)
     /* Garbage chars. */
     const uint8_t bad[] = "!!!!";
     REQUIRE(wolfcert_base64_decode(bad, sizeof(bad) - 1, &out, NULL) != WOLFCERT_OK);
+    /* Whitespace only decodes to nothing. */
+    const uint8_t ws[] = "\r\n";
+    out.data = (uint8_t*)1;
+    REQUIRE(wolfcert_base64_decode(ws, sizeof(ws) - 1, &out, NULL) == WOLFCERT_OK);
+    REQUIRE(out.data == NULL && out.len == 0);
     return 0;
 }
 
@@ -267,6 +272,13 @@ static int test_csr_pem(void)
     return 0;
 }
 
+/* A size of 0 on a wolfSSL failure path must not map to success. */
+static int test_wc_err_zero(void)
+{
+    REQUIRE(wolfcert_map_wc_err(0) != WOLFCERT_OK);
+    return 0;
+}
+
 int main(void)
 {
     REQUIRE(test_static_mem_init() == 0);
@@ -287,6 +299,8 @@ int main(void)
     if (test_scep_envelop_alg())
         return 1;
 #endif
+    if (test_wc_err_zero())
+        return 1;
     wolfcert_cleanup();
     printf("OK\n");
     return 0;

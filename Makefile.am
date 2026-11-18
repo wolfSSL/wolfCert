@@ -286,6 +286,7 @@ EXTRA_DIST = \
     cmake/wolfCertTargets.cmake.in \
     cmake/wolfcert.pc.in \
     tests/CMakeLists.txt \
+    tests/test_certs.h \
     tests/test_static_mem.h \
     tests/integration/tls_test_util.h \
     tests/integration/est_client_cases.h \

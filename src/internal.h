@@ -237,7 +237,7 @@ WOLFCERT_TEST_VIS int wolfcert_scep_server_set_bundle_fault(WolfCertServer* s,
                                                             int mode);
 #endif
 
-int  wolfcert_map_wc_err(int wc_rc);
+WOLFCERT_TEST_VIS int  wolfcert_map_wc_err(int wc_rc);
 int  wolfcert_set_error(int wolfcert_rc, int wolfssl_rc,
                         const char* module, const char* fmt, ...);
 
@@ -360,6 +360,9 @@ WOLFCERT_TEST_VIS int wolfcert_find_san(const DecodedCert* dc,
                                         const byte** san, word32* san_len);
 
 WOLFCERT_TEST_VIS int wolfcert_buffer_is_der(const uint8_t* buf, size_t len);
+
+/* 1 if the DER element starting at in[0] spans exactly in_len bytes. */
+int wolfcert_der_is_single(const uint8_t* in, size_t in_len);
 
 /* Private key DER of a software key; fails for a key with a key_id. The
  * caller zeroizes and frees *out_der. */

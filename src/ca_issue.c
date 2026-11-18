@@ -285,24 +285,13 @@ static int ca_copy(const uint8_t* in, size_t in_len, WolfCertBuffer* out,
     return WOLFCERT_OK;
 }
 
-/* 1 when in is exactly one DER element. */
-static int ca_der_single(const uint8_t* in, size_t in_len)
-{
-    word32 idx = 1;
-    int len = 0;
-
-    return (size_t)(word32)in_len == in_len &&
-           GetLength(in, &idx, &len, (word32)in_len) >= 0 &&
-           (size_t)idx + (size_t)len == in_len;
-}
-
 static int ca_cert_der(const uint8_t* in, size_t in_len, WolfCertBuffer* out,
                        void* heap)
 {
     if (!wolfcert_buffer_is_der(in, in_len))
         return wolfcert_pem_cert_to_der(in, in_len, out, heap);
 
-    if (!ca_der_single(in, in_len))
+    if (!wolfcert_der_is_single(in, in_len))
         return WOLFCERT_ERR_PARSE;
 
     return ca_copy(in, in_len, out, heap);
@@ -332,7 +321,7 @@ int wolfcert_ca_load(WolfCertCa* ca, const uint8_t* cert, size_t cert_len,
 
     if (rc == WOLFCERT_OK) {
         if (wolfcert_buffer_is_der(key, key_len) &&
-                !ca_der_single(key, key_len))
+                !wolfcert_der_is_single(key, key_len))
             rc = WOLFCERT_ERR_PARSE;
         else
             rc = wolfcert_key_from_pem(key, key_len, heap, &k);

@@ -168,6 +168,7 @@ static inline int test_sign_selfcert(Cert* cert, uint8_t* der, int der_sz,
 static inline int test_sign_certreq(Cert* req, uint8_t* der, int der_sz,
                                     test_signkey* key, WC_RNG* rng)
 {
+    req->version = 0;
 #if !defined(NO_RSA)
     if (wc_MakeCertReq(req, der, (word32)der_sz, key, NULL) <= 0)
         return -1;

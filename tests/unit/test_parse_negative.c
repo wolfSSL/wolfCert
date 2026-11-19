@@ -182,6 +182,7 @@ static int test_scep_envelop_alg(void)
     req = wc_CertNew(NULL);
     REQUIRE(req != NULL);
     wc_InitCert_ex(req, NULL, INVALID_DEVID);
+    req->version = 0;
     strncpy(req->subject.commonName, "scep-test", CTC_NAME_SIZE - 1);
     req->subject.commonName[CTC_NAME_SIZE - 1] = '\0';
     req->sigType = CTC_SHA256wRSA;

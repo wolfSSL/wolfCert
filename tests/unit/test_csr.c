@@ -65,6 +65,7 @@ static int build_and_reparse(WolfCertKeyType kt, int param)
     wc_InitDecodedCert(&dc, der.data, (word32)der.len, NULL);
     int rc = wc_ParseCert(&dc, CERTREQ_TYPE, NO_VERIFY, NULL);
     REQUIRE(rc == 0);
+    REQUIRE(dc.version == 0);
     REQUIRE(dc.subjectCN != NULL);
     REQUIRE(strncmp(dc.subjectCN, "device-1", 8) == 0);
     wc_FreeDecodedCert(&dc);
@@ -580,6 +581,7 @@ static int renewal_drops_callback_san(void)
 
     wc_InitDecodedCert(&dc, csr.data, (word32)csr.len, NULL);
     REQUIRE(wc_ParseCert(&dc, CERTREQ_TYPE, NO_VERIFY, NULL) == 0);
+    REQUIRE(dc.version == 0);
     REQUIRE(dc.subjectCN != NULL && dc.subjectCNLen == 5);
     REQUIRE(memcmp(dc.subjectCN, "plain", 5) == 0);
     REQUIRE(dc.altNames == NULL && dc.extSubjAltNameSet == 0);

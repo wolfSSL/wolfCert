@@ -555,6 +555,7 @@ static int make_csr(RsaKey* key, WC_RNG* rng, const char* cn, const char* org,
         return -1;
 
     wc_InitCert_ex(req, NULL, INVALID_DEVID);
+    req->version = 0;
     strncpy(req->subject.commonName, cn, CTC_NAME_SIZE - 1);
     req->subject.commonName[CTC_NAME_SIZE - 1] = '\0';
     strncpy(req->subject.org, org, CTC_NAME_SIZE - 1);

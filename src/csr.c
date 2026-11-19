@@ -400,6 +400,8 @@ int wolfcert_csr_build_ex(const WolfCertKey* key, const WolfCertCertMeta* meta,
     if (cert == NULL)
         return WOLFCERT_ERR_MEMORY;
     wc_InitCert_ex(cert, heap, key->dev_id);
+    /* PKCS#10 defines only version 0; wc_InitCert sets the X.509 v3 value. */
+    cert->version = 0;
 
     int rc = parse_subject_dn(meta->subject_dn, &cert->subject);
     if (rc != WOLFCERT_OK) {

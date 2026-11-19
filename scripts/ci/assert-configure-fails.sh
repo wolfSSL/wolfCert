@@ -56,6 +56,7 @@ CASE_TABLE=(
   "no-pkcs7:neg-no-pkcs7:::HAVE_PKCS7|missing a required feature"
   "no-public-asn:neg-no-public-asn:::does not export its ASN helpers"
   "no-aes128-scep:neg-no-aes128:::requires AES-128-CBC"
+  "server-no-protocol:neg-no-rsa:-DWOLFCERT_ENABLE_EST=OFF -DWOLFCERT_ENABLE_SCEP=OFF:--disable-est --disable-scep:server needs .*est or .*scep"
 )
 
 lookup_case() {

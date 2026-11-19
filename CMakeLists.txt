@@ -53,6 +53,12 @@ if(NOT WOLFCERT_ENABLE_BUILTIN_TRANSPORT)
             "the client over real sockets")
     endif()
 endif()
+if(WOLFCERT_ENABLE_SERVER AND NOT WOLFCERT_ENABLE_EST
+        AND NOT WOLFCERT_ENABLE_SCEP)
+    message(FATAL_ERROR "WOLFCERT_ENABLE_SERVER needs WOLFCERT_ENABLE_EST or "
+        "WOLFCERT_ENABLE_SCEP; set WOLFCERT_ENABLE_SERVER=OFF for a build "
+        "without either")
+endif()
 # wolfSSL
 # -DWITH_WOLFSSL=PATH: wolfSSL install prefix for find_package and pkg-config.
 set(WITH_WOLFSSL "" CACHE PATH "Path to a wolfSSL install prefix")

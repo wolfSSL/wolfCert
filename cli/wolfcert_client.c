@@ -1442,6 +1442,21 @@ static int cmd_getcacerts(int argc, char** argv)
     return ret;
 }
 
+#ifdef WOLFCERT_HAVE_EST
+/* Sleep before an EST re-POST; the server's Retry-After wins. */
+static void est_poll_wait(const Opts* opts, int retry_after_sec)
+{
+    long wait_ms = retry_after_sec > 0 ? (long)retry_after_sec * 1000L
+                                       : opts->poll_interval_ms;
+    struct timespec ts = {
+        .tv_sec  =  wait_ms / 1000,
+        .tv_nsec = (wait_ms % 1000) * 1000000L,
+    };
+
+    nanosleep(&ts, NULL);
+}
+#endif
+
 static int cmd_enroll(int argc, char** argv)
 {
     Opts opts;
@@ -1590,16 +1605,7 @@ static int cmd_enroll(int argc, char** argv)
             while (rc == WOLFCERT_OK &&
                     est_result.status == WOLFCERT_EST_STATUS_PENDING &&
                     attempts < opts.poll_attempts) {
-                long wait_ms = est_result.retry_after_sec > 0 ?
-                                (long)est_result.retry_after_sec * 1000L :
-                                opts.poll_interval_ms;
-
-                struct timespec ts = {
-                    .tv_sec  =  wait_ms / 1000,
-                    .tv_nsec = (wait_ms % 1000) * 1000000L,
-                };
-
-                nanosleep(&ts, NULL);
+                est_poll_wait(&opts, est_result.retry_after_sec);
                 wolfcert_est_result_free(&est_result);
                 rc = wolfcert_est_simple_enroll(&srv, csr.data, csr.len, &est_result);
                 attempts++;
@@ -1666,7 +1672,7 @@ static int cmd_enroll(int argc, char** argv)
             ret = 2;
     }
 
-    wolfcert_buffer_free(&csr);
+    wolfcert_buffer_free_secure(&csr);
     wolfcert_buffer_free(&issued);
     if (key != NULL)
         wolfcert_key_free(key);
@@ -1694,7 +1700,7 @@ static int scep_reenroll(const Opts* opts, const WolfCertServerCfg* srv,
         rc = scep_enroll(opts, srv, pin, "reenroll", key, &csr, cert_der,
                          issued);
 
-    wolfcert_buffer_free(&csr);
+    wolfcert_buffer_free_secure(&csr);
     return rc;
 }
 #endif
@@ -1789,10 +1795,36 @@ static int cmd_reenroll(int argc, char** argv)
     }
 
     if (ret == 0 && p == WOLFCERT_PROTO_EST) {
+#ifdef WOLFCERT_HAVE_EST
+        WolfCertEstResult est_result;
+        WolfCertBuffer    parked = { 0 };
+        int               attempts = 0;
+
         meta.challenge_password = opts.challenge;
         rc = wolfcert_client_reenroll(NULL, &srv, cert_der->buffer,
                                       cert_der->length, current_key, NULL,
-                                      &meta, &new_key, &issued);
+                                      &meta, &new_key, &est_result, &parked);
+        /* Re-POST the parked CSR (RFC 7030 section 4.2.3). */
+        while (rc == WOLFCERT_ERR_PENDING && attempts < opts.poll_attempts) {
+            est_poll_wait(&opts, est_result.retry_after_sec);
+            wolfcert_est_result_free(&est_result);
+            rc = wolfcert_est_simple_reenroll(&srv, cert_der->buffer,
+                                              cert_der->length, current_key,
+                                              parked.data, parked.len,
+                                              &est_result);
+            if (rc == WOLFCERT_OK &&
+                    est_result.status == WOLFCERT_EST_STATUS_PENDING)
+                rc = WOLFCERT_ERR_PENDING;
+            attempts++;
+        }
+        wolfcert_buffer_free_secure(&parked);
+        if (rc == WOLFCERT_OK) {
+            issued = est_result.cert_pem;
+            est_result.cert_pem.data = NULL;
+            est_result.cert_pem.len = 0;
+        }
+        wolfcert_est_result_free(&est_result);
+#endif
     }
 #ifdef WOLFCERT_HAVE_SCEP
     else if (ret == 0) {

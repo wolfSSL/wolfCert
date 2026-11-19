@@ -103,21 +103,6 @@ static int wolfcert_client_auto_csrattrs(const WolfCertServerCfg* srv,
     wolfcert_csr_attrs_free(&attrs);
     return rc;
 }
-
-static int wolfcert_client_take_cert(int rc, WolfCertEstResult* r,
-                                     WolfCertBuffer* out_cert_pem)
-{
-    if (rc == WOLFCERT_OK && r->status == WOLFCERT_EST_STATUS_PENDING) {
-        rc = WOLFCERT_ERR_PENDING;
-    }
-    else if (rc == WOLFCERT_OK) {
-        *out_cert_pem = r->cert_pem;
-        memset(&r->cert_pem, 0, sizeof(r->cert_pem));
-    }
-
-    wolfcert_est_result_free(r);
-    return rc;
-}
 #endif
 
 int wolfcert_client_fetch_meta(WolfCertClient* client, const WolfCertServerCfg* srv,
@@ -137,22 +122,36 @@ int wolfcert_client_fetch_meta(WolfCertClient* client, const WolfCertServerCfg* 
     return WOLFCERT_ERR_UNSUPPORTED;
 }
 
+#ifdef WOLFCERT_HAVE_EST
 /* Only EST enrolls here; SCEP needs the RA cert, which this API lacks. */
 static int client_proto_check(const WolfCertServerCfg* srv)
 {
-#ifdef WOLFCERT_HAVE_EST
     if (srv->protocol == WOLFCERT_PROTO_EST)
         return WOLFCERT_OK;
-#endif
     return WOLFCERT_ERR(WOLFCERT_ERR_UNSUPPORTED, "client",
                         "protocol %d cannot enroll through wolfcert_client",
                         (int)srv->protocol);
 }
 
-/* On failure, a key with a key_id still goes to the caller to delete. */
-static int hand_back(WolfCertKey* key, int rc, WolfCertKey** out_key)
+/* On failure, a key with a key_id still goes to the caller to delete. A
+ * pending request hands out its key and CSR when out_csr is set. */
+static int hand_back(WolfCertKey* key, WolfCertBuffer* csr, int rc,
+                     const WolfCertEstResult* res, WolfCertKey** out_key,
+                     WolfCertBuffer* out_csr)
 {
-    if (rc != WOLFCERT_OK && key != NULL && key->id_len == 0) {
+    int pending;
+
+    if (rc == WOLFCERT_OK && res->status == WOLFCERT_EST_STATUS_PENDING)
+        rc = WOLFCERT_ERR_PENDING;
+    pending = (rc == WOLFCERT_ERR_PENDING && out_csr != NULL);
+
+    if (pending) {
+        *out_csr = *csr;
+        memset(csr, 0, sizeof(*csr));
+    }
+    wolfcert_buffer_free_secure(csr);
+
+    if (rc != WOLFCERT_OK && !pending && key != NULL && key->id_len == 0) {
         wolfcert_key_free(key);
         key = NULL;
     }
@@ -163,11 +162,16 @@ static int hand_back(WolfCertKey* key, int rc, WolfCertKey** out_key)
 int wolfcert_client_enroll(WolfCertClient* client, const WolfCertServerCfg* srv,
                            const WolfCertKeyCfg* key_cfg,
                            const WolfCertCertMeta* meta,
-                           WolfCertKey** out_key, WolfCertBuffer* out_cert_pem)
+                           WolfCertKey** out_key, WolfCertEstResult* out,
+                           WolfCertBuffer* out_csr)
 {
     (void)client;
+    if (out != NULL)
+        memset(out, 0, sizeof(*out));
+    if (out_csr != NULL)
+        memset(out_csr, 0, sizeof(*out_csr));
     if (srv == NULL || key_cfg == NULL || meta == NULL ||
-            out_key == NULL || out_cert_pem == NULL)
+            out_key == NULL || out == NULL)
         return WOLFCERT_ERR_BAD_ARG;
     *out_key = NULL;
 
@@ -179,36 +183,21 @@ int wolfcert_client_enroll(WolfCertClient* client, const WolfCertServerCfg* srv,
     WolfCertKeyCfg   eff_key  = *key_cfg;
     WolfCertCertMeta eff_meta = *meta;
 
-#ifdef WOLFCERT_HAVE_EST
-    /* proto_opts is a union; test the protocol before reading its EST arm. */
-    if (srv->protocol == WOLFCERT_PROTO_EST && srv->proto_opts.est.auto_csrattrs) {
+    if (srv->proto_opts.est.auto_csrattrs) {
         rc = wolfcert_client_auto_csrattrs(srv, &eff_key, &eff_meta);
         if (rc != WOLFCERT_OK)
             return rc;
     }
-#endif
 
     WolfCertKey* key = NULL;
-    rc = wolfcert_key_generate(&eff_key, &key);
-    if (rc != WOLFCERT_OK)
-        return hand_back(key, rc, out_key);
-
     WolfCertBuffer csr = { 0 };
-    rc = wolfcert_csr_build(key, &eff_meta, &csr);
-    if (rc != WOLFCERT_OK)
-        return hand_back(key, rc, out_key);
+    rc = wolfcert_key_generate(&eff_key, &key);
+    if (rc == WOLFCERT_OK)
+        rc = wolfcert_csr_build(key, &eff_meta, &csr);
+    if (rc == WOLFCERT_OK)
+        rc = wolfcert_est_simple_enroll(srv, csr.data, csr.len, out);
 
-#ifdef WOLFCERT_HAVE_EST
-    WolfCertEstResult r;
-
-    rc = wolfcert_est_simple_enroll(srv, csr.data, csr.len, &r);
-    rc = wolfcert_client_take_cert(rc, &r, out_cert_pem);
-#else
-    rc = WOLFCERT_ERR_UNSUPPORTED;
-#endif
-
-    wolfcert_buffer_free(&csr);
-    return hand_back(key, rc, out_key);
+    return hand_back(key, &csr, rc, out, out_key, out_csr);
 }
 
 int wolfcert_client_reenroll(WolfCertClient* client, const WolfCertServerCfg* srv,
@@ -216,11 +205,16 @@ int wolfcert_client_reenroll(WolfCertClient* client, const WolfCertServerCfg* sr
                              const WolfCertKey* current_key,
                              const WolfCertKeyCfg* new_key_cfg,
                              const WolfCertCertMeta* meta,
-                             WolfCertKey** out_key, WolfCertBuffer* out_cert_pem)
+                             WolfCertKey** out_key, WolfCertEstResult* out,
+                             WolfCertBuffer* out_csr)
 {
     (void)client;
+    if (out != NULL)
+        memset(out, 0, sizeof(*out));
+    if (out_csr != NULL)
+        memset(out_csr, 0, sizeof(*out_csr));
     if (srv == NULL || current_cert == NULL || current_key == NULL ||
-        meta == NULL || out_key == NULL || out_cert_pem == NULL)
+        meta == NULL || out_key == NULL || out == NULL)
         return WOLFCERT_ERR_BAD_ARG;
     *out_key = NULL;
     if (wolfcert_csr_meta_sets_identity(meta))
@@ -232,29 +226,18 @@ int wolfcert_client_reenroll(WolfCertClient* client, const WolfCertServerCfg* sr
         return rc;
 
     WolfCertKey* nk = NULL;
-    if (new_key_cfg != NULL) {
+    WolfCertBuffer csr = { 0 };
+    if (new_key_cfg != NULL)
         rc = wolfcert_key_generate(new_key_cfg, &nk);
-        if (rc != WOLFCERT_OK)
-            return hand_back(nk, rc, out_key);
-    }
     const WolfCertKey* signing_key = nk ? nk : current_key;
 
-    WolfCertBuffer csr = { 0 };
-    rc = wolfcert_csr_build_ex(signing_key, meta, current_cert,
-                               current_cert_len, &csr);
-    if (rc != WOLFCERT_OK)
-        return hand_back(nk, rc, out_key);
+    if (rc == WOLFCERT_OK)
+        rc = wolfcert_csr_build_ex(signing_key, meta, current_cert,
+                                   current_cert_len, &csr);
+    if (rc == WOLFCERT_OK)
+        rc = wolfcert_est_simple_reenroll(srv, current_cert, current_cert_len,
+                                          current_key, csr.data, csr.len, out);
 
-#ifdef WOLFCERT_HAVE_EST
-    WolfCertEstResult r;
-
-    rc = wolfcert_est_simple_reenroll(srv, current_cert, current_cert_len,
-                                      current_key, csr.data, csr.len, &r);
-    rc = wolfcert_client_take_cert(rc, &r, out_cert_pem);
-#else
-    rc = WOLFCERT_ERR_UNSUPPORTED;
-#endif
-
-    wolfcert_buffer_free(&csr);
-    return hand_back(nk, rc, out_key);
+    return hand_back(nk, &csr, rc, out, out_key, out_csr);
 }
+#endif /* WOLFCERT_HAVE_EST */

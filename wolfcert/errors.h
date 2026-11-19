@@ -40,9 +40,8 @@ enum {
     WOLFCERT_ERR_PARSE       = -10,
     WOLFCERT_ERR_NOT_FOUND   = -11,
     WOLFCERT_ERR_UNSUPPORTED = -12,
-    /* Enrollment accepted but not issued yet (EST 202 Accepted, RFC 7030
-     * section 4.2.3), from wolfcert_client_enroll and _reenroll. Calls that
-     * fill a result struct report it in its status instead. */
+    /* Enrollment parked for approval: wolfcert_client_enroll and _reenroll
+     * return it with their result PENDING; the other enroll calls return OK. */
     WOLFCERT_ERR_PENDING     = -13,
 
     /* Returned by the _nb calls when the socket would block. The same call

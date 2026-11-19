@@ -152,13 +152,14 @@ WolfCertKeyCfg   kcfg = { .type = WOLFCERT_KEY_ECC, .param = 256,
                           .dev_id = INVALID_DEVID };
 WolfCertCertMeta meta = { .subject_dn = "CN=device-0001" };
 WolfCertKey*     key  = NULL;
-WolfCertBuffer   cert = { 0 };
+WolfCertEstResult res = { 0 };          /* res.cert_pem: issued cert first */
 
-int rc = wolfcert_client_enroll(client, &srv, &kcfg, &meta, &key, &cert);
+int rc = wolfcert_client_enroll(client, &srv, &kcfg, &meta, &key, &res,
+                                NULL);
 if (rc != WOLFCERT_OK)
     printf("%s: %s\n", wolfcert_strerror(rc), wolfcert_last_error_message());
 
-wolfcert_buffer_free(&cert);
+wolfcert_est_result_free(&res);
 wolfcert_key_free(key);
 wolfcert_client_free(client);
 wolfcert_cleanup();
@@ -174,7 +175,9 @@ wolfcert_cleanup();
 - **Pending approval:** the enroll calls report PENDING in their result's
   status; poll again later (EST: re-POST after `retry_after_sec`; SCEP:
   `wolfcert_scep_get_cert_initial`). `wolfcert_client_enroll` and
-  `wolfcert_client_reenroll` return `WOLFCERT_ERR_PENDING`.
+  `wolfcert_client_reenroll` return `WOLFCERT_ERR_PENDING` with
+  `retry_after_sec` in their result; pass `out_csr` to keep the key and CSR
+  for the re-POST.
 - **Renewal:** `wolfcert_client_reenroll` (EST, authenticates with the
   certificate being renewed) or `wolfcert_scep_renewal_req`.
 - **Hardware keys:** `examples/enroll_cryptocb.c`, and `examples/enroll_tpm.c`
@@ -243,7 +246,8 @@ contract, alone or in a group comment.
   a zero-initialized config names CryptoCb device 0, which keygen refuses
   with `WOLFCERT_ERR_BAD_ARG` unless such a device is registered.
 - **The `wolfcert_client_*` calls are EST-only except `get_ca`.** For SCEP
-  they return `WOLFCERT_ERR_UNSUPPORTED`; use `wolfcert_scep_*`.
+  they return `WOLFCERT_ERR_UNSUPPORTED`; use `wolfcert_scep_*`. A build
+  without EST does not declare `wolfcert_client_enroll` or `_reenroll`.
 - **SCEP rejects non-RSA keys** with `WOLFCERT_ERR_UNSUPPORTED`, and an ECC
   RA/CA certificate as well. Use EST for ECC, EdDSA or ML-DSA device keys.
 - **Set `protocol` on every config**, not only for the `wolfcert_client_*`

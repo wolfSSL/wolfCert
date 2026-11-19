@@ -108,12 +108,16 @@ WOLFCERT_API int wolfcert_csr_attrs_build(const WolfCertCsrAttrItem* items,
 
 /* Outcome of the enroll calls (RFC 7030 section 4.2), matching the
  * WolfCertScepStatus values:
- *   SUCCESS - returns WOLFCERT_OK; cert_pem holds the issued cert.
+ *   SUCCESS - returns WOLFCERT_OK; cert_pem holds the issued cert first,
+ *             then any extra certificates as received; a reenroll's unchanged
+ *             cert comes first when no other cert holds the key.
  *   PENDING - returns WOLFCERT_OK; cert_pem is empty and the caller re-POSTs
  *             the identical request after retry_after_sec (section 4.2.3).
  *   FAILURE - a reply came back but cannot be used: an HTTP error status
- *             (WOLFCERT_ERR_AUTH for 401/403, else WOLFCERT_ERR_HTTP) or a
- *             body that is empty or does not parse.
+ *             (WOLFCERT_ERR_AUTH for 401/403, else WOLFCERT_ERR_HTTP), a
+ *             body that is empty or does not parse, or no certificate for
+ *             the CSR's key (WOLFCERT_ERR_PROTOCOL; cert_pem then holds the
+ *             reply's certificates as received).
  *   UNSET   - no reply was received; the int return code says why. */
 typedef enum {
     WOLFCERT_EST_STATUS_UNSET   = 0,
@@ -124,7 +128,7 @@ typedef enum {
 
 typedef struct {
     WolfCertEstStatus status;
-    /* Populated and owned iff status == SUCCESS. */
+    /* Owned when SUCCESS, or on WOLFCERT_ERR_PROTOCOL as described above. */
     WolfCertBuffer    cert_pem;
     /* Seconds to wait before re-POSTing when PENDING; 0 if the server sent
      * no usable Retry-After. */
@@ -132,13 +136,13 @@ typedef struct {
     void*             heap;
 } WolfCertEstResult;
 
-/* Every wolfcert_est_* call taking a WolfCertEstResult* initializes a
- * non-NULL *out first, so freeing it after any outcome is safe. A populated
- * result must be freed before it is passed again, except a session's
- * in-flight result, which every resume passes back unfreed. */
+/* Calls taking a WolfCertEstResult* initialize *out first. Free it after
+ * any return and before reuse, except an _nb resume's in-flight result. */
 WOLFCERT_API void wolfcert_est_result_free(WolfCertEstResult* r);
 
-/* POST /.well-known/est/simpleenroll. */
+/* POST /.well-known/est/simpleenroll. Every enroll call fails with
+ * WOLFCERT_ERR_PARSE, before sending, when csr_der's SubjectPublicKeyInfo
+ * cannot be found; the server still validates the PKCS#10. */
 WOLFCERT_API int wolfcert_est_simple_enroll(const WolfCertServerCfg* srv,
                                             const uint8_t* csr_der, size_t csr_der_len,
                                             WolfCertEstResult* out);

@@ -32,6 +32,7 @@
 #include <wolfssl/wolfcrypt/asn_public.h>
 #include <wolfssl/wolfcrypt/random.h>
 
+#include "internal.h"
 #include "tls_test_util.h"
 #include <wolfssl/wolfcrypt/rsa.h>
 #include <wolfssl/wolfcrypt/ecc.h>
@@ -187,13 +188,85 @@ static int test_reenroll_rejects_identity_change(const char* url,
     return 0;
 }
 
-/* A DER reenroll body that is not PKCS#10 gets a 400. */
+/* A session renewal reusing the key skips the cert being renewed when the
+ * CA sends it first, blocking and _nb, with the client cert in PEM or DER. */
+static int test_session_renewal_skips_old(WolfCertServer* srv, const char* url,
+                                          const uint8_t* tls_cert, size_t tls_cert_len,
+                                          const uint8_t* cli_cert, size_t cli_cert_len,
+                                          const uint8_t* cli_key, size_t cli_key_len)
+{
+    const WolfCertCertMeta none = { 0 };
+    WolfCertKey* cur_key = NULL;
+    WolfCertBuffer csr = { 0 };
+    DerBuffer* old = NULL;
+
+    REQUIRE(wolfcert_key_from_pem(cli_key, cli_key_len, NULL, &cur_key)
+            == WOLFCERT_OK);
+    REQUIRE(wc_PemToDer(cli_cert, (long)cli_cert_len, CERT_TYPE, &old, NULL,
+                        NULL, NULL) == 0);
+    REQUIRE(wolfcert_csr_build_ex(cur_key, &none, old->buffer, old->length,
+                                  &csr) == WOLFCERT_OK);
+    wolfcert_server_set_issue_first(srv, old->buffer, old->length);
+
+    for (int der = 0; der <= 1; der++) {
+        WolfCertServerCfg cli = {
+            .protocol          = WOLFCERT_PROTO_EST,
+            .server_url        = url,
+            .trust_anchors     = tls_cert,
+            .trust_anchors_len = tls_cert_len,
+            .verify_server     = 1,
+            .client_cert       = der ? old->buffer : cli_cert,
+            .client_cert_len   = der ? old->length : cli_cert_len,
+            .client_key_obj    = cur_key,
+        };
+        WolfCertEstSession* s = NULL;
+        WolfCertEstResult r = { 0 };
+        int rc;
+
+        REQUIRE(wolfcert_est_session_open(&cli, &s) == WOLFCERT_OK);
+        REQUIRE(wolfcert_est_session_simple_reenroll(s, csr.data, csr.len, &r)
+                == WOLFCERT_OK);
+        REQUIRE(!test_pem_cert_is(&r.cert_pem, 0, old->buffer, old->length));
+        REQUIRE(test_pem_cert_is(&r.cert_pem, 1, old->buffer, old->length));
+        wolfcert_est_result_free(&r);
+
+        do {
+            rc = wolfcert_est_session_simple_reenroll_nb(s, csr.data, csr.len,
+                                                         &r);
+            if (rc == WOLFCERT_ERR_WANT_READ || rc == WOLFCERT_ERR_WANT_WRITE) {
+                struct pollfd p = { .fd = wolfcert_est_session_fd(s),
+                    .events = rc == WOLFCERT_ERR_WANT_WRITE ? POLLOUT
+                                                            : POLLIN };
+                (void)poll(&p, 1, 5000);
+            }
+        } while (rc == WOLFCERT_ERR_WANT_READ || rc == WOLFCERT_ERR_WANT_WRITE);
+        REQUIRE(rc == WOLFCERT_OK);
+        REQUIRE(!test_pem_cert_is(&r.cert_pem, 0, old->buffer, old->length));
+        REQUIRE(test_pem_cert_is(&r.cert_pem, 1, old->buffer, old->length));
+        wolfcert_est_result_free(&r);
+        wolfcert_est_session_close(s);
+    }
+
+    wolfcert_server_set_issue_first(srv, NULL, 0);
+    wolfcert_buffer_free(&csr);
+    wc_FreeDer(&old);
+    wolfcert_key_free(cur_key);
+    return 0;
+}
+
+/* A reenroll CSR that is not PKCS#10 fails in the client, and the server
+ * answers one sent anyway with a 400. */
 static int test_reenroll_rejects_non_csr(const char* url,
                                          const uint8_t* tls_cert, size_t tls_cert_len,
                                          const uint8_t* cli_cert, size_t cli_cert_len,
                                          const uint8_t* cli_key, size_t cli_key_len)
 {
     static const uint8_t not_csr[] = { 0x30, 0x03, 0x02, 0x01, 0x00 };
+    static const char req[] =
+        "POST /.well-known/est/simplereenroll HTTP/1.1\r\n"
+        "Host: 127.0.0.1\r\nContent-Type: application/pkcs10\r\n"
+        "Content-Transfer-Encoding: base64\r\nContent-Length: 8\r\n"
+        "Connection: close\r\n\r\nMAMCAQA=";
     WolfCertServerCfg cli = {
         .protocol          = WOLFCERT_PROTO_EST,
         .server_url        = url,
@@ -203,18 +276,31 @@ static int test_reenroll_rejects_non_csr(const char* url,
     };
     WolfCertKey* cur_key = NULL;
     WolfCertEstResult issued = { 0 };
+    TestTlsConn c;
+    unsigned port = 0;
+    char resp[64] = { 0 };
     int rc;
 
     REQUIRE(wolfcert_key_from_pem(cli_key, cli_key_len, NULL, &cur_key) == WOLFCERT_OK);
     rc = wolfcert_est_simple_reenroll(&cli, cli_cert, cli_cert_len, cur_key,
                                       not_csr, sizeof(not_csr), &issued);
     wolfcert_key_free(cur_key);
-    if (rc != WOLFCERT_ERR_HTTP)
-        fprintf(stderr, "non-CSR reenroll rc=%d (%s)\n", rc,
-                wolfcert_last_error_message());
-    REQUIRE(rc == WOLFCERT_ERR_HTTP);
-    REQUIRE(issued.cert_pem.data == NULL);
-    REQUIRE(strstr(wolfcert_last_error_message(), "HTTP 400") != NULL);
+    REQUIRE(rc == WOLFCERT_ERR_PARSE);
+    REQUIRE(issued.status == WOLFCERT_EST_STATUS_UNSET);
+
+    REQUIRE(sscanf(url, "https://127.0.0.1:%u", &port) == 1);
+    REQUIRE(test_tls_setup(&c, (uint16_t)port, tls_cert, tls_cert_len) == 0);
+    REQUIRE(wolfSSL_use_certificate_buffer(c.ssl, cli_cert, (long)cli_cert_len,
+                                           WOLFSSL_FILETYPE_PEM) ==
+            WOLFSSL_SUCCESS);
+    REQUIRE(wolfSSL_use_PrivateKey_buffer(c.ssl, cli_key, (long)cli_key_len,
+                                          WOLFSSL_FILETYPE_PEM) ==
+            WOLFSSL_SUCCESS);
+    REQUIRE(wolfSSL_connect(c.ssl) == WOLFSSL_SUCCESS);
+    REQUIRE(test_tls_write(&c, req, sizeof(req) - 1) == 0);
+    rc = test_tls_read(&c, resp, sizeof(resp) - 1);
+    test_tls_close(&c);
+    REQUIRE(rc >= 12 && strncmp(resp + 9, "400", 3) == 0);
     return 0;
 }
 
@@ -505,7 +591,7 @@ static int test_reenroll_under_approval(const uint8_t* tls_cert, size_t tls_cert
     WolfCertEstResult issued = { 0 };
     WolfCertClient* client = NULL;
     WolfCertKey* nk = NULL;
-    WolfCertBuffer cert = { 0 };
+    WolfCertEstResult cert = { 0 };
     pthread_t tid;
     char url[128];
     int rc;
@@ -552,9 +638,39 @@ static int test_reenroll_under_approval(const uint8_t* tls_cert, size_t tls_cert
     /* The client API reports the 202 as WOLFCERT_ERR_PENDING. */
     REQUIRE(wolfcert_client_new(&client) == WOLFCERT_OK);
     REQUIRE(wolfcert_client_reenroll(client, &cli, cli_cert, cli_cert_len,
-                                     cur_key, &kcfg, &none, &nk, &cert)
+                                     cur_key, &kcfg, &none, &nk, &cert, NULL)
             == WOLFCERT_ERR_PENDING);
-    REQUIRE(nk == NULL && cert.data == NULL);
+    REQUIRE(nk == NULL && cert.cert_pem.data == NULL);
+    REQUIRE(cert.status == WOLFCERT_EST_STATUS_PENDING);
+    REQUIRE(cert.retry_after_sec == 1);
+
+    /* Given out_csr, it hands out the new key and the CSR to re-POST. */
+    WolfCertBuffer parked = { 0 };
+    REQUIRE(wolfcert_client_reenroll(client, &cli, cli_cert, cli_cert_len,
+                                     cur_key, &kcfg, &none, &nk, &cert,
+                                     &parked) == WOLFCERT_ERR_PENDING);
+    REQUIRE(nk != NULL && parked.len > 0 && cert.cert_pem.data == NULL);
+    REQUIRE(wolfcert_est_simple_reenroll(&cli, cli_cert, cli_cert_len, cur_key,
+                                         parked.data, parked.len, &issued)
+            == WOLFCERT_OK);
+    REQUIRE(issued.status == WOLFCERT_EST_STATUS_SUCCESS);
+    wolfcert_est_result_free(&issued);
+    wolfcert_buffer_free(&parked);
+    wolfcert_key_free(nk);
+    nk = NULL;
+
+    /* A renewal reusing the key hands out the CSR alone. */
+    REQUIRE(wolfcert_client_reenroll(client, &cli, cli_cert, cli_cert_len,
+                                     cur_key, NULL, &none, &nk, &cert,
+                                     &parked) == WOLFCERT_ERR_PENDING);
+    REQUIRE(nk == NULL && parked.len > 0);
+    REQUIRE(cert.status == WOLFCERT_EST_STATUS_PENDING);
+    REQUIRE(wolfcert_est_simple_reenroll(&cli, cli_cert, cli_cert_len, cur_key,
+                                         parked.data, parked.len, &issued)
+            == WOLFCERT_OK);
+    REQUIRE(issued.status == WOLFCERT_EST_STATUS_SUCCESS);
+    wolfcert_est_result_free(&issued);
+    wolfcert_buffer_free(&parked);
     wolfcert_client_free(client);
 
     wolfcert_server_stop(srv);
@@ -1148,6 +1264,9 @@ int main(void)
     REQUIRE(test_reenroll_rejects_non_csr(url, tls_cert, tls_cert_len,
                                           cli_cert, cli_cert_len,
                                           cli_key, cli_key_len) == 0);
+    REQUIRE(test_session_renewal_skips_old(srv, url, tls_cert, tls_cert_len,
+                                           cli_cert, cli_cert_len,
+                                           cli_key, cli_key_len) == 0);
 #else
     REQUIRE(test_reenroll_needs_peer_cert(url, tls_cert, tls_cert_len,
                                           cli_cert, cli_cert_len,

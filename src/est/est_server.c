@@ -924,10 +924,8 @@ static int handler_enroll(WolfCertServer* s, int fd, const EstRequest* req,
         return rc;
     }
 
-    const uint8_t* certs[1] = { issued };
-    size_t         clen[1]  = { issued_len };
     WolfCertBuffer p7 = { 0 };
-    rc = wolfcert_pkcs7_build_certs_only(certs, clen, 1, &p7, s->heap);
+    rc = wolfcert_server_issued_p7(s, issued, issued_len, NULL, 0, &p7);
 
     WOLFCERT_XFREE(issued, s->heap);
     if (rc != WOLFCERT_OK) {
@@ -1036,6 +1034,16 @@ static int est_serve_fd(WolfCertServer* srv, int fd)
 {
     return handle_request(srv, fd);
 }
+
+#if defined(WOLFCERT_BUILD_TESTING)
+WOLFCERT_TEST_VIS int wolfcert_est_server_pending_count(
+                                                const WolfCertServer* s)
+{
+    if (s->cfg.protocol != WOLFCERT_PROTO_EST)
+        return -1;
+    return s->priv != NULL ? (int)((const EstPriv*)s->priv)->count : 0;
+}
+#endif
 
 static void est_free_priv(WolfCertServer* srv)
 {

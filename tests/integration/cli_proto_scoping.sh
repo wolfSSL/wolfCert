@@ -546,6 +546,26 @@ else
                     fails=$((fails + 1))
                 fi
             done
+
+            # Under approval, reenroll re-POSTs the parked CSR until issued.
+            start_server "$tmp/est-appr.log" --proto est \
+                --tls-cert "$tmp/tls.crt" --tls-key "$tmp/tls.key" \
+                --tls-client-ca "$tmp/pin-ca.pem" --est-require-approval
+            appr_pid=$started_pid
+            if "$CLI" reenroll --proto est \
+                    --url "https://127.0.0.1:$port/.well-known/est" \
+                    --trust "$tmp/pin-ca.pem" --cert "$tmp/ok.crt" \
+                    --key "$tmp/ok.key" --poll-attempts 3 \
+                    --poll-interval-ms 100 --out-cert "$tmp/est-appr.out" \
+                    >"$tmp/est-appr-reenroll.log" 2>&1 &&
+                    grep -q "BEGIN CERTIFICATE" "$tmp/est-appr.out"; then
+                echo "ok   EST reenroll polls a parked renewal"
+            else
+                echo "FAIL: EST reenroll did not poll the parked renewal"
+                cat "$tmp/est-appr-reenroll.log" "$tmp/est-appr.log"
+                fails=$((fails + 1))
+            fi
+            kill "$appr_pid" 2>/dev/null
         fi
         kill "$est_pid" 2>/dev/null
         est_pid=""

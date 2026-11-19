@@ -26,10 +26,16 @@
 
 #include <wolfcert/wolfcert.h>
 #include "../test_static_mem.h"
+#include "../test_certs.h"
 #include "internal.h"
+#if defined(WOLFCERT_HAVE_RSA) && defined(WC_RSA_PSS)
+#define USE_CERT_BUFFERS_2048
+#include <wolfssl/certs_test.h>
+#endif
 
 #include <wolfssl/ssl.h>
 #include <wolfssl/wolfcrypt/asn_public.h>
+#include <wolfssl/wolfcrypt/pkcs7.h>
 #include <wolfssl/wolfcrypt/rsa.h>
 #include <wolfssl/wolfcrypt/random.h>
 
@@ -92,6 +98,52 @@ fail:
     test_signkey_free(&key);
     wc_FreeRng(&rng);
     return -1;
+}
+
+/* A cert for dk's public key, signed by a throwaway key. */
+static int make_device_cert(const WolfCertKey* dk, uint8_t* out, size_t cap,
+                            size_t* out_len)
+{
+    test_signkey key;
+    WC_RNG rng;
+    Cert cert;
+    int type;
+    int sz;
+
+    switch (dk->type) {
+        case WOLFCERT_KEY_RSA:     type = RSA_TYPE;     break;
+        case WOLFCERT_KEY_ECC:     type = ECC_TYPE;     break;
+        case WOLFCERT_KEY_ED25519: type = ED25519_TYPE; break;
+        case WOLFCERT_KEY_ED448:   type = ED448_TYPE;   break;
+        default:                   return -1;
+    }
+    if (wc_InitRng(&rng) != 0)
+        return -1;
+    if (test_signkey_make(&key, &rng) != 0) {
+        wc_FreeRng(&rng);
+        return -1;
+    }
+
+    wc_InitCert(&cert);
+    strcpy(cert.subject.commonName, "device-99");
+    strcpy(cert.issuer.commonName,  "wolfCert Test CA");
+    cert.sigType = TEST_CERT_SIGTYPE;
+    sz = wc_MakeCert_ex(&cert, out, (word32)cap, type, dk->impl, &rng);
+    if (sz > 0) {
+#if !defined(NO_RSA)
+        sz = wc_SignCert(cert.bodySz, cert.sigType, out, (word32)cap, &key,
+                         NULL, &rng);
+#else
+        sz = wc_SignCert(cert.bodySz, cert.sigType, out, (word32)cap, NULL,
+                         &key, &rng);
+#endif
+    }
+    test_signkey_free(&key);
+    wc_FreeRng(&rng);
+    if (sz <= 0)
+        return -1;
+    *out_len = (size_t)sz;
+    return 0;
 }
 
 struct srv_ctx { int listen_fd; uint8_t* body; size_t len; WOLFSSL_CTX* ctx;
@@ -637,10 +689,10 @@ static int check_error_status(WOLFSSL_CTX* ctx, const WolfCertServerCfg* tmpl)
 /* A body that decodes to nothing is (NULL, 0) for /csrattrs and an HTTP
  * error for a certificate request. */
 static int check_body_decodes_empty(WOLFSSL_CTX* ctx,
-                                    const WolfCertServerCfg* tmpl)
+                                    const WolfCertServerCfg* tmpl,
+                                    const uint8_t* csr, size_t csr_len)
 {
     static uint8_t body[] = "\r\n";
-    static const uint8_t csr[] = { 0x30, 0x00 };
     struct srv_ctx sc = { .body = body, .len = sizeof(body) - 1, .ctx = ctx,
                           .conns = 5 };
     WolfCertServerCfg srv = *tmpl;
@@ -667,12 +719,686 @@ static int check_body_decodes_empty(WOLFSSL_CTX* ctx,
     REQUIRE(wolfcert_est_get_cacerts(&srv, WOLFCERT_ENCODING_DER,
                                      &certs) == WOLFCERT_ERR_HTTP);
     REQUIRE(certs.data == NULL);
-    REQUIRE(wolfcert_est_simple_enroll(&srv, csr, sizeof(csr), &res)
+    REQUIRE(wolfcert_est_simple_enroll(&srv, csr, csr_len, &res)
             == WOLFCERT_ERR_HTTP);
     REQUIRE(res.status == WOLFCERT_EST_STATUS_FAILURE);
     REQUIRE(res.cert_pem.data == NULL);
     pthread_join(tid, NULL);
     REQUIRE(meta.subject_dn == NULL && meta.key_usage == NULL);
+    return 0;
+}
+
+#ifdef WOLFCERT_HAVE_ECC
+/* An issued cert with an unknown critical extension still matches. */
+static int test_issued_crit_ext(const uint8_t* ca_der, size_t ca_len)
+{
+    const uint8_t* certs[2] = { ca_der, crit_ext_cert };
+    size_t lens[2] = { ca_len, sizeof(crit_ext_cert) };
+    WolfCertIssuedMatch m;
+    WolfCertBuffer p7 = { 0 };
+    WolfCertBuffer pem = { 0 };
+    int rc;
+
+    memset(&m, 0, sizeof(m));
+    REQUIRE(wolfcert_public_key_hash(crit_ext_cert, sizeof(crit_ext_cert),
+                                     CERT_TYPE, &m.key_oid, m.key_hash, NULL)
+            == WOLFCERT_OK);
+
+    REQUIRE(wolfcert_pkcs7_build_certs_only(certs, lens, 2, &p7, NULL)
+            == WOLFCERT_OK);
+    rc = wolfcert_pkcs7_issued_to_pem(p7.data, p7.len, &m, &pem, NULL);
+    wolfcert_buffer_free(&p7);
+    REQUIRE(rc == WOLFCERT_OK);
+    REQUIRE(test_pem_cert_is(&pem, 0, crit_ext_cert, sizeof(crit_ext_cert)));
+    wolfcert_buffer_free(&pem);
+    return 0;
+}
+#endif
+
+#if defined(WOLFCERT_HAVE_ECC) && defined(HAVE_COMP_KEY)
+/* crit_ext_cert with its SPKI re-encoded as a compressed point; the signature
+ * no longer verifies, which the match does not check. */
+static int compress_cert_point(uint8_t* out, size_t cap, size_t* out_len)
+{
+    const uint8_t* in = crit_ext_cert;
+    size_t in_len = sizeof(crit_ext_cert);
+    uint8_t spki[256], cspki[256];
+    word32 spki_len = sizeof(spki), idx = 0;
+    ecc_key key;
+    size_t off;
+    int clen;
+
+    if (wc_GetSubjectPubKeyInfoDerFromCert(in, (word32)in_len, spki,
+                                           &spki_len) < 0)
+        return -1;
+    for (off = 0; off + spki_len <= in_len; off++)
+        if (memcmp(in + off, spki, spki_len) == 0)
+            break;
+    if (off + spki_len > in_len || wc_ecc_init(&key) != 0)
+        return -1;
+    clen = wc_EccPublicKeyDecode(spki, &idx, &key, spki_len) == 0 ?
+           wc_EccPublicKeyToDer_ex(&key, cspki, sizeof(cspki), 1, 1) : -1;
+    wc_ecc_free(&key);
+    if (clen <= 0 || (word32)clen >= spki_len || in[1] != 0x82 ||
+            in[5] != 0x82 || in_len > cap)
+        return -1;
+
+    size_t delta = spki_len - (word32)clen;
+    memcpy(out, in, off);
+    memcpy(out + off, cspki, (size_t)clen);
+    memcpy(out + off + (size_t)clen, in + off + spki_len,
+           in_len - off - spki_len);
+    for (int i = 2; i <= 6; i += 4) {
+        size_t l = (((size_t)in[i] << 8) | in[i + 1]) - delta;
+        out[i]     = (uint8_t)(l >> 8);
+        out[i + 1] = (uint8_t)l;
+    }
+    *out_len = in_len - delta;
+    return 0;
+}
+
+/* A reply cert whose SPKI holds the same ECC key compressed still matches. */
+static int test_issued_compressed_point(const uint8_t* ca_der, size_t ca_len)
+{
+    uint8_t comp[sizeof(crit_ext_cert)];
+    size_t comp_len = 0;
+    WolfCertIssuedMatch m;
+    WolfCertBuffer p7 = { 0 };
+    WolfCertBuffer pem = { 0 };
+    int rc;
+
+    REQUIRE(compress_cert_point(comp, sizeof(comp), &comp_len) == 0);
+    const uint8_t* certs[2] = { ca_der, comp };
+    size_t lens[2] = { ca_len, comp_len };
+
+    memset(&m, 0, sizeof(m));
+    REQUIRE(wolfcert_public_key_hash(crit_ext_cert, sizeof(crit_ext_cert),
+                                     CERT_TYPE, &m.key_oid, m.key_hash, NULL)
+            == WOLFCERT_OK);
+    REQUIRE(wolfcert_pkcs7_build_certs_only(certs, lens, 2, &p7, NULL)
+            == WOLFCERT_OK);
+    rc = wolfcert_pkcs7_issued_to_pem(p7.data, p7.len, &m, &pem, NULL);
+    wolfcert_buffer_free(&p7);
+    REQUIRE(rc == WOLFCERT_OK);
+    REQUIRE(test_pem_cert_is(&pem, 0, comp, comp_len));
+    wolfcert_buffer_free(&pem);
+    return 0;
+}
+#endif
+
+/* A renewal skips the cert being renewed when the CA sends it first, also
+ * when current_cert carries a chain after it, in DER or PEM. */
+static int check_renewal_chain(WOLFSSL_CTX* ctx, const WolfCertServerCfg* tmpl,
+                               const WolfCertKey* dk, const WolfCertBuffer* csr,
+                               const uint8_t* ca_der, size_t ca_len)
+{
+    uint8_t old[4096], fresh[4096], cur[8192];
+    size_t old_len = 0, fresh_len = 0;
+    WolfCertBuffer p7 = { 0 };
+    WolfCertBuffer b64 = { 0 };
+    WolfCertServerCfg srv = *tmpl;
+    struct srv_ctx sc;
+    pthread_t tid;
+    char url[128];
+    int port = 0;
+    int n;
+
+    REQUIRE(make_device_cert(dk, old, sizeof(old), &old_len) == 0);
+    REQUIRE(make_device_cert(dk, fresh, sizeof(fresh), &fresh_len) == 0);
+    const uint8_t* certs[2] = { old, fresh };
+    size_t lens[2] = { old_len, fresh_len };
+    REQUIRE(wolfcert_pkcs7_build_certs_only(certs, lens, 2, &p7, NULL)
+            == WOLFCERT_OK);
+    REQUIRE(wolfcert_base64_encode(p7.data, p7.len, &b64, NULL)
+            == WOLFCERT_OK);
+    wolfcert_buffer_free(&p7);
+
+    sc = (struct srv_ctx){ .body = b64.data, .len = b64.len, .ctx = ctx,
+                           .conns = 2 };
+    sc.listen_fd = listen_loopback(&port);
+    REQUIRE(sc.listen_fd >= 0);
+    REQUIRE(pthread_create(&tid, NULL, srv_thread, &sc) == 0);
+    snprintf(url, sizeof(url), "https://127.0.0.1:%d/.well-known/est", port);
+    srv.server_url = url;
+
+    for (int pem = 0; pem <= 1; pem++) {
+        WolfCertEstResult res = { 0 };
+
+        if (pem) {
+            n = wc_DerToPem(old, (word32)old_len, cur, sizeof(cur), CERT_TYPE);
+            REQUIRE(n > 0);
+            int m = wc_DerToPem(ca_der, (word32)ca_len, cur + n,
+                                sizeof(cur) - (size_t)n, CERT_TYPE);
+            REQUIRE(m > 0);
+            n += m;
+        }
+        else {
+            memcpy(cur, old, old_len);
+            memcpy(cur + old_len, ca_der, ca_len);
+            n = (int)(old_len + ca_len);
+        }
+        REQUIRE(wolfcert_est_simple_reenroll(&srv, cur, (size_t)n, dk,
+                                             csr->data, csr->len, &res)
+                == WOLFCERT_OK);
+        REQUIRE(test_pem_cert_is(&res.cert_pem, 0, fresh, fresh_len));
+        REQUIRE(test_pem_cert_is(&res.cert_pem, 1, old, old_len));
+        wolfcert_est_result_free(&res);
+    }
+    pthread_join(tid, NULL);
+    wolfcert_buffer_free(&b64);
+    return 0;
+}
+
+/* Rewrites the ECC or RSA SPKI key OID in der to an unknown OID of the same
+ * length; -1 when der holds neither. */
+static int unknown_key_oid(uint8_t* der, size_t len)
+{
+    static const uint8_t ecc[] = { 0x06, 0x07, 0x2A, 0x86, 0x48, 0xCE, 0x3D,
+                                   0x02, 0x01 };
+    static const uint8_t rsa[] = { 0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7,
+                                   0x0D, 0x01, 0x01, 0x01 };
+
+    for (size_t i = 0; i < len; i++) {
+        if (i + sizeof(ecc) <= len && memcmp(der + i, ecc, sizeof(ecc)) == 0) {
+            der[i + sizeof(ecc) - 1] = 0x7F;
+            return 0;
+        }
+        if (i + sizeof(rsa) <= len && memcmp(der + i, rsa, sizeof(rsa)) == 0) {
+            der[i + sizeof(rsa) - 1] = 0x7F;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+/* A CSR whose key wolfSSL cannot decode still matches the cert that copies
+ * its SubjectPublicKeyInfo. */
+static int test_issued_raw_spki(const WolfCertKey* dk,
+                                const WolfCertBuffer* csr,
+                                const uint8_t* ca_der, size_t ca_len)
+{
+    uint8_t req[4096], cert[4096];
+    size_t cert_len = 0;
+    WolfCertIssuedMatch m;
+    WolfCertBuffer p7 = { 0 };
+    WolfCertBuffer pem = { 0 };
+    int rc;
+
+    REQUIRE(csr->len <= sizeof(req));
+    memcpy(req, csr->data, csr->len);
+    REQUIRE(make_device_cert(dk, cert, sizeof(cert), &cert_len) == 0);
+    if (unknown_key_oid(req, csr->len) != 0)
+        return 0;
+    REQUIRE(unknown_key_oid(cert, cert_len) == 0);
+
+    REQUIRE(wolfcert_issued_match_init(&m, req, csr->len, NULL, 0, NULL)
+            == WOLFCERT_OK);
+    REQUIRE(m.raw_spki);
+    const uint8_t* certs[2] = { ca_der, cert };
+    size_t lens[2] = { ca_len, cert_len };
+    REQUIRE(wolfcert_pkcs7_build_certs_only(certs, lens, 2, &p7, NULL)
+            == WOLFCERT_OK);
+    rc = wolfcert_pkcs7_issued_to_pem(p7.data, p7.len, &m, &pem, NULL);
+    wolfcert_buffer_free(&p7);
+    REQUIRE(rc == WOLFCERT_OK);
+    REQUIRE(test_pem_cert_is(&pem, 0, cert, cert_len));
+    REQUIRE(test_pem_cert_is(&pem, 1, ca_der, ca_len));
+    wolfcert_buffer_free(&pem);
+    return 0;
+}
+
+/* Body offset of the DER TLV at off, with its length in *n; 0 on error. */
+static size_t der_body(const uint8_t* d, size_t len, size_t off, size_t* n)
+{
+    size_t p = off + 2;
+
+    if (off + 2 > len)
+        return 0;
+    if (d[off + 1] < 0x80) {
+        *n = d[off + 1];
+    }
+    else if (d[off + 1] == 0x81 && off + 3 <= len) {
+        *n = d[off + 2];
+        p = off + 3;
+    }
+    else if (d[off + 1] == 0x82 && off + 4 <= len) {
+        *n = ((size_t)d[off + 2] << 8) | d[off + 3];
+        p = off + 4;
+    }
+    else {
+        return 0;
+    }
+    return p + *n <= len ? p : 0;
+}
+
+/* A device cert wolfSSL will not parse, its outer signature algorithm no
+ * longer matching the TBS one, with the SPKI left intact. */
+static int unparseable_cert(const WolfCertKey* dk, uint8_t* out, size_t cap,
+                            size_t* out_len)
+{
+    size_t n = 0, tbs, alg, oid;
+
+    if (make_device_cert(dk, out, cap, out_len) != 0)
+        return -1;
+    tbs = der_body(out, *out_len, 0, &n);
+    if (tbs == 0 || der_body(out, *out_len, tbs, &n) == 0)
+        return -1;
+    alg = der_body(out, *out_len, tbs, &n) + n;
+    if ((oid = der_body(out, *out_len, alg, &n)) == 0 ||
+            (oid = der_body(out, *out_len, oid, &n)) == 0 || n == 0)
+        return -1;
+    out[oid + n - 1] ^= 0x01;
+    return 0;
+}
+
+/* A CSR wolfSSL reads still matches an issued cert it cannot parse, by the
+ * SubjectPublicKeyInfo bytes. */
+static int test_issued_unparseable_cert(const WolfCertKey* dk,
+                                        const WolfCertBuffer* csr,
+                                        const uint8_t* ca_der, size_t ca_len)
+{
+    uint8_t cert[4096];
+    uint8_t hash[WC_SHA256_DIGEST_SIZE];
+    size_t cert_len = 0;
+    word32 oid = 0;
+    WolfCertIssuedMatch m;
+    WolfCertBuffer p7 = { 0 };
+    WolfCertBuffer pem = { 0 };
+    int rc;
+
+    REQUIRE(unparseable_cert(dk, cert, sizeof(cert), &cert_len) == 0);
+    REQUIRE(wolfcert_public_key_hash(cert, cert_len, CERT_TYPE, &oid, hash,
+                                     NULL) == WOLFCERT_ERR_PARSE);
+    REQUIRE(wolfcert_issued_match_init(&m, csr->data, csr->len, NULL, 0,
+                                       NULL) == WOLFCERT_OK);
+    REQUIRE(!m.raw_spki && m.has_spki);
+
+    const uint8_t* certs[2] = { ca_der, cert };
+    size_t lens[2] = { ca_len, cert_len };
+    REQUIRE(wolfcert_pkcs7_build_certs_only(certs, lens, 2, &p7, NULL)
+            == WOLFCERT_OK);
+    rc = wolfcert_pkcs7_issued_to_pem(p7.data, p7.len, &m, &pem, NULL);
+    wolfcert_buffer_free(&p7);
+    REQUIRE(rc == WOLFCERT_OK);
+    REQUIRE(test_pem_cert_is(&pem, 0, cert, cert_len));
+    wolfcert_buffer_free(&pem);
+
+    /* A reply cert nothing can read is passed over, not fatal; wolfSSL
+     * parses only the first. */
+    static const uint8_t junk[] = { 0x30, 0x03, 0x02, 0x01, 0x00 };
+    REQUIRE(make_device_cert(dk, cert, sizeof(cert), &cert_len) == 0);
+    const uint8_t* three[3] = { ca_der, junk, cert };
+    size_t three_len[3] = { ca_len, sizeof(junk), cert_len };
+    REQUIRE(wolfcert_pkcs7_build_certs_only(three, three_len, 3, &p7, NULL)
+            == WOLFCERT_OK);
+    rc = wolfcert_pkcs7_issued_to_pem(p7.data, p7.len, &m, &pem, NULL);
+    wolfcert_buffer_free(&p7);
+    REQUIRE(rc == WOLFCERT_OK);
+    REQUIRE(test_pem_cert_is(&pem, 0, cert, cert_len));
+    wolfcert_buffer_free(&pem);
+    return 0;
+}
+
+/* With the issued cert past the slots wolfSSL keeps, the error says so. */
+static int test_issued_max_certs(const WolfCertKey* dk,
+                                 const WolfCertBuffer* csr,
+                                 const uint8_t* ca_der, size_t ca_len)
+{
+    const uint8_t* certs[MAX_PKCS7_CERTS + 1];
+    size_t lens[MAX_PKCS7_CERTS + 1];
+    uint8_t dev[4096];
+    size_t dev_len = 0;
+    WolfCertIssuedMatch m;
+    WolfCertBuffer p7 = { 0 };
+    WolfCertBuffer pem = { 0 };
+    int rc;
+
+    REQUIRE(make_device_cert(dk, dev, sizeof(dev), &dev_len) == 0);
+    for (int i = 0; i < MAX_PKCS7_CERTS; i++) {
+        certs[i] = ca_der;
+        lens[i]  = ca_len;
+    }
+    certs[MAX_PKCS7_CERTS] = dev;
+    lens[MAX_PKCS7_CERTS]  = dev_len;
+    REQUIRE(wolfcert_issued_match_init(&m, csr->data, csr->len, NULL, 0,
+                                       NULL) == WOLFCERT_OK);
+    REQUIRE(wolfcert_pkcs7_build_certs_only(certs, lens, MAX_PKCS7_CERTS + 1,
+                                            &p7, NULL) == WOLFCERT_OK);
+    wolfcert_clear_error();
+    rc = wolfcert_pkcs7_issued_to_pem(p7.data, p7.len, &m, &pem, NULL);
+    wolfcert_buffer_free(&p7);
+    wolfcert_buffer_free(&pem);
+    REQUIRE(rc == WOLFCERT_ERR_PROTOCOL);
+    REQUIRE(strstr(wolfcert_last_error_message(), "MAX_PKCS7_CERTS") != NULL);
+    return 0;
+}
+
+/* A certs-only reply holding no certs is NOT_FOUND, not a key mismatch. */
+static int test_issued_empty_reply(const WolfCertBuffer* csr)
+{
+    static const uint8_t empty_p7[] = {
+        0x30, 0x23, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01,
+        0x07, 0x02, 0xa0, 0x16, 0x30, 0x14, 0x02, 0x01, 0x01, 0x31, 0x00,
+        0x30, 0x0b, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01,
+        0x07, 0x01, 0x31, 0x00
+    };
+    WolfCertIssuedMatch m;
+    WolfCertBuffer pem = { 0 };
+    int rc;
+
+    REQUIRE(wolfcert_issued_match_init(&m, csr->data, csr->len, NULL, 0,
+                                       NULL) == WOLFCERT_OK);
+    /* wolfSSL refuses a cert-less bundle with WC_PKCS7_WANT_READ_E today. */
+    rc = wolfcert_pkcs7_issued_to_pem(empty_p7, sizeof(empty_p7), &m, &pem,
+                                      NULL);
+    REQUIRE(rc != WOLFCERT_OK && rc != WOLFCERT_ERR_PROTOCOL);
+    REQUIRE(pem.data == NULL);
+    return 0;
+}
+
+/* A client cert the match cannot hash only loses the tie-break: the enroll
+ * still dials, where the old code failed before it. */
+static int test_client_hash_tiebreak(WolfCertKey* dk, const WolfCertBuffer* csr)
+{
+    static const uint8_t bad_cert[] = { 0x30, 0x84, 0xFF, 0xFF, 0xFF, 0xFF };
+    WolfCertTransport tr = { cfg_tr_connect, cfg_tr_read,
+                             cfg_tr_write, cfg_tr_disconnect, NULL };
+    WolfCertServerCfg srv = {
+        .protocol        = WOLFCERT_PROTO_EST,
+        .server_url      = "https://127.0.0.1:1/.well-known/est",
+        .verify_server   = 1,
+        .client_cert     = bad_cert,
+        .client_cert_len = sizeof(bad_cert),
+        .client_key_obj  = dk,
+    };
+    WolfCertEstSession* sess = NULL;
+    WolfCertEstResult res = { 0 };
+    int rc;
+
+    srv.transport = tr;
+    g_cfg_tr_connects = 0;
+    rc = wolfcert_est_simple_enroll(&srv, csr->data, csr->len, &res);
+    wolfcert_est_result_free(&res);
+    REQUIRE(rc != WOLFCERT_OK && rc != WOLFCERT_ERR_PARSE);
+    REQUIRE(g_cfg_tr_connects == 1);
+
+    g_cfg_tr_connects = 0;
+    rc = wolfcert_est_session_open(&srv, &sess);
+    if (rc == WOLFCERT_OK) {
+        rc = wolfcert_est_session_simple_enroll(sess, csr->data, csr->len,
+                                                &res);
+        wolfcert_est_result_free(&res);
+        wolfcert_est_session_close(sess);
+    }
+    REQUIRE(rc != WOLFCERT_OK && rc != WOLFCERT_ERR_PARSE);
+    REQUIRE(g_cfg_tr_connects == 1);
+    return 0;
+}
+
+#if defined(WOLFCERT_HAVE_RSA) && defined(WC_RSA_PSS)
+/* A CSR key certified under the other RSA SPKI OID, rsaEncryption against
+ * RSASSA-PSS, still matches. */
+static int test_issued_rsa_pss(const uint8_t* ca_der, size_t ca_len)
+{
+    static const uint8_t rsa[] = { 0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7,
+                                   0x0D, 0x01, 0x01, 0x01 };
+    uint8_t pss[sizeof(server_cert_der_2048)];
+    size_t pss_len = sizeof(server_cert_der_2048);
+    WolfCertIssuedMatch m;
+    WolfCertBuffer p7 = { 0 };
+    WolfCertBuffer pem = { 0 };
+    word32 oid = 0;
+    size_t i;
+    int rc;
+
+    memcpy(pss, server_cert_der_2048, pss_len);
+    for (i = 0; i + sizeof(rsa) <= pss_len; i++)
+        if (memcmp(pss + i, rsa, sizeof(rsa)) == 0)
+            break;
+    REQUIRE(i + sizeof(rsa) <= pss_len);
+    pss[i + sizeof(rsa) - 1] = 0x0A;
+    REQUIRE(wolfcert_public_key_hash(pss, pss_len, CERT_TYPE, &oid,
+                                     m.key_hash, NULL) == WOLFCERT_OK);
+    REQUIRE(oid == RSAPSSk);
+
+    memset(&m, 0, sizeof(m));
+    REQUIRE(wolfcert_public_key_hash(server_cert_der_2048,
+                                     sizeof(server_cert_der_2048), CERT_TYPE,
+                                     &m.key_oid, m.key_hash, NULL)
+            == WOLFCERT_OK);
+    const uint8_t* certs[2] = { ca_der, pss };
+    size_t lens[2] = { ca_len, pss_len };
+    REQUIRE(wolfcert_pkcs7_build_certs_only(certs, lens, 2, &p7, NULL)
+            == WOLFCERT_OK);
+    rc = wolfcert_pkcs7_issued_to_pem(p7.data, p7.len, &m, &pem, NULL);
+    wolfcert_buffer_free(&p7);
+    REQUIRE(rc == WOLFCERT_OK);
+    REQUIRE(test_pem_cert_is(&pem, 0, pss, pss_len));
+    wolfcert_buffer_free(&pem);
+    return 0;
+}
+#endif
+
+/* Serve one canned issued-cert reply holding certs on conns connections. */
+static int start_canned(WOLFSSL_CTX* ctx, struct srv_ctx* sc, pthread_t* tid,
+                        WolfCertBuffer* b64, const uint8_t* const* certs,
+                        const size_t* lens, size_t n, int conns,
+                        char* url, size_t url_cap)
+{
+    WolfCertBuffer p7 = { 0 };
+    int port = 0;
+
+    REQUIRE(wolfcert_pkcs7_build_certs_only(certs, lens, n, &p7, NULL)
+            == WOLFCERT_OK);
+    REQUIRE(wolfcert_base64_encode(p7.data, p7.len, b64, NULL)
+            == WOLFCERT_OK);
+    wolfcert_buffer_free(&p7);
+    *sc = (struct srv_ctx){ .body = b64->data, .len = b64->len, .ctx = ctx,
+                            .conns = conns };
+    sc->listen_fd = listen_loopback(&port);
+    REQUIRE(sc->listen_fd >= 0);
+    REQUIRE(pthread_create(tid, NULL, srv_thread, sc) == 0);
+    snprintf(url, url_cap, "https://127.0.0.1:%d/.well-known/est", port);
+    return 0;
+}
+
+/* A same-key renewal answered with only the unchanged cert takes that cert. */
+static int check_renewal_unchanged(WOLFSSL_CTX* ctx,
+                                   const WolfCertServerCfg* tmpl,
+                                   const WolfCertKey* dk,
+                                   const WolfCertBuffer* csr)
+{
+    uint8_t old[4096];
+    size_t old_len = 0;
+    WolfCertBuffer b64 = { 0 };
+    WolfCertServerCfg srv = *tmpl;
+    WolfCertEstResult res = { 0 };
+    struct srv_ctx sc;
+    pthread_t tid;
+    char url[128];
+
+    REQUIRE(make_device_cert(dk, old, sizeof(old), &old_len) == 0);
+    const uint8_t* certs[1] = { old };
+    size_t lens[1] = { old_len };
+    REQUIRE(start_canned(ctx, &sc, &tid, &b64, certs, lens, 1, 1, url,
+                         sizeof(url)) == 0);
+    srv.server_url = url;
+
+    REQUIRE(wolfcert_est_simple_reenroll(&srv, old, old_len, dk, csr->data,
+                                         csr->len, &res) == WOLFCERT_OK);
+    pthread_join(tid, NULL);
+    wolfcert_buffer_free(&b64);
+    REQUIRE(res.status == WOLFCERT_EST_STATUS_SUCCESS);
+    REQUIRE(test_pem_cert_is(&res.cert_pem, 0, old, old_len));
+    wolfcert_est_result_free(&res);
+    return 0;
+}
+
+/* A simpleenroll under a TLS client cert holding the same key skips that
+ * cert when the CA sends it first, one-shot and on a session. */
+static int check_enroll_skips_client(WOLFSSL_CTX* ctx,
+                                     const WolfCertServerCfg* tmpl,
+                                     WolfCertKey* dk,
+                                     const WolfCertBuffer* csr)
+{
+    uint8_t old[4096], fresh[4096];
+    size_t old_len = 0, fresh_len = 0;
+    WolfCertBuffer b64 = { 0 };
+    WolfCertServerCfg srv = *tmpl;
+    WolfCertEstSession* sess = NULL;
+    WolfCertEstResult res = { 0 };
+    struct srv_ctx sc;
+    pthread_t tid;
+    char url[128];
+
+    REQUIRE(make_device_cert(dk, old, sizeof(old), &old_len) == 0);
+    REQUIRE(make_device_cert(dk, fresh, sizeof(fresh), &fresh_len) == 0);
+    const uint8_t* certs[2] = { old, fresh };
+    size_t lens[2] = { old_len, fresh_len };
+    REQUIRE(start_canned(ctx, &sc, &tid, &b64, certs, lens, 2, 2, url,
+                         sizeof(url)) == 0);
+    srv.server_url      = url;
+    srv.client_cert     = old;
+    srv.client_cert_len = old_len;
+    srv.client_key_obj  = dk;
+
+    REQUIRE(wolfcert_est_simple_enroll(&srv, csr->data, csr->len, &res)
+            == WOLFCERT_OK);
+    REQUIRE(test_pem_cert_is(&res.cert_pem, 0, fresh, fresh_len));
+    REQUIRE(test_pem_cert_is(&res.cert_pem, 1, old, old_len));
+    wolfcert_est_result_free(&res);
+
+    REQUIRE(wolfcert_est_session_open(&srv, &sess) == WOLFCERT_OK);
+    REQUIRE(wolfcert_est_session_simple_enroll(sess, csr->data, csr->len,
+                                               &res) == WOLFCERT_OK);
+    wolfcert_est_session_close(sess);
+    pthread_join(tid, NULL);
+    wolfcert_buffer_free(&b64);
+    REQUIRE(test_pem_cert_is(&res.cert_pem, 0, fresh, fresh_len));
+    wolfcert_est_result_free(&res);
+    return 0;
+}
+
+/* A simpleenroll reply holding only the TLS client cert is not an issue,
+ * though that cert holds the CSR's key. */
+static int check_enroll_only_client(WOLFSSL_CTX* ctx,
+                                    const WolfCertServerCfg* tmpl,
+                                    WolfCertKey* dk,
+                                    const WolfCertBuffer* csr)
+{
+    uint8_t old[4096];
+    size_t old_len = 0;
+    WolfCertBuffer b64 = { 0 };
+    WolfCertServerCfg srv = *tmpl;
+    WolfCertEstResult res = { 0 };
+    struct srv_ctx sc;
+    pthread_t tid;
+    char url[128];
+    int rc;
+
+    REQUIRE(make_device_cert(dk, old, sizeof(old), &old_len) == 0);
+    const uint8_t* certs[1] = { old };
+    size_t lens[1] = { old_len };
+    REQUIRE(start_canned(ctx, &sc, &tid, &b64, certs, lens, 1, 1, url,
+                         sizeof(url)) == 0);
+    srv.server_url      = url;
+    srv.client_cert     = old;
+    srv.client_cert_len = old_len;
+    srv.client_key_obj  = dk;
+
+    rc = wolfcert_est_simple_enroll(&srv, csr->data, csr->len, &res);
+    pthread_join(tid, NULL);
+    wolfcert_buffer_free(&b64);
+    REQUIRE(rc == WOLFCERT_ERR_PROTOCOL);
+    REQUIRE(res.status == WOLFCERT_EST_STATUS_FAILURE);
+    REQUIRE(test_pem_cert_is(&res.cert_pem, 0, old, old_len));
+    wolfcert_est_result_free(&res);
+    return 0;
+}
+
+/* A CSR wolfSSL cannot parse fails before any request is sent, one-shot and
+ * on a session. */
+static int check_unparseable_csr(WOLFSSL_CTX* ctx,
+                                 const WolfCertServerCfg* tmpl)
+{
+    static const uint8_t not_csr[] = { 0x30, 0x03, 0x02, 0x01, 0x00 };
+    struct srv_ctx sc = { .ctx = ctx, .conns = 1 };
+    WolfCertServerCfg srv = *tmpl;
+    WolfCertEstSession* sess = NULL;
+    WolfCertEstResult res = { 0 };
+    pthread_t tid;
+    char url[128];
+    int port = 0;
+    int rc;
+
+    /* The one-shot fails before dialing, which to port 1 would give IO. */
+    srv.server_url = "https://127.0.0.1:1/.well-known/est";
+    rc = wolfcert_est_simple_enroll(&srv, not_csr, sizeof(not_csr), &res);
+    REQUIRE(rc == WOLFCERT_ERR_PARSE);
+    REQUIRE(res.status == WOLFCERT_EST_STATUS_UNSET);
+
+    sc.listen_fd = listen_loopback(&port);
+    REQUIRE(sc.listen_fd >= 0);
+    REQUIRE(pthread_create(&tid, NULL, srv_thread, &sc) == 0);
+    snprintf(url, sizeof(url), "https://127.0.0.1:%d/.well-known/est", port);
+    srv.server_url = url;
+    REQUIRE(wolfcert_est_session_open(&srv, &sess) == WOLFCERT_OK);
+    REQUIRE(wolfcert_est_session_simple_enroll(sess, not_csr, sizeof(not_csr),
+                                               &res) == WOLFCERT_ERR_PARSE);
+    REQUIRE(wolfcert_est_session_simple_enroll_nb(sess, not_csr,
+                                                  sizeof(not_csr), &res)
+            == WOLFCERT_ERR_PARSE);
+    wolfcert_est_session_close(sess);
+    pthread_join(tid, NULL);
+    REQUIRE(sc.request_len == 0);
+    return 0;
+}
+
+/* An enroll reply without a cert for the CSR's key is a protocol error. */
+static int check_no_key_cert(WOLFSSL_CTX* ctx, const WolfCertServerCfg* tmpl,
+                             const uint8_t* csr, size_t csr_len,
+                             const uint8_t* ca_der, size_t ca_len)
+{
+    uint8_t tls_der[4096];
+    int tls_len = wc_CertPemToDer(tmpl->trust_anchors,
+                                  (int)tmpl->trust_anchors_len, tls_der,
+                                  sizeof(tls_der), CERT_TYPE);
+    const uint8_t* certs[2] = { ca_der, tls_der };
+    size_t lens[2] = { ca_len, 0 };
+    WolfCertBuffer p7 = { 0 };
+    WolfCertBuffer b64 = { 0 };
+    WolfCertServerCfg srv = *tmpl;
+    WolfCertEstResult res = { 0 };
+    struct srv_ctx sc;
+    pthread_t tid;
+    char url[128];
+    int port = 0;
+    int rc;
+
+    REQUIRE(tls_len > 0);
+    lens[1] = (size_t)tls_len;
+    REQUIRE(wolfcert_pkcs7_build_certs_only(certs, lens, 2, &p7, NULL)
+            == WOLFCERT_OK);
+    REQUIRE(wolfcert_base64_encode(p7.data, p7.len, &b64, NULL)
+            == WOLFCERT_OK);
+    wolfcert_buffer_free(&p7);
+
+    sc = (struct srv_ctx){ .body = b64.data, .len = b64.len, .ctx = ctx,
+                           .conns = 1 };
+    sc.listen_fd = listen_loopback(&port);
+    REQUIRE(sc.listen_fd >= 0);
+    REQUIRE(pthread_create(&tid, NULL, srv_thread, &sc) == 0);
+    snprintf(url, sizeof(url), "https://127.0.0.1:%d/.well-known/est", port);
+    srv.server_url = url;
+
+    rc = wolfcert_est_simple_enroll(&srv, csr, csr_len, &res);
+    pthread_join(tid, NULL);
+    wolfcert_buffer_free(&b64);
+    REQUIRE(rc == WOLFCERT_ERR_PROTOCOL);
+    REQUIRE(res.status == WOLFCERT_EST_STATUS_FAILURE);
+    REQUIRE(test_pem_cert_is(&res.cert_pem, 0, ca_der, ca_len));
+    REQUIRE(test_pem_cert_is(&res.cert_pem, 1, tls_der, lens[1]));
+    wolfcert_est_result_free(&res);
     return 0;
 }
 
@@ -708,11 +1434,39 @@ int main(void)
     uint8_t ca_der[4096];
     size_t ca_len = 0;
     REQUIRE(make_test_ca(ca_der, sizeof(ca_der), &ca_len) == 0);
+#ifdef WOLFCERT_HAVE_ECC
+    REQUIRE(test_issued_crit_ext(ca_der, ca_len) == 0);
+#endif
+#if defined(WOLFCERT_HAVE_ECC) && defined(HAVE_COMP_KEY)
+    REQUIRE(test_issued_compressed_point(ca_der, ca_len) == 0);
+#endif
 
-    const uint8_t* certs_arr[1] = { ca_der };
-    size_t certs_sz[1] = { ca_len };
+    WolfCertKeyCfg kcfg = { .type = TEST_ENROLL_KEY_TYPE,
+                            .param = TEST_ENROLL_KEY_PARAM,
+                            .dev_id = INVALID_DEVID };
+    WolfCertKey* dk = NULL;
+    REQUIRE(wolfcert_key_generate(&kcfg, &dk) == WOLFCERT_OK);
+    WolfCertCertMeta meta = { .subject_dn = "CN=device-99" };
+    WolfCertBuffer csr = { 0 };
+    REQUIRE(wolfcert_csr_build(dk, &meta, &csr) == WOLFCERT_OK);
+    REQUIRE(test_issued_raw_spki(dk, &csr, ca_der, ca_len) == 0);
+    REQUIRE(test_issued_unparseable_cert(dk, &csr, ca_der, ca_len) == 0);
+    REQUIRE(test_issued_max_certs(dk, &csr, ca_der, ca_len) == 0);
+    REQUIRE(test_issued_empty_reply(&csr) == 0);
+    REQUIRE(test_client_hash_tiebreak(dk, &csr) == 0);
+#if defined(WOLFCERT_HAVE_RSA) && defined(WC_RSA_PSS)
+    REQUIRE(test_issued_rsa_pss(ca_der, ca_len) == 0);
+#endif
+
+    /* The CA cert comes first, so every enroll result must reorder. */
+    uint8_t dev_der[4096];
+    size_t dev_len = 0;
+    REQUIRE(make_device_cert(dk, dev_der, sizeof(dev_der), &dev_len) == 0);
+    const uint8_t* certs_arr[2] = { ca_der, dev_der };
+    size_t certs_sz[2] = { ca_len, dev_len };
     WolfCertBuffer p7 = { 0 };
-    REQUIRE(wolfcert_pkcs7_build_certs_only(certs_arr, certs_sz, 1, &p7, NULL) == WOLFCERT_OK);
+    REQUIRE(wolfcert_pkcs7_build_certs_only(certs_arr, certs_sz, 2, &p7, NULL)
+            == WOLFCERT_OK);
 
     WolfCertBuffer b64 = { 0 };
     REQUIRE(wolfcert_base64_encode(p7.data, p7.len, &b64, NULL) == WOLFCERT_OK);
@@ -747,27 +1501,21 @@ int main(void)
     WolfCertBuffer ca_pem = { 0 };
     REQUIRE(wolfcert_est_get_cacerts(&srv, WOLFCERT_ENCODING_PEM,
                                      &ca_pem) == WOLFCERT_OK);
-    REQUIRE(memmem(ca_pem.data, ca_pem.len, "BEGIN CERTIFICATE", 17) != NULL);
+    /* /cacerts keeps the order it was sent in. */
+    REQUIRE(test_pem_cert_is(&ca_pem, 0, ca_der, ca_len));
     wolfcert_buffer_free(&ca_pem);
-
-    WolfCertKeyCfg kcfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
-                            .dev_id = INVALID_DEVID };
-    WolfCertKey* dk = NULL;
-    REQUIRE(wolfcert_key_generate(&kcfg, &dk) == WOLFCERT_OK);
-    WolfCertCertMeta meta = { .subject_dn = "CN=device-99" };
-    WolfCertBuffer csr = { 0 };
-    REQUIRE(wolfcert_csr_build(dk, &meta, &csr) == WOLFCERT_OK);
 
     WolfCertEstResult enrolled = { 0 };
     REQUIRE(wolfcert_est_simple_enroll(&srv, csr.data, csr.len, &enrolled) == WOLFCERT_OK);
-    REQUIRE(memmem(enrolled.cert_pem.data, enrolled.cert_pem.len,
-                   "BEGIN CERTIFICATE", 17) != NULL);
+    REQUIRE(test_pem_cert_is(&enrolled.cert_pem, 0, dev_der, dev_len));
+    REQUIRE(test_pem_cert_is(&enrolled.cert_pem, 1, ca_der, ca_len));
     wolfcert_est_result_free(&enrolled);
 
     WolfCertEstResult reenrolled = { 0 };
     REQUIRE(wolfcert_est_simple_reenroll(&srv, ca_der, ca_len, dk,
                                          csr.data, csr.len, &reenrolled) == WOLFCERT_OK
             && reenrolled.status == WOLFCERT_EST_STATUS_SUCCESS);
+    REQUIRE(test_pem_cert_is(&reenrolled.cert_pem, 0, dev_der, dev_len));
     wolfcert_est_result_free(&reenrolled);
 
     /* Session enroll sends the base64 CTE header (RFC 7030 section 4.2.1). */
@@ -776,8 +1524,7 @@ int main(void)
     WolfCertEstResult sess_enrolled = { 0 };
     REQUIRE(wolfcert_est_session_simple_enroll(sess, csr.data, csr.len,
                                                &sess_enrolled) == WOLFCERT_OK);
-    REQUIRE(memmem(sess_enrolled.cert_pem.data, sess_enrolled.cert_pem.len,
-                   "BEGIN CERTIFICATE", 17) != NULL);
+    REQUIRE(test_pem_cert_is(&sess_enrolled.cert_pem, 0, dev_der, dev_len));
     wolfcert_est_result_free(&sess_enrolled);
     wolfcert_est_session_close(sess);
 
@@ -787,15 +1534,22 @@ int main(void)
     WolfCertEstResult sess_nb_enrolled = { 0 };
     REQUIRE(pump_simple_enroll(sess_nb, csr.data, csr.len,
                                &sess_nb_enrolled) == 0);
-    REQUIRE(memmem(sess_nb_enrolled.cert_pem.data, sess_nb_enrolled.cert_pem.len,
-                   "BEGIN CERTIFICATE", 17) != NULL);
+    REQUIRE(test_pem_cert_is(&sess_nb_enrolled.cert_pem, 0, dev_der,
+                             dev_len));
     wolfcert_est_result_free(&sess_nb_enrolled);
     wolfcert_est_session_close(sess_nb);
 
     REQUIRE(check_empty_body(ctx, &srv, csr.data, csr.len, ca_der, ca_len,
                              dk) == 0);
     REQUIRE(check_error_status(ctx, &srv) == 0);
-    REQUIRE(check_body_decodes_empty(ctx, &srv) == 0);
+    REQUIRE(check_body_decodes_empty(ctx, &srv, csr.data, csr.len) == 0);
+    REQUIRE(check_unparseable_csr(ctx, &srv) == 0);
+    REQUIRE(check_renewal_chain(ctx, &srv, dk, &csr, ca_der, ca_len) == 0);
+    REQUIRE(check_renewal_unchanged(ctx, &srv, dk, &csr) == 0);
+    REQUIRE(check_enroll_skips_client(ctx, &srv, dk, &csr) == 0);
+    REQUIRE(check_enroll_only_client(ctx, &srv, dk, &csr) == 0);
+    REQUIRE(check_no_key_cert(ctx, &srv, csr.data, csr.len, ca_der,
+                              ca_len) == 0);
 
     wolfcert_buffer_free(&csr);
     wolfcert_key_free(dk);

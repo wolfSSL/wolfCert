@@ -131,6 +131,11 @@ The layering rules that matter to an integrator:
 
 ## 3. Protocols: EST and SCEP
 
+**Issued certificate first.** Every enroll and renewal result, EST and SCEP,
+starts with the certificate that holds the CSR's public key, followed by any
+other certificates in the order the server sent them. A reply with no such
+certificate fails with `WOLFCERT_ERR_PROTOCOL`.
+
 ### EST (RFC 7030)
 
 EST is a REST-shaped enrollment protocol over HTTPS. wolfCert implements the
@@ -192,8 +197,10 @@ server no longer asks for it during a TLS 1.3 handshake.
 `Retry-After` (RFC 7030 §4.2.3), symmetrical to SCEP's PENDING. The enroll
 calls, one-shot and session, surface this as a `WolfCertEstResult` with
 `UNSET` / `SUCCESS` / `FAILURE` / `PENDING` status and a `retry_after_sec`
-hint; `wolfcert_client_enroll` and `wolfcert_client_reenroll` return
-`WOLFCERT_ERR_PENDING`.
+hint. `wolfcert_client_enroll` and `wolfcert_client_reenroll` fill the same
+result and return `WOLFCERT_ERR_PENDING`; given an `out_csr`, they also hand
+out the key and CSR so the caller can re-POST the same request through
+`wolfcert_est_simple_enroll` or `wolfcert_est_simple_reenroll`.
 
 **`/csrattrs` key-policy pinning.** `wolfcert_est_parse_csr_attrs` decodes the
 RFC 7030 §4.5.2 response into both a raw per-item OID/values list and

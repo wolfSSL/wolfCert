@@ -22,6 +22,9 @@
 
 #include <wolfcert/types.h>
 #include <wolfcert/keygen.h>
+#ifdef WOLFCERT_HAVE_EST
+#  include <wolfcert/est.h>
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -49,26 +52,38 @@ WOLFCERT_API int  wolfcert_client_fetch_meta(WolfCertClient* client,
                                              const WolfCertServerCfg* srv,
                                              WolfCertCertMeta* meta);
 
-/* Generate a new key (honoring cfg->dev_id for CryptoCb offloading), build
- * a CSR from meta, and enroll. On success out_key owns the key and
- * out_cert_pem owns the issued certificate. A pending enrollment returns
- * WOLFCERT_ERR_PENDING. On any failure neither is handed out, except that a
- * key generated under a key_id stays in the backend and out_key still owns
- * it, so the caller can delete it there under wolfcert_key_id. Every call
- * generates a new key, so polling a pending request with that key takes
- * wolfcert_csr_build and wolfcert_est_simple_enroll. */
+#ifdef WOLFCERT_HAVE_EST
+/* Generate a key from key_cfg (dev_id selects a CryptoCb device), build a CSR
+ * from meta and POST it to /simpleenroll. out is filled as
+ * wolfcert_est_simple_enroll fills it and is freed with
+ * wolfcert_est_result_free after any return.
+ * - WOLFCERT_OK, status SUCCESS: out->cert_pem holds the issued cert first
+ *   and *out_key owns the key.
+ * - WOLFCERT_ERR_PENDING, status PENDING, with retry_after_sec: when out_csr
+ *   is not NULL, *out_key and *out_csr hold the key and the DER CSR to re-POST
+ *   through wolfcert_est_simple_enroll. With out_csr NULL the CSR is dropped,
+ *   a software key is freed and a key generated under a key_id is still
+ *   handed out so the caller can delete it from the backend. out_csr may
+ *   hold the challengePassword; free it with wolfcert_buffer_free_secure.
+ * - Any other error: a key generated under a key_id is still handed out so
+ *   the caller can delete it from the backend; a software key is freed. */
 WOLFCERT_API int  wolfcert_client_enroll(WolfCertClient* client,
                                          const WolfCertServerCfg* srv,
                                          const WolfCertKeyCfg* key_cfg,
                                          const WolfCertCertMeta* meta,
                                          WolfCertKey** out_key,
-                                         WolfCertBuffer* out_cert_pem);
+                                         WolfCertEstResult* out,
+                                         WolfCertBuffer* out_csr);
 
-/* Re-enroll using an existing cert/key; a NULL new_key_cfg reuses the key.
- * The CSR copies current_cert's Subject and SAN: WOLFCERT_ERR_BAD_ARG if meta
- * sets them, _PARSE for a bad cert, _UNSUPPORTED if one cannot be carried.
- * A pending renewal returns WOLFCERT_ERR_PENDING. On failure a new key with a
- * key_id stays in the backend and in out_key, as for enroll. */
+/* POST a renewal of current_cert to /simplereenroll over TLS client
+ * authentication with current_cert and current_key. A NULL new_key_cfg reuses
+ * current_key and leaves *out_key NULL; otherwise a new key is generated as
+ * for wolfcert_client_enroll. The CSR copies current_cert's Subject and SAN:
+ * WOLFCERT_ERR_BAD_ARG if meta sets them, WOLFCERT_ERR_PARSE for a bad
+ * current_cert, WOLFCERT_ERR_UNSUPPORTED if one cannot be carried. Results,
+ * out, out_csr and key ownership are as for wolfcert_client_enroll; a parked
+ * renewal is re-POSTed through wolfcert_est_simple_reenroll with the same
+ * current_cert and current_key. */
 WOLFCERT_API int  wolfcert_client_reenroll(WolfCertClient* client,
                                            const WolfCertServerCfg* srv,
                                            const uint8_t* current_cert, size_t current_cert_len,
@@ -76,7 +91,9 @@ WOLFCERT_API int  wolfcert_client_reenroll(WolfCertClient* client,
                                            const WolfCertKeyCfg* new_key_cfg,
                                            const WolfCertCertMeta* meta,
                                            WolfCertKey** out_key,
-                                           WolfCertBuffer* out_cert_pem);
+                                           WolfCertEstResult* out,
+                                           WolfCertBuffer* out_csr);
+#endif /* WOLFCERT_HAVE_EST */
 
 #ifdef __cplusplus
 }

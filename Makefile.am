@@ -173,10 +173,12 @@ test_est_roundtrip_LDADD   = libwolfcert.la $(WOLFSSL_LIBS) -lpthread
 test_est_tls_roundtrip_SOURCES = tests/integration/test_est_tls_roundtrip.c
 test_est_tls_roundtrip_LDADD   = libwolfcert.la $(WOLFSSL_LIBS) -lpthread
 test_est_mtls_roundtrip_SOURCES = tests/integration/test_est_mtls_roundtrip.c
+test_est_mtls_roundtrip_CPPFLAGS = $(AM_CPPFLAGS) -I$(top_srcdir)/src
 test_est_mtls_roundtrip_LDADD   = libwolfcert.la $(WOLFSSL_LIBS) -lpthread
 test_est_mldsa_roundtrip_SOURCES = tests/integration/test_est_mldsa_roundtrip.c
 test_est_mldsa_roundtrip_LDADD   = libwolfcert.la $(WOLFSSL_LIBS) -lpthread
 test_est_devid_roundtrip_SOURCES = tests/integration/test_est_devid_roundtrip.c
+test_est_devid_roundtrip_CPPFLAGS = $(AM_CPPFLAGS) -I$(top_srcdir)/src
 test_est_devid_roundtrip_LDADD   = libwolfcert.la $(WOLFSSL_LIBS) -lpthread
 test_est_pha_roundtrip_SOURCES = tests/integration/test_est_pha_roundtrip.c
 test_est_pha_roundtrip_LDADD   = libwolfcert.la $(WOLFSSL_LIBS) -lpthread
@@ -191,6 +193,7 @@ test_est_csr_attrs_enforce_LDADD   = libwolfcert.la $(WOLFSSL_LIBS) -lpthread
 test_est_chunked_robustness_SOURCES = tests/integration/test_est_chunked_robustness.c
 test_est_chunked_robustness_LDADD   = libwolfcert.la $(WOLFSSL_LIBS) -lpthread
 test_est_pending_roundtrip_SOURCES = tests/integration/test_est_pending_roundtrip.c
+test_est_pending_roundtrip_CPPFLAGS = $(AM_CPPFLAGS) -I$(top_srcdir)/src
 test_est_pending_roundtrip_LDADD   = libwolfcert.la $(WOLFSSL_LIBS) -lpthread
 endif
 endif

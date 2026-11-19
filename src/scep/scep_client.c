@@ -729,6 +729,7 @@ struct WolfCertScepSession {
     uint8_t*             in_signer_copy;    /* owned: _nb copy or self-signed */
     uint8_t*             in_signer_key;     /* key DER, zeroized */
     size_t               in_signer_key_len;
+    WolfCertIssuedMatch  in_match;          /* unused by GetCert */
     uint8_t*             in_txid;           /* owned, from scep_prepare */
     size_t               in_txid_len;
     uint8_t              in_nonce[SCEP_NONCE_SZ];
@@ -869,6 +870,7 @@ static void scep_session_reset(WolfCertScepSession* s)
         s->in_signer_key = NULL;
     }
     s->in_signer_key_len = 0;
+    memset(&s->in_match, 0, sizeof(s->in_match));
     WOLFCERT_XFREE(s->in_txid, s->heap);
     s->in_txid = NULL;
     s->in_txid_len = 0;
@@ -1143,7 +1145,11 @@ static int scep_finish(const WolfCertScepSession* s, WolfCertScepResult* out)
                                           s->in_signer_key, s->in_signer_key_len,
                                           resp_env.data, resp_env.len, &inner,
                                           wolfcert_default_dev_id(), heap);
-            if (rc == WOLFCERT_OK)
+            if (rc == WOLFCERT_OK && s->in_op != SCEP_OP_GET_CERT)
+                rc = wolfcert_pkcs7_issued_to_pem(inner.data, inner.len,
+                                                  &s->in_match,
+                                                  &out->cert_pem, heap);
+            else if (rc == WOLFCERT_OK)
                 rc = wolfcert_pkcs7_certs_to_pem(inner.data, inner.len,
                                                  &out->cert_pem, heap);
             if (rc == WOLFCERT_OK)
@@ -1156,6 +1162,40 @@ static int scep_finish(const WolfCertScepSession* s, WolfCertScepResult* out)
     WOLFCERT_XFREE(fail_info, heap);
     wolfcert_buffer_free(&inner);
     wolfcert_buffer_free(&resp_env);
+    return rc;
+}
+
+/* *out 1 when cert is not self-issued: its issuer differs from its subject. */
+static int signer_not_self_issued(const uint8_t* cert, size_t cert_len,
+                                  void* heap, int* out)
+{
+    WolfCertBuffer pem_der = { 0 };
+    int rc = WOLFCERT_OK;
+
+    *out = 0;
+    if (!wolfcert_buffer_is_der(cert, cert_len)) {
+        rc = wolfcert_pem_cert_to_der(cert, cert_len, &pem_der, heap);
+        if (rc != WOLFCERT_OK)
+            return rc == WOLFCERT_ERR_MEMORY ? rc : WOLFCERT_OK;
+        cert = pem_der.data;
+        cert_len = pem_der.len;
+    }
+
+    DecodedCert* dc = (DecodedCert*)WOLFCERT_XMALLOC(sizeof(*dc), heap);
+    if (dc == NULL) {
+        wolfcert_buffer_free(&pem_der);
+        return WOLFCERT_ERR_MEMORY;
+    }
+
+    wc_InitDecodedCert(dc, cert, (word32)cert_len, heap);
+    int prc = wc_ParseCert(dc, CERT_TYPE, NO_VERIFY, NULL);
+    if (prc == MEMORY_E)
+        rc = WOLFCERT_ERR_MEMORY;
+    else if (prc == 0 || prc == ASN_CRIT_EXT_E)
+        *out = memcmp(dc->issuerHash, dc->subjectHash, KEYID_SIZE) != 0;
+    wc_FreeDecodedCert(dc);
+    WOLFCERT_XFREE(dc, heap);
+    wolfcert_buffer_free(&pem_der);
     return rc;
 }
 
@@ -1172,19 +1212,44 @@ static int scep_session_begin_pki_op(WolfCertScepSession* s, const ScepCall* c,
     char* url = NULL;
     int use_post = 0;
     int key_len = 0;
+    uint8_t old_hash[WC_SHA256_DIGEST_SIZE];
+    int has_old = 0;
+    int allow_old = (c->op == SCEP_OP_RENEWAL);
     int rc = WOLFCERT_OK;
 
     c->res_out->heap = heap;
 
-    if (c->cert == NULL) {
+    if (c->cert != NULL && c->op != SCEP_OP_GET_CERT) {
+        rc = wolfcert_cert_der_hash(c->cert, c->cert_len, old_hash, heap);
+        has_old = (rc == WOLFCERT_OK);
+        if (rc != WOLFCERT_ERR_MEMORY)
+            rc = WOLFCERT_OK;
+    }
+    /* A request signed with a CA-issued cert renews it. */
+    if (rc == WOLFCERT_OK && has_old && !allow_old)
+        rc = signer_not_self_issued(c->cert, c->cert_len, heap, &allow_old);
+    if (rc == WOLFCERT_OK && c->op != SCEP_OP_GET_CERT)
+        rc = wolfcert_issued_match_init(&s->in_match, c->csr, c->csr_len,
+                                        has_old ? old_hash : NULL,
+                                        allow_old, heap);
+
+    if (rc == WOLFCERT_OK && c->cert == NULL) {
         rc = wolfcert_scep_self_signed_rsa((RsaKey*)c->key->impl,
                                             c->csr, c->csr_len,
                                             &s->in_signer_copy,
                                             &s->in_signer_len,
                                             wolfcert_default_dev_id(), heap);
         s->in_signer = s->in_signer_copy;
+        /* A CA may echo the generated signer, which also holds the key. */
+        if (rc == WOLFCERT_OK) {
+            rc = wolfcert_cert_der_hash(s->in_signer, s->in_signer_len,
+                                        s->in_match.old_hash, heap);
+            s->in_match.has_old = (rc == WOLFCERT_OK);
+            if (rc != WOLFCERT_ERR_MEMORY)
+                rc = WOLFCERT_OK;
+        }
     }
-    else {
+    else if (rc == WOLFCERT_OK) {
         if (nb) {
             s->in_signer_copy = dup_buf(c->cert, c->cert_len, heap);
             if (s->in_signer_copy == NULL)

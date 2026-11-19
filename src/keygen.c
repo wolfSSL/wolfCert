@@ -255,9 +255,8 @@ int wolfcert_key_from_pem(const uint8_t* data, size_t data_len,
     return WOLFCERT_ERR_PARSE;
 }
 
-/* SubjectPublicKeyInfo of a PEM or DER certificate, in a fresh buffer. */
-static int cert_spki(const uint8_t* cert, size_t cert_len, void* heap,
-                     uint8_t** out, word32* out_len)
+int wolfcert_cert_spki(const uint8_t* cert, size_t cert_len, void* heap,
+                       uint8_t** out, word32* out_len)
 {
     WolfCertBuffer pem_der = { 0 };
     const uint8_t* der = cert;
@@ -265,26 +264,34 @@ static int cert_spki(const uint8_t* cert, size_t cert_len, void* heap,
     uint8_t*       spki = NULL;
     word32         spki_len = 0;
     int            rc = WOLFCERT_OK;
+    int            wrc = 0;
 
     if (!wolfcert_buffer_is_der(cert, cert_len)) {
         rc = wolfcert_pem_cert_to_der(cert, cert_len, &pem_der, heap);
         der = pem_der.data;
         der_len = pem_der.len;
     }
-    if (rc == WOLFCERT_OK &&
-        (wc_GetSubjectPubKeyInfoDerFromCert(der, (word32)der_len, NULL,
-                                            &spki_len) < 0 || spki_len == 0))
-        rc = WOLFCERT_ERR(WOLFCERT_ERR_PARSE, "keygen",
-                          "public key source is not a certificate");
+    if (rc == WOLFCERT_OK) {
+        wrc = wc_GetSubjectPubKeyInfoDerFromCert(der, (word32)der_len, NULL,
+                                                 &spki_len);
+        if (wrc == MEMORY_E)
+            rc = WOLFCERT_ERR_MEMORY;
+        else if (wrc < 0 || spki_len == 0)
+            rc = WOLFCERT_ERR_PARSE;
+    }
     if (rc == WOLFCERT_OK) {
         spki = (uint8_t*)WOLFCERT_XMALLOC(spki_len, heap);
         if (spki == NULL)
             rc = WOLFCERT_ERR_MEMORY;
     }
-    if (rc == WOLFCERT_OK &&
-        wc_GetSubjectPubKeyInfoDerFromCert(der, (word32)der_len, spki,
-                                           &spki_len) < 0)
-        rc = WOLFCERT_ERR_PARSE;
+    if (rc == WOLFCERT_OK) {
+        wrc = wc_GetSubjectPubKeyInfoDerFromCert(der, (word32)der_len, spki,
+                                                 &spki_len);
+        if (wrc == MEMORY_E)
+            rc = WOLFCERT_ERR_MEMORY;
+        else if (wrc < 0)
+            rc = WOLFCERT_ERR_PARSE;
+    }
 
     wolfcert_buffer_free(&pem_der);
     if (rc != WOLFCERT_OK) {
@@ -350,7 +357,10 @@ int wolfcert_key_from_id(const WolfCertKeyCfg* cfg,
     void* heap = cfg->heap ? cfg->heap : wolfcert_default_heap();
     uint8_t* spki = NULL;
     word32   spki_len = 0;
-    rc = cert_spki(cert, cert_len, heap, &spki, &spki_len);
+    rc = wolfcert_cert_spki(cert, cert_len, heap, &spki, &spki_len);
+    if (rc == WOLFCERT_ERR_PARSE)
+        return WOLFCERT_ERR(WOLFCERT_ERR_PARSE, "keygen",
+                            "public key source is not a certificate");
     if (rc != WOLFCERT_OK)
         return rc;
 

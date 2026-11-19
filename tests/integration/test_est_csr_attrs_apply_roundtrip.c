@@ -149,12 +149,12 @@ static int auto_apply_pins_everything(WolfCertServer* s)
     };
 
     WolfCertKey* key = NULL;
-    WolfCertBuffer cert_pem = { 0 };
+    WolfCertEstResult res = { 0 };
     int rc = wolfcert_client_enroll(cli, &srv, &key_cfg, &meta,
-                                    &key, &cert_pem);
+                                    &key, &res, NULL);
 #ifndef WOLFSSL_SHA384
     REQUIRE(rc == WOLFCERT_ERR_UNSUPPORTED);
-    wolfcert_buffer_free(&cert_pem);
+    wolfcert_est_result_free(&res);
     wolfcert_key_free(key);
     wolfcert_client_free(cli);
     return 0;
@@ -164,10 +164,10 @@ static int auto_apply_pins_everything(WolfCertServer* s)
     REQUIRE(wolfcert_key_type(key) == WOLFCERT_KEY_ECC);
 
     int curve = 0;
-    REQUIRE(inspect_cert(cert_pem.data, cert_pem.len, &curve) == 0);
+    REQUIRE(inspect_cert(res.cert_pem.data, res.cert_pem.len, &curve) == 0);
     REQUIRE(curve == ECC_SECP384R1);
 
-    wolfcert_buffer_free(&cert_pem);
+    wolfcert_est_result_free(&res);
     wolfcert_key_free(key);
     wolfcert_client_free(cli);
     return 0;
@@ -201,12 +201,12 @@ static int explicit_caller_wins(WolfCertServer* s)
     };
 
     WolfCertKey* key = NULL;
-    WolfCertBuffer cert_pem = { 0 };
+    WolfCertEstResult res = { 0 };
     int rc = wolfcert_client_enroll(cli, &srv, &key_cfg, &meta,
-                                    &key, &cert_pem);
+                                    &key, &res, NULL);
 #ifndef WOLFSSL_SHA384
     REQUIRE(rc == WOLFCERT_ERR_UNSUPPORTED);
-    wolfcert_buffer_free(&cert_pem);
+    wolfcert_est_result_free(&res);
     wolfcert_key_free(key);
     wolfcert_client_free(cli);
     return 0;
@@ -214,7 +214,7 @@ static int explicit_caller_wins(WolfCertServer* s)
     REQUIRE(rc == WOLFCERT_OK);
     REQUIRE(wolfcert_key_type(key) == WOLFCERT_KEY_RSA);
 
-    wolfcert_buffer_free(&cert_pem);
+    wolfcert_est_result_free(&res);
     wolfcert_key_free(key);
     wolfcert_client_free(cli);
     return 0;

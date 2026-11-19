@@ -111,7 +111,9 @@ typedef enum {
 
 typedef struct {
     WolfCertScepStatus status;
-    /* cert_pem is owned and populated iff status == SUCCESS. */
+    /* SUCCESS: the issued cert first, or a renewal's unchanged cert when only
+     * it holds the key; GetCert keeps the CA's order. No match:
+     * WOLFCERT_ERR_PROTOCOL, UNSET, the certs, which GetCert frees. */
     WolfCertBuffer     cert_pem;
     /* transaction_id (PrintableString) is owned and populated whenever the
      * server returns a CertRep; callers echo it back via get_cert_initial. */
@@ -123,10 +125,8 @@ typedef struct {
     void*              heap;
 } WolfCertScepResult;
 
-/* Every wolfcert_scep_* call taking a WolfCertScepResult* initializes a
- * non-NULL *out first, so freeing it after any outcome is safe. A populated
- * result must be freed before it is passed again, except a session's
- * in-flight result, which every resume passes back unfreed. */
+/* Calls taking a WolfCertScepResult* initialize *out first. Free it after
+ * any return and before reuse, except an _nb resume's in-flight result. */
 WOLFCERT_API void wolfcert_scep_result_free(WolfCertScepResult* r);
 
 /* PKCSReq. The challengePassword travels in the CSR, from

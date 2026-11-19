@@ -123,13 +123,13 @@ static int enroll_with_challenge(WolfCertServer* s)
     };
 
     WolfCertKey* key = NULL;
-    WolfCertBuffer cert_pem = { 0 };
+    WolfCertEstResult res = { 0 };
     int rc = wolfcert_client_enroll(cli, &srv, &key_cfg, &meta,
-                                    &key, &cert_pem);
+                                    &key, &res, NULL);
     REQUIRE(rc == WOLFCERT_OK);
-    REQUIRE(cert_pem.len > 0);
+    REQUIRE(res.cert_pem.len > 0);
 
-    wolfcert_buffer_free(&cert_pem);
+    wolfcert_est_result_free(&res);
     wolfcert_key_free(key);
     wolfcert_client_free(cli);
     return 0;
@@ -156,13 +156,13 @@ static int enroll_without_challenge(WolfCertServer* s)
     };
 
     WolfCertKey* key = NULL;
-    WolfCertBuffer cert_pem = { 0 };
+    WolfCertEstResult res = { 0 };
     int rc = wolfcert_client_enroll(cli, &srv, &key_cfg, &meta,
-                                    &key, &cert_pem);
+                                    &key, &res, NULL);
     REQUIRE(rc == WOLFCERT_ERR_HTTP);
-    REQUIRE(cert_pem.len == 0);
+    REQUIRE(res.cert_pem.len == 0);
 
-    wolfcert_buffer_free(&cert_pem);
+    wolfcert_est_result_free(&res);
     if (key != NULL)
         wolfcert_key_free(key);
     wolfcert_client_free(cli);
@@ -338,13 +338,13 @@ static int values_only_policy_does_not_block(WolfCertServer* s)
     WolfCertCertMeta meta = { .subject_dn = "CN=enforce-values-advisory" };
 
     WolfCertKey* key = NULL;
-    WolfCertBuffer cert_pem = { 0 };
+    WolfCertEstResult res = { 0 };
     int rc = wolfcert_client_enroll(cli, &srv, &key_cfg, &meta,
-                                    &key, &cert_pem);
+                                    &key, &res, NULL);
     REQUIRE(rc == WOLFCERT_OK);
-    REQUIRE(cert_pem.len > 0);
+    REQUIRE(res.cert_pem.len > 0);
 
-    wolfcert_buffer_free(&cert_pem);
+    wolfcert_est_result_free(&res);
     wolfcert_key_free(key);
     wolfcert_client_free(cli);
     return 0;

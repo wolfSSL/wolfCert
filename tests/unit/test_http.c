@@ -23,6 +23,7 @@
 
 #include <wolfcert/wolfcert.h>
 #include "internal.h"
+#include "../http_test_util.h"
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -229,7 +230,7 @@ static int test_loopback_http(void)
         .basic_user = "alice", .basic_pass = "secret",
     };
     WolfCertHttpResponse resp = { 0 };
-    REQUIRE(wolfcert_http_request(&req, &resp) == WOLFCERT_OK);
+    REQUIRE(test_http_request(NULL, &req, &resp) == WOLFCERT_OK);
     REQUIRE(resp.status_code == 200);
     REQUIRE(resp.body_len == 15);
     REQUIRE(memcmp(resp.body, "hello wolfCert\n", 15) == 0);
@@ -401,7 +402,7 @@ static int test_chunked_size_overflow(void)
         .body = (const uint8_t*)body, .body_len = strlen(body),
     };
     WolfCertHttpResponse resp = { 0 };
-    REQUIRE(wolfcert_http_request(&req, &resp) == WOLFCERT_ERR_PROTOCOL);
+    REQUIRE(test_http_request(NULL, &req, &resp) == WOLFCERT_ERR_PROTOCOL);
     REQUIRE(resp.body == NULL);
     REQUIRE(resp.body_len == 0);
     wolfcert_http_response_free(&resp);
@@ -644,7 +645,7 @@ static int test_request_transfer_encoding(void)
         .body = (const uint8_t*)body, .body_len = strlen(body),
     };
     WolfCertHttpResponse resp = { 0 };
-    REQUIRE(wolfcert_http_request(&req, &resp) == WOLFCERT_OK);
+    REQUIRE(test_http_request(NULL, &req, &resp) == WOLFCERT_OK);
     REQUIRE(resp.status_code == 200);
     wolfcert_http_response_free(&resp);
     pthread_join(tid, NULL);
@@ -688,7 +689,7 @@ static int ipv6_host_header(int use_session)
         wolfcert_http_session_close(s);
     }
     else {
-        REQUIRE(wolfcert_http_request(&req, &resp) == WOLFCERT_OK);
+        REQUIRE(test_http_request(NULL, &req, &resp) == WOLFCERT_OK);
     }
 
     REQUIRE(resp.status_code == 200);
@@ -788,7 +789,7 @@ static int chunk_body_case(const char* body, const char* tail, int want_rc,
     snprintf(url, sizeof(url), "http://127.0.0.1:%d/test", port);
     WolfCertHttpRequest req = { .method = "GET", .url = url };
 
-    REQUIRE(wolfcert_http_request(&req, &resp) == want_rc);
+    REQUIRE(test_http_request(NULL, &req, &resp) == want_rc);
     REQUIRE(resp.body_len == want_len);
     if (want_body != NULL)
         REQUIRE(memcmp(resp.body, want_body, want_len) == 0);
@@ -1088,12 +1089,10 @@ static int oversize_chunk_case(const char* body)
     REQUIRE(pthread_create(&tid, NULL, srv_chunk_body_thread, &ctx) == 0);
 
     snprintf(url, sizeof(url), "http://127.0.0.1:%d/test", port);
-    WolfCertHttpRequest req = {
-        .method = "GET", .url = url,
-        .max_response_bytes = 1024,
-    };
+    WolfCertHttpRequest req = { .method = "GET", .url = url };
+    WolfCertHttpSessionCfg cfg = { .max_response_bytes = 1024 };
 
-    REQUIRE(wolfcert_http_request(&req, &resp) == WOLFCERT_ERR_PROTOCOL);
+    REQUIRE(test_http_request(&cfg, &req, &resp) == WOLFCERT_ERR_PROTOCOL);
     REQUIRE(resp.body == NULL);
     REQUIRE(resp.body_len == 0);
     wolfcert_http_response_free(&resp);
@@ -1211,22 +1210,15 @@ static int test_client_key_checks(void)
     static const uint8_t cert[] = "-----BEGIN CERTIFICATE-----";
     static const uint8_t pem[] = "-----BEGIN PRIVATE KEY-----";
     WolfCertKey key;
-    WolfCertHttpRequest req = {
-        .method         = "GET",
-        .url            = "https://127.0.0.1:1/x",
-        .client_key_obj = &key,
-    };
     WolfCertHttpSessionCfg scfg = {
         .base_url       = "https://127.0.0.1:1",
         .client_key_obj = &key,
     };
-    WolfCertHttpResponse resp;
     WolfCertHttpSession* s = NULL;
 
     memset(&key, 0, sizeof(key));
-    REQUIRE(wolfcert_http_request(&req, &resp) == WOLFCERT_ERR_BAD_ARG);
-    REQUIRE(strstr(wolfcert_last_error_message(), "client_cert") != NULL);
     REQUIRE(wolfcert_http_session_open(&scfg, &s) == WOLFCERT_ERR_BAD_ARG);
+    REQUIRE(strstr(wolfcert_last_error_message(), "client_cert") != NULL);
     scfg.client_cert     = cert;
     scfg.client_cert_len = sizeof(cert);
     scfg.client_key      = pem;
@@ -1239,12 +1231,6 @@ static int test_client_key_checks(void)
     REQUIRE(wolfcert_http_session_open(&scfg, &s) == WOLFCERT_ERR_BAD_ARG);
     REQUIRE(strstr(wolfcert_last_error_message(), "https://") != NULL);
     REQUIRE(s == NULL);
-
-    req.client_cert     = cert;
-    req.client_cert_len = sizeof(cert);
-    req.client_key      = pem;
-    req.client_key_len  = sizeof(pem);
-    REQUIRE(wolfcert_http_request(&req, &resp) == WOLFCERT_ERR_BAD_ARG);
     return 0;
 }
 

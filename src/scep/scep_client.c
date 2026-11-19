@@ -916,7 +916,6 @@ static void scep_session_start(WolfCertScepSession* s, const ScepCall* c,
     s->in_req = (WolfCertHttpRequest){
         .method = post ? "POST" : "GET",
         .url    = url,
-        .heap   = s->heap,
     };
     if (post) {
         s->in_req.content_type = "application/x-pki-message";

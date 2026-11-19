@@ -352,7 +352,6 @@ static int est_session_begin(WolfCertEstSession* s, enum est_session_op op,
             .accept     = est_ops[op].accept,
             .basic_user = s->basic_user,
             .basic_pass = s->basic_pass,
-            .heap       = s->heap,
         };
         if (est_is_enroll(op)) {
             s->in_req.method                    = "POST";

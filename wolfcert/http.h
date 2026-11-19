@@ -27,7 +27,7 @@ extern "C" {
 #endif
 
 /* Minimal HTTP/1.1 client used by EST and SCEP; https URLs run over wolfSSL
- * with the request's trust anchors. */
+ * with the session's trust anchors. */
 
 /* Blocking getaddrinfo + socket + connect over POSIX/BSD sockets, returning
  * a connected fd or -1. Exported so a custom transport's connect can open its
@@ -47,27 +47,6 @@ typedef struct {
     const char* basic_pass;
     const uint8_t* body;
     size_t         body_len;
-
-    /* Optional TLS client cert and key, PEM or DER. */
-    const uint8_t* client_cert;
-    size_t         client_cert_len;
-    const uint8_t* client_key;
-    size_t         client_key_len;
-
-    const uint8_t* trust_anchors;   /* PEM or DER */
-    size_t         trust_anchors_len;
-    int            verify_server;
-    int            timeout_ms;
-
-    /* Hard cap on the response body; 0 -> 64 KiB. */
-    size_t         max_response_bytes;
-
-    void*          heap;           /* NULL -> default */
-
-    WolfCertTransport transport;
-
-    /* As in WolfCertServerCfg. */
-    const WolfCertKey* client_key_obj;
 } WolfCertHttpRequest;
 
 typedef struct {
@@ -82,8 +61,6 @@ typedef struct {
     void*     heap;
 } WolfCertHttpResponse;
 
-WOLFCERT_API int wolfcert_http_request(const WolfCertHttpRequest* req,
-                                       WolfCertHttpResponse* resp);
 WOLFCERT_API void wolfcert_http_response_free(WolfCertHttpResponse* resp);
 
 /* Keep-alive HTTP session: one TCP+TLS connection carrying many requests. */
@@ -96,7 +73,7 @@ typedef struct {
     size_t         trust_anchors_len;
     int            verify_server;
     int            timeout_ms;
-    size_t         max_response_bytes;
+    size_t         max_response_bytes;  /* 0 -> 64 KiB */
 
     /* TLS client identity, loaded before the handshake; it serves both mTLS
      * and a later post-handshake CertificateRequest. */
@@ -108,7 +85,7 @@ typedef struct {
     /* TLS 1.3 post-handshake auth opt-in (RFC 8446 section 4.6.2). */
     int            allow_post_handshake_auth;
 
-    void*          heap;
+    void*          heap;           /* NULL -> default */
 
     WolfCertTransport transport;
 
@@ -122,9 +99,9 @@ typedef struct {
 WOLFCERT_API int  wolfcert_http_session_open (const WolfCertHttpSessionCfg* cfg,
                                               WolfCertHttpSession** out);
 
-/* req->url must match the session's scheme, host and port; req's TLS fields
- * are ignored. After a failed exchange, a body ending at the close or extra
- * bytes after a reply, requests get WOLFCERT_ERR_CONN_CLOSED. */
+/* req->url must match the session's scheme, host and port. After a failed
+ * exchange, a body ending at the close or extra bytes after a reply, requests
+ * get WOLFCERT_ERR_CONN_CLOSED. */
 WOLFCERT_API int  wolfcert_http_session_request(WolfCertHttpSession* s,
                                                 const WolfCertHttpRequest* req,
                                                 WolfCertHttpResponse* resp);

@@ -32,6 +32,7 @@
 #include <wolfcert/server.h>
 #include "internal.h"
 #include "tls_test_util.h"
+#include "../http_test_util.h"
 
 #include <wolfssl/ssl.h>
 #include <wolfssl/wolfcrypt/asn_public.h>
@@ -98,7 +99,7 @@ static int post_signed(const char* url, WolfCertKey* dk,
     WolfCertHttpRequest req = { .method = "POST", .url = pki_url,
                                 .content_type = "application/x-pki-message",
                                 .body = pki.data, .body_len = pki.len };
-    REQUIRE(wolfcert_http_request(&req, &resp) == WOLFCERT_OK);
+    REQUIRE(test_http_request(NULL, &req, &resp) == WOLFCERT_OK);
     REQUIRE(resp.status_code == 200);
     REQUIRE(wolfcert_scep_parse_pki_message(resp.body, resp.body_len, &env,
                 NULL, NULL, NULL, NULL, NULL, NULL, NULL, out_status,

@@ -23,6 +23,7 @@
 #include <wolfcert/http.h>
 #include "../test_static_mem.h"
 #include "internal.h"
+#include "../http_test_util.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -128,13 +129,14 @@ static int fetch_m(Peer* p, const char* method, const char* resp, size_t chunk,
 {
     WolfCertTransport t = { p_connect, p_read, p_write, p_disconnect, p };
     WolfCertHttpRequest req = { .method = method, .url = "http://peer.test/" };
+    WolfCertHttpSessionCfg cfg = { 0 };
 
     p->resp = resp;
     p->off = 0;
     p->chunk = chunk;
-    req.transport = t;
+    cfg.transport = t;
 
-    return wolfcert_http_request(&req, out);
+    return test_http_request(&cfg, &req, out);
 }
 
 static int fetch(Peer* p, const char* resp, size_t chunk,
@@ -270,21 +272,22 @@ static int test_eof_body_capped(void)
     static const char hdr[] = "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n";
     WolfCertTransport t = { p_connect, p_read, p_write, p_disconnect, NULL };
     WolfCertHttpRequest req = { .method = "GET", .url = "http://peer.test/" };
+    WolfCertHttpSessionCfg cfg = { 0 };
     WolfCertHttpResponse resp = { 0 };
     const size_t hl = sizeof(hdr) - 1;
     char wire[sizeof(hdr) + 32];
     Peer p = { 0 };
 
     t.ctx = &p;
-    req.transport = t;
-    req.max_response_bytes = 16;
+    cfg.transport = t;
+    cfg.max_response_bytes = 16;
     memcpy(wire, hdr, hl);
 
     memset(wire + hl, 'B', 16);
     wire[hl + 16] = '\0';
     p.resp  = wire;
     p.chunk = sizeof(wire);
-    REQUIRE(wolfcert_http_request(&req, &resp) == WOLFCERT_OK);
+    REQUIRE(test_http_request(&cfg, &req, &resp) == WOLFCERT_OK);
     REQUIRE(resp.body_len == 16);
     wolfcert_http_response_free(&resp);
 
@@ -293,12 +296,12 @@ static int test_eof_body_capped(void)
     memset(&p, 0, sizeof(p));
     p.resp  = wire;
     p.chunk = sizeof(wire);
-    REQUIRE(wolfcert_http_request(&req, &resp) == WOLFCERT_ERR_PROTOCOL);
+    REQUIRE(test_http_request(&cfg, &req, &resp) == WOLFCERT_ERR_PROTOCOL);
 
     memset(&p, 0, sizeof(p));
     p.resp  = wire;
     p.chunk = hl + 16;
-    REQUIRE(wolfcert_http_request(&req, &resp) == WOLFCERT_ERR_PROTOCOL);
+    REQUIRE(test_http_request(&cfg, &req, &resp) == WOLFCERT_ERR_PROTOCOL);
     return 0;
 }
 
@@ -314,16 +317,17 @@ static int test_chunked_over_pool_block(void)
     static char big[sizeof(head) + 0x28000 + sizeof(tail)];
     WolfCertTransport t = { p_connect, p_read, p_write, p_disconnect, NULL };
     WolfCertHttpRequest req = { .method = "GET", .url = "http://peer.test/" };
+    WolfCertHttpSessionCfg cfg = { 0 };
     WolfCertHttpResponse resp = { 0 };
     const size_t hl = sizeof(head) - 1;
     Peer p = { 0 };
 
     t.ctx = &p;
-    req.transport = t;
-    req.max_response_bytes = 256 * 1024;
+    cfg.transport = t;
+    cfg.max_response_bytes = 256 * 1024;
     p.resp  = RESP_CHUNKED;
     p.chunk = sizeof(RESP_CHUNKED);
-    REQUIRE(wolfcert_http_request(&req, &resp) == WOLFCERT_OK);
+    REQUIRE(test_http_request(&cfg, &req, &resp) == WOLFCERT_OK);
     REQUIRE(resp.body_len == 11 && memcmp(resp.body, "hello world", 11) == 0);
     wolfcert_http_response_free(&resp);
 
@@ -334,7 +338,7 @@ static int test_chunked_over_pool_block(void)
     p.resp  = big;
     p.chunk = 4096;
     wolfcert_clear_error();
-    REQUIRE(wolfcert_http_request(&req, &resp) == WOLFCERT_ERR_MEMORY);
+    REQUIRE(test_http_request(&cfg, &req, &resp) == WOLFCERT_ERR_MEMORY);
     REQUIRE(strstr(wolfcert_last_error_message(), "max_response_bytes")
             != NULL);
     REQUIRE(resp.body == NULL);
@@ -419,21 +423,22 @@ static int test_error_paths(void)
 {
     WolfCertTransport t = { p_connect, p_read, p_write, p_disconnect, NULL };
     WolfCertHttpRequest req = { .method = "GET", .url = "http://peer.test/" };
+    WolfCertHttpSessionCfg cfg = { 0 };
     WolfCertHttpResponse resp = { 0 };
     Peer p = { 0 };
 
     t.ctx = &p;
-    req.transport = t;
+    cfg.transport = t;
 
     p.fail_connect = 1;
-    REQUIRE(wolfcert_http_request(&req, &resp) != WOLFCERT_OK);
+    REQUIRE(test_http_request(&cfg, &req, &resp) != WOLFCERT_OK);
     REQUIRE(p.disconnects == 0);
 
     p.fail_connect = 0;
     p.fail_write = 1;
     p.resp = RESP_CL;
     p.chunk = sizeof(RESP_CL);
-    REQUIRE(wolfcert_http_request(&req, &resp) != WOLFCERT_OK);
+    REQUIRE(test_http_request(&cfg, &req, &resp) != WOLFCERT_OK);
     REQUIRE(p.connects == 1 && p.disconnects == 1);
     return 0;
 }
@@ -443,15 +448,16 @@ static int test_positive_connect_rc(void)
 {
     WolfCertTransport t = { p_connect, p_read, p_write, p_disconnect, NULL };
     WolfCertHttpRequest req = { .method = "GET", .url = "http://peer.test/" };
+    WolfCertHttpSessionCfg cfg = { 0 };
     WolfCertHttpResponse resp = { 0 };
     Peer p = { 0 };
     int rc;
 
     t.ctx = &p;
-    req.transport = t;
+    cfg.transport = t;
     p.bogus_connect_rc = 1;
 
-    rc = wolfcert_http_request(&req, &resp);
+    rc = test_http_request(&cfg, &req, &resp);
     REQUIRE(rc < 0);
     REQUIRE(p.disconnects == 0);
     return 0;
@@ -504,9 +510,7 @@ static int test_transport_is_copied(void)
 /* Only an all-zero transport selects the built-in one. */
 static int test_partial_vtable_rejected(void)
 {
-    WolfCertHttpRequest req = { .method = "GET", .url = "http://peer.test/" };
     WolfCertHttpSessionCfg cfg = { .base_url = "http://peer.test/" };
-    WolfCertHttpResponse resp = { 0 };
     WolfCertHttpSession* s = NULL;
     WolfCertTransport t;
     Peer p = { 0 };
@@ -515,17 +519,13 @@ static int test_partial_vtable_rejected(void)
     t.read = p_read;
     t.write = p_write;
     t.disconnect = p_disconnect;
-    req.transport = t;
     cfg.transport = t;
-    REQUIRE(wolfcert_http_request(&req, &resp) == WOLFCERT_ERR_BAD_ARG);
     REQUIRE(wolfcert_http_session_open(&cfg, &s) == WOLFCERT_ERR_BAD_ARG);
     REQUIRE(s == NULL);
 
     memset(&t, 0, sizeof(t));
     t.ctx = &p;
-    req.transport = t;
     cfg.transport = t;
-    REQUIRE(wolfcert_http_request(&req, &resp) == WOLFCERT_ERR_BAD_ARG);
     REQUIRE(wolfcert_http_session_open(&cfg, &s) == WOLFCERT_ERR_BAD_ARG);
 
     memset(&t, 0, sizeof(t));
@@ -533,9 +533,9 @@ static int test_partial_vtable_rejected(void)
     t.write = p_write;
     t.disconnect = p_disconnect;
     t.ctx = &p;
-    req.transport = t;
-    REQUIRE(wolfcert_http_request(&req, &resp) == WOLFCERT_ERR_BAD_ARG);
-    REQUIRE(p.connects == 0);
+    cfg.transport = t;
+    REQUIRE(wolfcert_http_session_open(&cfg, &s) == WOLFCERT_ERR_BAD_ARG);
+    REQUIRE(s == NULL && p.connects == 0);
     return 0;
 }
 
@@ -661,6 +661,7 @@ static int test_head_oversized_length_ok(void)
 {
     WolfCertTransport t = { p_connect, p_read, p_write, p_disconnect, NULL };
     WolfCertHttpRequest req = { .method = "HEAD", .url = "http://peer.test/" };
+    WolfCertHttpSessionCfg cfg = { 0 };
     WolfCertHttpResponse resp = { 0 };
     Peer p = { 0 };
 
@@ -668,10 +669,10 @@ static int test_head_oversized_length_ok(void)
     p.resp    = RESP_HEAD_BIG;
     p.chunk   = sizeof(RESP_HEAD_BIG);
     p.open_rc = WOLFCERT_ERR_IO;
-    req.transport = t;
-    req.max_response_bytes = 16;
+    cfg.transport = t;
+    cfg.max_response_bytes = 16;
 
-    REQUIRE(wolfcert_http_request(&req, &resp) == WOLFCERT_OK);
+    REQUIRE(test_http_request(&cfg, &req, &resp) == WOLFCERT_OK);
     REQUIRE(resp.status_code == 200);
     REQUIRE(resp.body == NULL && resp.body_len == 0);
     wolfcert_http_response_free(&resp);
@@ -1211,11 +1212,12 @@ static int test_blocking_eof_body_closes(void)
 static int test_zero_transport_takes_builtin(void)
 {
     WolfCertHttpRequest req = { .method = "GET", .url = "http://127.0.0.1:1/" };
+    WolfCertHttpSessionCfg cfg = { 0 };
     WolfCertHttpResponse resp = { 0 };
     int rc;
 
-    req.timeout_ms = 500;
-    rc = wolfcert_http_request(&req, &resp);
+    cfg.timeout_ms = 500;
+    rc = test_http_request(&cfg, &req, &resp);
     REQUIRE(rc != WOLFCERT_OK);
     REQUIRE(rc != WOLFCERT_ERR_BAD_ARG);
     return 0;
@@ -1228,9 +1230,10 @@ static int test_incomplete_vtable(void)
     Peer p = { 0 };
     WolfCertTransport no_disc = { p_connect, p_read, p_write, NULL, &p };
     WolfCertHttpRequest req = { .method = "GET", .url = "http://peer.test/" };
+    WolfCertHttpSessionCfg cfg = { 0 };
 
-    req.transport = no_disc;
-    REQUIRE(wolfcert_http_request(&req, &resp) == WOLFCERT_ERR_BAD_ARG);
+    cfg.transport = no_disc;
+    REQUIRE(test_http_request(&cfg, &req, &resp) == WOLFCERT_ERR_BAD_ARG);
     REQUIRE(p.connects == 0);
     return 0;
 }
@@ -1257,12 +1260,9 @@ static int test_no_fd(void)
 #ifndef WOLFCERT_HAVE_BUILTIN_TRANSPORT
 static int test_no_builtin_transport(void)
 {
-    WolfCertHttpRequest req = { .method = "GET", .url = "http://peer.test/" };
     WolfCertHttpSessionCfg cfg = { .base_url = "http://peer.test/" };
-    WolfCertHttpResponse resp = { 0 };
     WolfCertHttpSession* s = NULL;
 
-    REQUIRE(wolfcert_http_request(&req, &resp) == WOLFCERT_ERR_BAD_ARG);
     REQUIRE(wolfcert_http_session_open(&cfg, &s) == WOLFCERT_ERR_BAD_ARG);
     REQUIRE(s == NULL);
     return 0;

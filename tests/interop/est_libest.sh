@@ -24,7 +24,9 @@ WC_CLIENT="$(wolfcert_bin wolfcert-client)"
 WC_SERVER="$(wolfcert_bin wolfcert-server)"
 
 cd "$WOLFCERT_INTEROP_WORK"
-trap 'echo "--- work dir: $WOLFCERT_INTEROP_WORK"' EXIT
+ES_PID=""; WC_PID=""
+trap 'kill_if "$ES_PID"; kill_if "$WC_PID"
+      echo "--- work dir: $WOLFCERT_INTEROP_WORK"' EXIT
 
 # The example estserver issues through an OpenSSL `ca` config and state dir.
 echo "[setup] bootstrap a CA with openssl for libest"
@@ -82,7 +84,6 @@ export EST_TRUSTED_CERTS="$PWD/ca/ca.crt"
 estserver -c ca/srv.crt -k ca/srv.key -r "estrealm" \
           -p "$EST_PORT" >estserver.log 2>&1 &
 ES_PID=$!
-trap 'kill_if "$ES_PID"' EXIT
 wait_port 127.0.0.1 "$EST_PORT"
 
 # srv.crt has CN=localhost, so connect by that name.
@@ -93,7 +94,9 @@ wait_port 127.0.0.1 "$EST_PORT"
     --key-type ecc:256 \
     --subject "CN=libest-interop-client" \
     --out-key libest.key --out-cert libest.crt \
-    >wc-client.log 2>&1
+    >wc-client.log 2>&1 \
+    || { echo "    FAIL (wolfcert-client enroll failed):"; cat wc-client.log
+         tail -n 40 estserver.log; exit 1; }
 
 openssl x509 -in libest.crt -noout -subject \
     | grep -q "CN *= *libest-interop-client"
@@ -114,7 +117,6 @@ openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
              --tls-cert wc-srv.crt --tls-key wc-srv.key --est-allow-anonymous \
              >wc-server.log 2>&1 &
 WC_PID=$!
-trap 'kill_if "$WC_PID"' EXIT
 wait_port 127.0.0.1 "$EST_PORT"
 
 # -o is an output directory; the cert lands there as base64 PKCS#7.

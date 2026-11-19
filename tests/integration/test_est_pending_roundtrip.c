@@ -33,6 +33,7 @@
 #include <wolfssl/wolfcrypt/asn_public.h>
 #include <wolfssl/wolfcrypt/coding.h>
 
+#include "internal.h"
 #include "tls_test_util.h"
 
 #include <poll.h>
@@ -197,6 +198,7 @@ static int pending_path(WolfCertServer* s)
                                &bad_b64_len) == 0);
     REQUIRE(post_enroll_raw(wolfcert_server_port(s), bad_b64, bad_b64_len)
             == 400);
+    REQUIRE(wolfcert_est_server_pending_count(s) == 0);
 
     csr_ex.data[csr_ex.len - 1] ^= 0x01;
     rc = wolfcert_est_simple_enroll(&cli, csr_ex.data, csr_ex.len, &bad);
@@ -224,19 +226,44 @@ static int pending_path(WolfCertServer* s)
     wolfcert_buffer_free(&csr_ex);
     wolfcert_key_free(dk_ex);
 
-    /* wolfcert_client_enroll reports a 202 as WOLFCERT_ERR_PENDING. */
+    /* wolfcert_client_enroll parked with out_csr, then the CSR re-POSTed. */
     WolfCertClient* client = NULL;
     REQUIRE(wolfcert_client_new(&client) == WOLFCERT_OK);
-    WolfCertKeyCfg kcfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
+    WolfCertKeyCfg kcfg = { .type = TEST_ENROLL_KEY_TYPE,
+                            .param = TEST_ENROLL_KEY_PARAM,
                             .dev_id = INVALID_DEVID };
-    WolfCertCertMeta meta = { .subject_dn = "CN=device-est-pending-client" };
+    WolfCertCertMeta meta = { .subject_dn = "CN=device-est-pending-csr" };
     WolfCertKey* key = NULL;
-    WolfCertBuffer cert = { 0 };
-    rc = wolfcert_client_enroll(client, &cli, &kcfg, &meta, &key, &cert);
+    WolfCertEstResult res = { 0 };
+    WolfCertBuffer parked = { 0 };
+    REQUIRE(wolfcert_est_server_pending_count(s) == 0);
+    rc = wolfcert_client_enroll(client, &cli, &kcfg, &meta, &key, &res,
+                                &parked);
+    REQUIRE(rc == WOLFCERT_ERR_PENDING);
+    REQUIRE(res.status == WOLFCERT_EST_STATUS_PENDING);
+    REQUIRE(res.retry_after_sec == 1);
+    REQUIRE(res.cert_pem.data == NULL && res.cert_pem.len == 0);
+    REQUIRE(key != NULL && parked.len > 0);
+    REQUIRE(wolfcert_est_server_pending_count(s) == 1);
+    wolfcert_est_result_free(&res);
+    REQUIRE(wolfcert_est_simple_enroll(&cli, parked.data, parked.len, &res)
+            == WOLFCERT_OK);
+    REQUIRE(res.status == WOLFCERT_EST_STATUS_SUCCESS);
+    REQUIRE(wolfcert_est_server_pending_count(s) == 0);
+    wolfcert_est_result_free(&res);
+    wolfcert_buffer_free(&parked);
+    wolfcert_key_free(key);
+    key = NULL;
+
+    /* Without out_csr the key and CSR are dropped. */
+    meta.subject_dn = "CN=device-est-pending-client";
+    rc = wolfcert_client_enroll(client, &cli, &kcfg, &meta, &key, &res, NULL);
     wolfcert_client_free(client);
     REQUIRE(rc == WOLFCERT_ERR_PENDING);
+    REQUIRE(res.status == WOLFCERT_EST_STATUS_PENDING);
     REQUIRE(key == NULL);
-    REQUIRE(cert.data == NULL && cert.len == 0);
+    REQUIRE(wolfcert_est_server_pending_count(s) == 1);
+    wolfcert_est_result_free(&res);
 
     /* A session enroll carries the Retry-After hint. */
     WolfCertKey* dk_sex = NULL;

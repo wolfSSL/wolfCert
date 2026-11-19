@@ -76,23 +76,24 @@ static int enroll(void)
     WolfCertCertMeta meta = { .subject_dn = CONFIG_WOLFCERT_SAMPLE_SUBJECT };
     WolfCertClient* client = NULL;
     WolfCertKey* key = NULL;
-    WolfCertBuffer cert = { 0 };
+    WolfCertEstResult res = { 0 };
     int rc;
 
     rc = wolfcert_client_new(&client);
     if (rc == WOLFCERT_OK)
-        rc = wolfcert_client_enroll(client, &srv, &key_cfg, &meta, &key, &cert);
+        rc = wolfcert_client_enroll(client, &srv, &key_cfg, &meta, &key,
+                                    &res, NULL);
 
     if (rc == WOLFCERT_OK) {
-        printk("enrolled: %u bytes\n", (unsigned)cert.len);
-        print_pem(&cert);
+        printk("enrolled: %u bytes\n", (unsigned)res.cert_pem.len);
+        print_pem(&res.cert_pem);
     }
     else {
         printk("enroll failed: %s (%s)\n", wolfcert_strerror(rc),
                wolfcert_last_error_message());
     }
 
-    wolfcert_buffer_free(&cert);
+    wolfcert_est_result_free(&res);
     wolfcert_key_free(key);
     wolfcert_client_free(client);
     return rc;

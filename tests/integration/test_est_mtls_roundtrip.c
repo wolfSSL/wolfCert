@@ -591,7 +591,7 @@ static int test_reenroll_under_approval(const uint8_t* tls_cert, size_t tls_cert
     WolfCertEstResult issued = { 0 };
     WolfCertClient* client = NULL;
     WolfCertKey* nk = NULL;
-    WolfCertBuffer cert = { 0 };
+    WolfCertEstResult cert = { 0 };
     pthread_t tid;
     char url[128];
     int rc;
@@ -638,9 +638,39 @@ static int test_reenroll_under_approval(const uint8_t* tls_cert, size_t tls_cert
     /* The client API reports the 202 as WOLFCERT_ERR_PENDING. */
     REQUIRE(wolfcert_client_new(&client) == WOLFCERT_OK);
     REQUIRE(wolfcert_client_reenroll(client, &cli, cli_cert, cli_cert_len,
-                                     cur_key, &kcfg, &none, &nk, &cert)
+                                     cur_key, &kcfg, &none, &nk, &cert, NULL)
             == WOLFCERT_ERR_PENDING);
-    REQUIRE(nk == NULL && cert.data == NULL);
+    REQUIRE(nk == NULL && cert.cert_pem.data == NULL);
+    REQUIRE(cert.status == WOLFCERT_EST_STATUS_PENDING);
+    REQUIRE(cert.retry_after_sec == 1);
+
+    /* Given out_csr, it hands out the new key and the CSR to re-POST. */
+    WolfCertBuffer parked = { 0 };
+    REQUIRE(wolfcert_client_reenroll(client, &cli, cli_cert, cli_cert_len,
+                                     cur_key, &kcfg, &none, &nk, &cert,
+                                     &parked) == WOLFCERT_ERR_PENDING);
+    REQUIRE(nk != NULL && parked.len > 0 && cert.cert_pem.data == NULL);
+    REQUIRE(wolfcert_est_simple_reenroll(&cli, cli_cert, cli_cert_len, cur_key,
+                                         parked.data, parked.len, &issued)
+            == WOLFCERT_OK);
+    REQUIRE(issued.status == WOLFCERT_EST_STATUS_SUCCESS);
+    wolfcert_est_result_free(&issued);
+    wolfcert_buffer_free(&parked);
+    wolfcert_key_free(nk);
+    nk = NULL;
+
+    /* A renewal reusing the key hands out the CSR alone. */
+    REQUIRE(wolfcert_client_reenroll(client, &cli, cli_cert, cli_cert_len,
+                                     cur_key, NULL, &none, &nk, &cert,
+                                     &parked) == WOLFCERT_ERR_PENDING);
+    REQUIRE(nk == NULL && parked.len > 0);
+    REQUIRE(cert.status == WOLFCERT_EST_STATUS_PENDING);
+    REQUIRE(wolfcert_est_simple_reenroll(&cli, cli_cert, cli_cert_len, cur_key,
+                                         parked.data, parked.len, &issued)
+            == WOLFCERT_OK);
+    REQUIRE(issued.status == WOLFCERT_EST_STATUS_SUCCESS);
+    wolfcert_est_result_free(&issued);
+    wolfcert_buffer_free(&parked);
     wolfcert_client_free(client);
 
     wolfcert_server_stop(srv);

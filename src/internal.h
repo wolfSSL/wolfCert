@@ -238,6 +238,11 @@ WOLFCERT_TEST_VIS void wolfcert_server_set_issue_first(WolfCertServer* srv,
                                                        const uint8_t* der,
                                                        size_t der_len);
 
+/* Enrollments the EST server holds pending approval; -1 for another
+ * protocol. */
+WOLFCERT_TEST_VIS int wolfcert_est_server_pending_count(
+                                                const WolfCertServer* s);
+
 /* GetCert faults: answer with the CA cert, or drop the signer cert. */
 WOLFCERT_TEST_VIS void wolfcert_scep_server_set_getcert_fault(WolfCertServer* s,
                                                               int wrong_cert,

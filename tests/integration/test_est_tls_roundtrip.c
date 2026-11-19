@@ -156,7 +156,7 @@ static int test_client_reenroll_keeps_identity(const uint8_t* tls_cert,
     size_t cur_key_len = 0;
     WolfCertKey* cur_key = NULL;
     WolfCertKey* out_key = NULL;
-    WolfCertBuffer issued = { 0 };
+    WolfCertEstResult issued = { 0 };
     WolfCertCertMeta meta;
     WolfCertServerCfgSrv scfg = {
         .protocol         = WOLFCERT_PROTO_EST,
@@ -199,14 +199,16 @@ static int test_client_reenroll_keeps_identity(const uint8_t* tls_cert,
     memset(&meta, 0, sizeof(meta));
     meta.subject_dn = "CN=impostor";
     REQUIRE(wolfcert_client_reenroll(NULL, &cli, cur_cert, cur_cert_len,
-                                     cur_key, NULL, &meta, &out_key, &issued)
+                                     cur_key, NULL, &meta, &out_key, &issued,
+                                     NULL)
             == WOLFCERT_ERR_BAD_ARG);
 
     memset(&meta, 0, sizeof(meta));
     meta.san_dns     = impostor_dns;
     meta.san_dns_len = 1;
     REQUIRE(wolfcert_client_reenroll(NULL, &cli, cur_cert, cur_cert_len,
-                                     cur_key, NULL, &meta, &out_key, &issued)
+                                     cur_key, NULL, &meta, &out_key, &issued,
+                                     NULL)
             == WOLFCERT_ERR_BAD_ARG);
 
     /* Refused before key generation, which would fail UNSUPPORTED here. */
@@ -214,7 +216,7 @@ static int test_client_reenroll_keeps_identity(const uint8_t* tls_cert,
     meta.subject_dn = "CN=impostor";
     REQUIRE(wolfcert_client_reenroll(NULL, &cli, cur_cert, cur_cert_len,
                                      cur_key, &no_kcfg, &meta, &out_key,
-                                     &issued) == WOLFCERT_ERR_BAD_ARG);
+                                     &issued, NULL) == WOLFCERT_ERR_BAD_ARG);
 
 #ifdef KEEP_PEER_CERT
     /* The caller's callback still runs but cannot rename the cert. */
@@ -222,28 +224,31 @@ static int test_client_reenroll_keeps_identity(const uint8_t* tls_cert,
     meta.customize     = impostor_customize;
     meta.customize_ctx = &called;
     REQUIRE(wolfcert_client_reenroll(NULL, &cli, cur_cert, cur_cert_len,
-                                     cur_key, NULL, &meta, &out_key, &issued)
+                                     cur_key, NULL, &meta, &out_key, &issued,
+                                     NULL)
             == WOLFCERT_OK);
     REQUIRE(called == 1);
     REQUIRE(out_key == NULL);
-    REQUIRE(check_renewed_identity(&issued) == 0);
-    wolfcert_buffer_free(&issued);
+    REQUIRE(issued.status == WOLFCERT_EST_STATUS_SUCCESS);
+    REQUIRE(check_renewed_identity(&issued.cert_pem) == 0);
+    wolfcert_est_result_free(&issued);
 
     memset(&meta, 0, sizeof(meta));
     REQUIRE(wolfcert_client_reenroll(NULL, &cli, cur_cert, cur_cert_len,
-                                     cur_key, &kcfg, &meta, &out_key, &issued)
+                                     cur_key, &kcfg, &meta, &out_key, &issued,
+                                     NULL)
             == WOLFCERT_OK);
     REQUIRE(out_key != NULL);
-    REQUIRE(check_renewed_identity(&issued) == 0);
-    REQUIRE(same_public_key(issued.data, issued.len, cur_cert,
-                            cur_cert_len) == 0);
+    REQUIRE(check_renewed_identity(&issued.cert_pem) == 0);
+    REQUIRE(same_public_key(issued.cert_pem.data, issued.cert_pem.len,
+                            cur_cert, cur_cert_len) == 0);
 #endif
 
     wolfcert_server_stop(srv);
     pthread_join(tid, NULL);
     wolfcert_server_free(srv);
     wolfcert_key_free(out_key);
-    wolfcert_buffer_free(&issued);
+    wolfcert_est_result_free(&issued);
     wolfcert_key_free(cur_key);
     free(cur_cert);
     free(cur_key_pem);

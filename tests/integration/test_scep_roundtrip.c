@@ -2445,6 +2445,9 @@ int main(void)
             == WOLFCERT_ERR_BAD_ARG);
     REQUIRE(wolfcert_scep_server_set_bundle_fault(s, 5)
             == WOLFCERT_ERR_BAD_ARG);
+#ifdef WOLFCERT_HAVE_EST
+    REQUIRE(wolfcert_est_server_pending_count(s) == -1);
+#endif
     pthread_t tid;
     REQUIRE(pthread_create(&tid, NULL, server_thread, s) == 0);
 

@@ -1035,6 +1035,16 @@ static int est_serve_fd(WolfCertServer* srv, int fd)
     return handle_request(srv, fd);
 }
 
+#if defined(WOLFCERT_BUILD_TESTING)
+WOLFCERT_TEST_VIS int wolfcert_est_server_pending_count(
+                                                const WolfCertServer* s)
+{
+    if (s->cfg.protocol != WOLFCERT_PROTO_EST)
+        return -1;
+    return s->priv != NULL ? (int)((const EstPriv*)s->priv)->count : 0;
+}
+#endif
+
 static void est_free_priv(WolfCertServer* srv)
 {
     if (srv->priv != NULL) {

@@ -122,7 +122,10 @@ jobs:
             path="build/tests/$bin"
             [ -x "$path" ] || { echo "skip (not built): $bin"; continue; }
             echo "== valgrind $bin =="
+            # Valgrind 3.22 to 3.27 crashes reading test_csr's inline info.
+            extra=""
+            if [ "$bin" = test_csr ]; then extra="--read-inline-info=no"; fi
             valgrind --leak-check=full --errors-for-leak-kinds=definite \
-              --error-exitcode=1 -q "$path" || rc=1
+              $extra --error-exitcode=1 -q "$path" || rc=1
           done
           exit "$rc"

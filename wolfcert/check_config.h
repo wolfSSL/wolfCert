@@ -52,6 +52,12 @@
        "WOLFCERT_HAVE_SCEP for an EST-only build."
 #endif
 
+#if defined(WOLFCERT_HAVE_SERVER) && !defined(WOLFCERT_HAVE_EST) && \
+    !defined(WOLFCERT_HAVE_SCEP)
+#error "WOLFCERT_HAVE_SERVER needs WOLFCERT_HAVE_EST or WOLFCERT_HAVE_SCEP; " \
+       "drop WOLFCERT_HAVE_SERVER for a build without either."
+#endif
+
 #if !defined(WOLFCERT_HAVE_BUILTIN_TRANSPORT) && \
     !defined(WOLFCERT_NO_BUILTIN_TRANSPORT)
 #error "Define WOLFCERT_HAVE_BUILTIN_TRANSPORT for the built-in POSIX socket transport, or WOLFCERT_NO_BUILTIN_TRANSPORT to confirm every config supplies its own WolfCertTransport."

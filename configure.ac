@@ -78,6 +78,10 @@ cannot supply a custom one])])
     [AC_MSG_ERROR([--enable-server needs the built-in transport: its
 round-trip tests drive the client over real sockets])])
 ])
+AS_IF([test "x$enable_server" = "xyes" && test "x$enable_est" != "xyes" &&
+       test "x$enable_scep" != "xyes"],
+  [AC_MSG_ERROR([--enable-server needs --enable-est or --enable-scep; pass
+--disable-server for a build without either])])
 
 AC_ARG_ENABLE([tests],
     [AS_HELP_STRING([--enable-tests], [build unit and integration tests])],

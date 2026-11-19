@@ -160,6 +160,7 @@ static int dir_san_csr(WolfCertKey* dk, uint8_t* der, int der_sz)
         strncpy(req.subject.commonName, "device-poll-dir", CTC_NAME_SIZE - 1);
         memcpy(req.altNames, dir_san, sizeof(dir_san));
         req.altNamesSz = (int)sizeof(dir_san);
+        req.version = 0;
         req.sigType = CTC_SHA256wRSA;
         if (wc_MakeCertReq(&req, der, (word32)der_sz, (RsaKey*)dk->impl,
                            NULL) > 0)

@@ -60,6 +60,7 @@ int wolfcert_client_get_ca(WolfCertClient* client, const WolfCertServerCfg* srv,
                            WolfCertEncoding encoding, WolfCertBuffer* out_ca)
 {
     (void)client;
+    (void)encoding;
     if (srv == NULL || out_ca == NULL)
         return WOLFCERT_ERR_BAD_ARG;
 

@@ -280,6 +280,92 @@ static int test_wc_err_zero(void)
     return 0;
 }
 
+static int test_der_chain_next(void)
+{
+    static const uint8_t two[] = { 0x30, 0x01, 0xAA, '\n', 0xFF, 0x00,
+                                   0x30, 0x00, '\r', '\n', 0xFF };
+    static const uint8_t overrun[] = { 0x30, 0x01, 0xAA, 0x30, 0x05, 0x01 };
+    static const uint8_t stray[] = { 0x30, 0x00, 0x02, 0x01, 0x00 };
+    static const uint8_t indef[] = { 0x30, 0x80, 0x00, 0x00 };
+    const uint8_t* item = NULL;
+    size_t item_len = 0;
+    size_t off = 0;
+
+    REQUIRE(wolfcert_der_chain_next(two, sizeof(two), &off, &item,
+                                    &item_len) == 1);
+    REQUIRE(item == two && item_len == 3 && off == 3);
+    REQUIRE(wolfcert_der_chain_next(two, sizeof(two), &off, &item,
+                                    &item_len) == 1);
+    REQUIRE(item == two + 6 && item_len == 2);
+    REQUIRE(wolfcert_der_chain_next(two, sizeof(two), &off, &item,
+                                    &item_len) == 0);
+    REQUIRE(off == sizeof(two));
+
+    off = 3;
+    REQUIRE(wolfcert_der_chain_next(overrun, sizeof(overrun), &off, &item,
+                                    &item_len) == 0);
+    REQUIRE(off == 3);
+    off = 0;
+    REQUIRE(wolfcert_der_chain_next(stray, sizeof(stray), &off, &item,
+                                    &item_len) == 1);
+    REQUIRE(wolfcert_der_chain_next(stray, sizeof(stray), &off, &item,
+                                    &item_len) == 0);
+    REQUIRE(off == 2);
+    off = 0;
+    REQUIRE(wolfcert_der_chain_next(indef, sizeof(indef), &off, &item,
+                                    &item_len) == 0);
+
+    return 0;
+}
+
+static int test_der_is_cert(void)
+{
+    static const uint8_t cert[] = { 0x30, 0x17, 0x30, 0x10, 0xA0, 0x03, 0x02,
+                                    0x01, 0x02, 0x02, 0x01, 0x01, 0x30, 0x02,
+                                    0x06, 0x00, 0x30, 0x00, 0x30, 0x00, 0x30,
+                                    0x00, 0x03, 0x01, 0x00 };
+    static const uint8_t no_version[] = { 0x30, 0x12, 0x30, 0x0B, 0x02, 0x01,
+                                          0x01, 0x30, 0x02, 0x06, 0x00, 0x30,
+                                          0x00, 0x30, 0x00, 0x30, 0x00, 0x03,
+                                          0x01, 0x00 };
+    static const uint8_t csr[] = { 0x30, 0x12, 0x30, 0x0B, 0x02, 0x01, 0x00,
+                                   0x30, 0x02, 0x31, 0x00, 0x30, 0x00, 0xA0,
+                                   0x00, 0x30, 0x00, 0x03, 0x01, 0x00 };
+    static const uint8_t crl[] = { 0x30, 0x12, 0x30, 0x0B, 0x02, 0x01, 0x01,
+                                   0x30, 0x02, 0x06, 0x00, 0x30, 0x00, 0x17,
+                                   0x00, 0x30, 0x00, 0x03, 0x01, 0x00 };
+    uint8_t buf[sizeof(cert) + 1];
+
+    REQUIRE(wolfcert_der_is_cert(cert, sizeof(cert)) == 1);
+    REQUIRE(wolfcert_der_is_cert(cert, 1) == 0);
+    REQUIRE(wolfcert_der_is_cert(cert, sizeof(cert) - 1) == 0);
+    REQUIRE(wolfcert_der_is_cert(no_version, sizeof(no_version)) == 1);
+    REQUIRE(wolfcert_der_is_cert(csr, sizeof(csr)) == 0);
+    REQUIRE(wolfcert_der_is_cert(crl, sizeof(crl)) == 0);
+
+    memcpy(buf, cert, sizeof(cert));
+    buf[1] = 0x18;
+    buf[sizeof(cert)] = 0x00;
+    REQUIRE(wolfcert_der_is_cert(buf, sizeof(buf)) == 0);
+    memcpy(buf, cert, sizeof(cert));
+    buf[20] = 0x31;
+    REQUIRE(wolfcert_der_is_cert(buf, sizeof(cert)) == 0);
+    memcpy(buf, cert, sizeof(cert));
+    buf[22] = 0x04;
+    REQUIRE(wolfcert_der_is_cert(buf, sizeof(cert)) == 0);
+    memcpy(buf, cert, sizeof(cert));
+    buf[3] = 0x0F;
+    REQUIRE(wolfcert_der_is_cert(buf, sizeof(cert)) == 0);
+    memcpy(buf, cert, sizeof(cert));
+    buf[14] = 0x05;
+    REQUIRE(wolfcert_der_is_cert(buf, sizeof(cert)) == 0);
+    memcpy(buf, cert, sizeof(cert));
+    buf[17] = 0x80;
+    REQUIRE(wolfcert_der_is_cert(buf, sizeof(cert)) == 0);
+
+    return 0;
+}
+
 int main(void)
 {
     REQUIRE(test_static_mem_init() == 0);
@@ -301,6 +387,10 @@ int main(void)
         return 1;
 #endif
     if (test_wc_err_zero())
+        return 1;
+    if (test_der_chain_next())
+        return 1;
+    if (test_der_is_cert())
         return 1;
     wolfcert_cleanup();
     printf("OK\n");

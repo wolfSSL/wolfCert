@@ -963,6 +963,45 @@ static int buf_filetype(const uint8_t* buf, size_t len)
                                             : WOLFSSL_FILETYPE_PEM;
 }
 
+static int load_der_anchors(WOLFSSL_CTX* ctx, const uint8_t* buf, size_t len)
+{
+    size_t off = 0;
+    const uint8_t* cert = NULL;
+    size_t cert_len = 0;
+    int loaded = 0;
+    int refused = 0;
+    int rc;
+
+    while ((rc = wolfcert_der_chain_next(buf, len, &off, &cert,
+                                         &cert_len)) == 1 &&
+            wolfcert_der_is_cert(cert, cert_len)) {
+        rc = wolfSSL_CTX_load_verify_buffer(ctx, cert, (long)cert_len,
+                                            WOLFSSL_FILETYPE_ASN1);
+        if (rc == MEMORY_E)
+            return WOLFCERT_ERR_RC_WC(WOLFCERT_ERR_MEMORY, rc, "http",
+                                      "trust_anchors: out of memory");
+        if (rc == WOLFSSL_SUCCESS)
+            ++loaded;
+        else
+            refused = rc < 0 ? rc : WOLFSSL_FATAL_ERROR;
+    }
+
+    if (rc == WOLFCERT_ERR_BAD_ARG)
+        return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "http",
+                            "trust_anchors: too large");
+    if (cert == NULL)
+        return WOLFCERT_ERR(WOLFCERT_ERR_TLS, "http",
+                            "trust_anchors: malformed DER");
+    if (loaded == 0 && refused < 0)
+        return WOLFCERT_ERR_RC_WC(WOLFCERT_ERR_TLS, refused, "http",
+                                  "trust_anchors: no certificate wolfSSL "
+                                  "accepts");
+    if (loaded == 0)
+        return WOLFCERT_ERR(WOLFCERT_ERR_TLS, "http",
+                            "trust_anchors: no certificate");
+    return WOLFCERT_OK;
+}
+
 static int check_client_key(const uint8_t* cert, size_t cert_len,
                             const uint8_t* key, const WolfCertKey* key_obj)
 {
@@ -1102,13 +1141,19 @@ static int setup_tls_ex(WolfCertConn* c, const TlsDials* dials,
 #endif
 
     if (dials->trust_anchors != NULL && dials->trust_anchors_len > 0) {
-        int rc = wolfSSL_CTX_load_verify_buffer(ctx, dials->trust_anchors,
-                    (long)dials->trust_anchors_len,
-                    buf_filetype(dials->trust_anchors, dials->trust_anchors_len));
+        int rc = WOLFCERT_OK;
 
-        if (rc != WOLFSSL_SUCCESS) {
+        if (wolfcert_buffer_is_der(dials->trust_anchors,
+                                   dials->trust_anchors_len))
+            rc = load_der_anchors(ctx, dials->trust_anchors,
+                                  dials->trust_anchors_len);
+        else if (wolfSSL_CTX_load_verify_buffer(ctx, dials->trust_anchors,
+                     (long)dials->trust_anchors_len, WOLFSSL_FILETYPE_PEM) !=
+                 WOLFSSL_SUCCESS)
+            rc = WOLFCERT_ERR_TLS;
+        if (rc != WOLFCERT_OK) {
             wolfSSL_CTX_free(ctx);
-            return WOLFCERT_ERR_TLS;
+            return rc;
         }
     }
 

@@ -254,6 +254,11 @@ contract, alone or in a group comment.
 - **The HTTPS transport needs TLS 1.2 or newer**, or TLS 1.3 when wolfSSL
   is built with `WOLFSSL_NO_TLS12`. A server limited to older versions
   fails the handshake.
+- **ML-DSA client authentication needs TLS 1.3.** Against a wolfSSL
+  without TLS 1.3, `https://` calls with an ML-DSA client certificate return
+  `WOLFCERT_ERR_UNSUPPORTED` before connecting, even for a server that never
+  asks for it. A server limited to TLS 1.2 that asks for it fails the
+  handshake with `WOLFCERT_ERR_TLS`.
 - **With `verify_server`, a host wolfSSL does not accept as an FQDN fails
   the session open** with `WOLFCERT_ERR_TLS`. A single-label name such as
   `https://est-server/` needs wolfSSL built with

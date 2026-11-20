@@ -498,6 +498,7 @@ static int run_key_type(const char* url, WolfCertKeyType type, int param,
     WolfCertEstResult second = { 0 };
     const uint8_t* got_id = NULL;
     size_t got_len = 0;
+    int want;
     int ops;
     int rc;
 
@@ -662,6 +663,14 @@ static int run_key_type(const char* url, WolfCertKeyType type, int param,
         REQUIRE(other == NULL);
     }
 
+    want = WOLFCERT_OK;
+#if defined(WOLFCERT_HAVE_MLDSA) && !defined(WOLFSSL_TLS13)
+    /* The ML-DSA store key is refused as the mTLS identity before it signs. */
+    if (type == WOLFCERT_KEY_MLDSA44 || type == WOLFCERT_KEY_MLDSA65 ||
+            type == WOLFCERT_KEY_MLDSA87)
+        want = WOLFCERT_ERR_UNSUPPORTED;
+#endif
+
 #ifdef KEEP_PEER_CERT
     /* /simplereenroll authenticates with the store key: one signature for the
      * CSR, at least one more for the TLS handshake. */
@@ -676,11 +685,11 @@ static int run_key_type(const char* url, WolfCertKeyType type, int param,
                                   &renew_meta, &unused, &renewed);
     wolfcert_client_free(client);
     REQUIRE(unused == NULL);
-    if (rc != WOLFCERT_OK)
+    if (rc != want)
         fprintf(stderr, "reenroll rc=%d (%s)\n", rc,
                 wolfcert_last_error_message());
-    REQUIRE(rc == WOLFCERT_OK);
-    REQUIRE(mock_private_ops >= ops + 2);
+    REQUIRE(rc == want);
+    REQUIRE(want != WOLFCERT_OK || mock_private_ops >= ops + 2);
 #endif
 
     /* The store key as the mTLS identity, one-shot and in a session. */
@@ -693,23 +702,28 @@ static int run_key_type(const char* url, WolfCertKeyType type, int param,
     ops = mock_private_ops;
     rc = wolfcert_est_simple_enroll(&cli, csr.data, csr.len, &second);
     wolfcert_buffer_free(&csr);
-    if (rc != WOLFCERT_OK)
+    if (rc != want)
         fprintf(stderr, "id enroll rc=%d (%s)\n", rc,
                 wolfcert_last_error_message());
-    REQUIRE(rc == WOLFCERT_OK);
-    REQUIRE(mock_private_ops > ops);
+    REQUIRE(rc == want);
+    REQUIRE(want == WOLFCERT_OK ? mock_private_ops > ops
+                                : mock_private_ops == ops);
 
-    WolfCertEstSession* sess = NULL;
-    WolfCertEstResult third = { 0 };
-    REQUIRE(wolfcert_csr_build(reloaded, &meta, &csr) == WOLFCERT_OK);
-    ops = mock_private_ops;
-    REQUIRE(wolfcert_est_session_open(&cli, &sess) == WOLFCERT_OK);
-    rc = wolfcert_est_session_simple_enroll(sess, csr.data, csr.len, &third);
-    wolfcert_est_session_close(sess);
-    wolfcert_buffer_free(&csr);
-    REQUIRE(rc == WOLFCERT_OK);
-    REQUIRE(mock_private_ops > ops);
-    wolfcert_est_result_free(&third);
+    if (want == WOLFCERT_OK) {
+        WolfCertEstSession* sess = NULL;
+        WolfCertEstResult third = { 0 };
+
+        REQUIRE(wolfcert_csr_build(reloaded, &meta, &csr) == WOLFCERT_OK);
+        ops = mock_private_ops;
+        REQUIRE(wolfcert_est_session_open(&cli, &sess) == WOLFCERT_OK);
+        rc = wolfcert_est_session_simple_enroll(sess, csr.data, csr.len,
+                                                &third);
+        wolfcert_est_session_close(sess);
+        wolfcert_buffer_free(&csr);
+        REQUIRE(rc == WOLFCERT_OK);
+        REQUIRE(mock_private_ops > ops);
+        wolfcert_est_result_free(&third);
+    }
 
     wolfcert_est_result_free(&second);
     wolfcert_buffer_free(&renewed);

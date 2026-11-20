@@ -78,7 +78,7 @@ typedef struct {
 
     /* TLS client identity, loaded before the handshake; it serves both mTLS
      * and a later post-handshake CertificateRequest. */
-    const uint8_t* client_cert;
+    const uint8_t* client_cert;    /* leaf, then intermediates as in types.h */
     size_t         client_cert_len;
     const uint8_t* client_key;
     size_t         client_key_len;

@@ -244,7 +244,11 @@ typedef struct {
     int              timeout_ms;     /* per-request timeout; 0 = default */
 
     /* Optional mutual-TLS client identity (both set), PEM or DER. For EST, a
-     * session's identity is the cert its /simplereenroll renews. */
+     * session's identity is the cert its /simplereenroll renews. client_cert
+     * is the leaf, then up to wolfSSL's MAX_CHAIN_DEPTH intermediates; in DER
+     * they follow back to back.
+     * Data after the last DER certificate is dropped, but refused if a
+     * certificate (DER or PEM) follows it. */
     const uint8_t*   client_cert;
     size_t           client_cert_len;
     const uint8_t*   client_key;

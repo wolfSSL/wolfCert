@@ -71,6 +71,11 @@ if(WOLFCERT_ENABLE_EST)
         target_link_libraries(test_est_mtls_roundtrip PRIVATE wolfcert Threads::Threads)
         add_test(NAME est_mtls_roundtrip COMMAND test_est_mtls_roundtrip)
 
+        add_executable(test_est_chain_roundtrip integration/test_est_chain_roundtrip.c)
+        target_link_libraries(test_est_chain_roundtrip PRIVATE wolfcert Threads::Threads)
+        add_test(NAME est_chain_roundtrip COMMAND test_est_chain_roundtrip)
+        set_tests_properties(est_chain_roundtrip PROPERTIES SKIP_RETURN_CODE 77)
+
         add_executable(test_est_devid_roundtrip integration/test_est_devid_roundtrip.c)
         target_link_libraries(test_est_devid_roundtrip PRIVATE wolfcert Threads::Threads)
         add_test(NAME est_devid_roundtrip COMMAND test_est_devid_roundtrip)

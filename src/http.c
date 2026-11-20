@@ -1051,6 +1051,58 @@ static int load_der_anchors(WOLFSSL_CTX* ctx, const uint8_t* buf, size_t len)
     return WOLFCERT_OK;
 }
 
+/* Leaf, then any intermediates; DER data after the last one is dropped. */
+static int use_client_chain(WOLFSSL_CTX* ctx, const uint8_t* buf, size_t len)
+{
+    size_t off = 0;
+    const uint8_t* cert = NULL;
+    size_t cert_len = 0;
+    int format = buf_filetype(buf, len);
+    int rc;
+
+    if (format == WOLFSSL_FILETYPE_ASN1) {
+        size_t end = 0;
+        size_t stray = 0;
+
+        while ((rc = wolfcert_der_next(buf, len, &off, &cert,
+                                       &cert_len)) == 1) {
+            if (cert != buf && !wolfcert_der_is_cert(cert, cert_len)) {
+                stray = (size_t)(cert - buf);
+                break;
+            }
+            if (cert != buf + end)
+                return WOLFCERT_ERR(WOLFCERT_ERR_TLS, "http",
+                                    "client_cert: filler between "
+                                    "certificates at byte %zu", end);
+            end = off;
+        }
+        if (rc == WOLFCERT_ERR_BAD_ARG)
+            return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "http",
+                                "client_cert: too large");
+        if (rc < 0)
+            return WOLFCERT_ERR(WOLFCERT_ERR_TLS, "http",
+                                "client_cert: malformed DER at byte %zu", off);
+        if (rc == 0)
+            stray = off;
+        rc = cert_follows(buf, len, stray);
+        if (rc)
+            return cert_follows_err("client_cert", rc, stray);
+        len = end;
+    }
+
+    rc = wolfSSL_CTX_use_certificate_chain_buffer_format(ctx, buf, (long)len,
+                                                         format);
+    if (rc == MAX_CHAIN_ERROR)
+        return WOLFCERT_ERR_RC_WC(WOLFCERT_ERR_TLS, rc, "http",
+                                  "client_cert: chain longer than wolfSSL's "
+                                  "MAX_CHAIN_DEPTH");
+    if (rc != WOLFSSL_SUCCESS)
+        return WOLFCERT_ERR_RC_WC(rc == MEMORY_E ? WOLFCERT_ERR_MEMORY
+                                  : WOLFCERT_ERR_TLS, rc, "http",
+                                  "loading client_cert failed");
+    return WOLFCERT_OK;
+}
+
 static int check_client_key(const uint8_t* cert, size_t cert_len,
                             const uint8_t* key, const WolfCertKey* key_obj)
 {
@@ -1171,12 +1223,11 @@ static int setup_tls_ex(WolfCertConn* c, const TlsDials* dials,
     if (dials->client_cert != NULL &&
             (dials->client_key != NULL || dials->client_key_obj != NULL)) {
         /* Load the identity on the CTX so a PHA request can still use it. */
-        int rc = wolfSSL_CTX_use_certificate_buffer(ctx, dials->client_cert,
-                (long)dials->client_cert_len,
-                buf_filetype(dials->client_cert, dials->client_cert_len));
-        if (rc != WOLFSSL_SUCCESS) {
+        int rc = use_client_chain(ctx, dials->client_cert,
+                                  dials->client_cert_len);
+        if (rc != WOLFCERT_OK) {
             wolfSSL_CTX_free(ctx);
-            return WOLFCERT_ERR_TLS;
+            return rc;
         }
 
         rc = use_client_key(ctx, dials);

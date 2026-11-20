@@ -1234,6 +1234,81 @@ static int test_client_key_checks(void)
     return 0;
 }
 
+#if defined(WOLFSSL_HAVE_MLDSA) && !defined(WOLFSSL_TLS13) && \
+    defined(HAVE_ECC) && defined(USE_WOLFSSL_MEMORY) && \
+    !defined(WOLFSSL_STATIC_MEMORY) && !defined(WOLFSSL_DEBUG_MEMORY)
+#define TEST_CLIENT_ALG_OOM
+#define USE_CERT_BUFFERS_256
+#include <wolfssl/certs_test.h>
+
+static int g_allocs_left = -1;
+static int g_alloc_failed;
+
+static int alloc_fails(void)
+{
+    if (g_allocs_left < 0)
+        return 0;
+    if (g_allocs_left-- == 0) {
+        g_alloc_failed = 1;
+        return 1;
+    }
+    return 0;
+}
+
+static void* failing_malloc(size_t sz)
+{
+    return alloc_fails() ? NULL : malloc(sz);
+}
+
+static void* failing_realloc(void* ptr, size_t sz)
+{
+    return alloc_fails() ? NULL : realloc(ptr, sz);
+}
+
+/* Each failed allocation before the connect gives ERR_MEMORY, including the
+ * ones in the client certificate algorithm check. */
+static int test_client_alg_oom(void)
+{
+    WolfCertHttpSessionCfg scfg = {
+        .base_url        = "https://127.0.0.1:1",
+        .client_cert     = serv_ecc_der_256,
+        .client_cert_len = sizeof_serv_ecc_der_256,
+        .client_key      = ecc_key_der_256,
+        .client_key_len  = sizeof_ecc_key_der_256,
+    };
+    WolfCertHttpSession* s = NULL;
+    wolfSSL_Malloc_cb  saved_malloc;
+    wolfSSL_Free_cb    saved_free;
+    wolfSSL_Realloc_cb saved_realloc;
+    int fails;
+    int rc;
+
+    REQUIRE(wolfSSL_GetAllocators(&saved_malloc, &saved_free,
+                                  &saved_realloc) == 0);
+    REQUIRE(wolfSSL_SetAllocators(failing_malloc, free,
+                                  failing_realloc) == 0);
+    for (fails = 0; ; fails++) {
+        g_allocs_left = fails;
+        g_alloc_failed = 0;
+        rc = wolfcert_http_session_open(&scfg, &s);
+        g_allocs_left = -1;
+        if (!g_alloc_failed || rc != WOLFCERT_ERR_MEMORY)
+            break;
+    }
+    REQUIRE(wolfSSL_SetAllocators(saved_malloc, saved_free,
+                                  saved_realloc) == 0);
+    if (g_alloc_failed) {
+        fprintf(stderr, "FAIL session open with allocation %d failing: %d\n",
+                fails, rc);
+        return 1;
+    }
+    REQUIRE(fails > 2);
+    REQUIRE(rc == WOLFCERT_ERR_IO);
+    REQUIRE(s == NULL);
+    return 0;
+}
+#endif
+
 int main(void)
 {
     /* make check has no per-test timeout, and a framing bug shows as a hang. */
@@ -1326,6 +1401,10 @@ int main(void)
         return 1;
     if (test_client_key_checks())
         return 1;
+#ifdef TEST_CLIENT_ALG_OOM
+    if (test_client_alg_oom())
+        return 1;
+#endif
     wolfcert_cleanup();
     printf("OK\n");
     return 0;

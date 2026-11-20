@@ -662,6 +662,35 @@ static int run_key_type(const char* url, WolfCertKeyType type, int param,
         REQUIRE(other == NULL);
     }
 
+#if defined(WOLFCERT_HAVE_MLDSA) && !defined(WOLFSSL_TLS13)
+    /* The ML-DSA store key is refused as the mTLS identity before it signs. */
+    if (type == WOLFCERT_KEY_MLDSA44 || type == WOLFCERT_KEY_MLDSA65 ||
+            type == WOLFCERT_KEY_MLDSA87) {
+        WolfCertEstSession* sess = NULL;
+
+        cli.client_cert     = issued.cert_pem.data;
+        cli.client_cert_len = issued.cert_pem.len;
+        cli.client_key      = NULL;
+        cli.client_key_len  = 0;
+        cli.client_key_obj  = reloaded;
+        REQUIRE(wolfcert_csr_build(reloaded, &meta, &csr) == WOLFCERT_OK);
+        ops = mock_private_ops;
+        REQUIRE(wolfcert_est_simple_enroll(&cli, csr.data, csr.len,
+                                           &second) ==
+                WOLFCERT_ERR_UNSUPPORTED);
+        REQUIRE(wolfcert_est_session_open(&cli, &sess) ==
+                WOLFCERT_ERR_UNSUPPORTED);
+        REQUIRE(sess == NULL);
+        REQUIRE(mock_private_ops == ops);
+        wolfcert_buffer_free(&csr);
+        wolfcert_est_result_free(&issued);
+        wolfcert_key_free(reloaded);
+        wolfcert_key_free(key);
+        mock_reset();
+        return 0;
+    }
+#endif
+
 #ifdef KEEP_PEER_CERT
     /* /simplereenroll authenticates with the store key: one signature for the
      * CSR, at least one more for the TLS handshake. */

@@ -40,6 +40,7 @@ jobs:
           - { name: cmake-rsa-min,         os: ubuntu-latest, build: cmake,    wolfssl: rsa-min }
           - { name: cmake-no-des3,         os: ubuntu-latest, build: cmake,    wolfssl: no-des3 }
           - { name: cmake-tls13-only,      os: ubuntu-latest, build: cmake,    wolfssl: tls13-only }
+          - { name: cmake-tls12-only,      os: ubuntu-latest, build: cmake,    wolfssl: tls12-only }
           # ML-DSA per-level gating
           - { name: cmake-mldsa-44off,     os: ubuntu-latest, build: cmake,    wolfssl: mldsa-44off }
           - { name: cmake-mldsa-65off,     os: ubuntu-latest, build: cmake,    wolfssl: mldsa-65off }

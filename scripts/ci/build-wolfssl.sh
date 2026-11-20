@@ -37,7 +37,7 @@ _base_flags() {
 KNOWN_CONFIGS=(
     full full-tsan full-opensslextra full-all
     est-only-nonrsa rsa-min ecc-only-est
-    no-des3 tls13-only
+    no-des3 tls13-only tls12-only
     mldsa-44off mldsa-65off mldsa-87off
     static-mem no-malloc no-cryptocb wolftpm
     # Negative configs for assert-configure-fails.sh.
@@ -100,6 +100,10 @@ resolve_flags() {
             # WOLFSSL_NO_TLS12 -> the TLS floor becomes 1.3; keeps PHA meaningful.
             _base_flags
             printf '%s\n' --disable-tlsv12 ;;
+        tls12-only)
+            # No TLS 1.3, so no ML-DSA client authentication.
+            _base_flags
+            printf '%s\n' --disable-tls13 ;;
         mldsa-44off)
             _base_flags
             printf '%s\n' 'CPPFLAGS=-DWOLFSSL_ALT_NAMES -DWOLFSSL_CERT_NAME_ALL -DKEEP_PEER_CERT -DWOLFSSL_HAVE_TLS_UNIQUE -DWOLFSSL_PUBLIC_ASN -DWOLFSSL_NO_ML_DSA_44' ;;

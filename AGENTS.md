@@ -265,6 +265,19 @@ contract, alone or in a group comment.
 - **SCEP over plain HTTP is downgradable:** an attacker who strips `AES` from
   GetCACaps forces 3DES. Pin the CA fingerprint and force AES with
   `proto_opts.scep.content_cipher` where the network is untrusted.
+- **TLS failures come back from session open or from a request.**
+  `WOLFCERT_ERR_TLS_UNTRUSTED`: the server certificate failed verification
+  against `trust_anchors` (wrong anchor, host name), or session open found a
+  trust anchor not valid at the device time (device clock).
+  `WOLFCERT_ERR_TLS_PEER_REJECTED`: the server refused the configured client
+  certificate with an authenticated TLS 1.3 alert about it, a reason to retry
+  with another identity such as the IDevID after a refused LDevID; it needs
+  `verify_server`. A TLS 1.2 server's refusal arrives before the server is
+  authenticated and can be forged, so it comes back as `WOLFCERT_ERR_TLS`
+  with the alert named in `wolfcert_last_error_message()`.
+  `WOLFCERT_ERR_MEMORY`: wolfSSL ran out of memory. Anything else, including
+  a connection dropped mid-handshake, is `WOLFCERT_ERR_TLS` or
+  `WOLFCERT_ERR_IO`.
 - **Error detail:** `wolfcert_strerror(rc)` names the code;
   `wolfcert_last_error_message()` and `wolfcert_last_wolfssl_err()` give the
   detail behind it, per thread when wolfSSL's `THREAD_LS_T` is thread-local

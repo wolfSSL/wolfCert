@@ -94,14 +94,18 @@ typedef struct {
 } WolfCertHttpSessionCfg;
 
 /* Connects without verifying the server; the first request runs the TLS
- * handshake and returns WOLFCERT_ERR_TLS if it fails, or WOLFCERT_ERR_MEMORY
- * if wolfSSL runs out of memory. */
+ * handshake. Open returns WOLFCERT_ERR_TLS_UNTRUSTED if a trust anchor is not
+ * valid at the device time. Requests return WOLFCERT_ERR_TLS_UNTRUSTED if the
+ * server certificate fails verification, WOLFCERT_ERR_TLS_PEER_REJECTED if the
+ * server refuses the client certificate in TLS 1.3, WOLFCERT_ERR_MEMORY if
+ * wolfSSL runs out of memory, and WOLFCERT_ERR_TLS or WOLFCERT_ERR_IO for any
+ * other TLS failure. */
 WOLFCERT_API int  wolfcert_http_session_open (const WolfCertHttpSessionCfg* cfg,
                                               WolfCertHttpSession** out);
 
 /* req->url must match the session's scheme, host and port. After a failed
- * exchange, a body ending at the close or extra bytes after a reply, requests
- * get WOLFCERT_ERR_CONN_CLOSED. */
+ * exchange, a body ending at the close, extra bytes after a reply or a write
+ * the peer refused, requests get WOLFCERT_ERR_CONN_CLOSED. */
 WOLFCERT_API int  wolfcert_http_session_request(WolfCertHttpSession* s,
                                                 const WolfCertHttpRequest* req,
                                                 WolfCertHttpResponse* resp);

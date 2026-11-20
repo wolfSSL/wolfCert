@@ -90,7 +90,7 @@ static int test_no_sigpipe_on_dead_peer(void)
 
     REQUIRE(write_to_dead_peer(1, 0, &rc) == 0);
     REQUIRE(g_sigpipe_raised == 0);
-    REQUIRE(rc == WOLFCERT_ERR_IO);
+    REQUIRE(rc == WOLFCERT_ERR_CONN_CLOSED);
 
     return 0;
 }
@@ -102,7 +102,7 @@ static int test_send_flag_alone_suppresses(void)
 
     REQUIRE(write_to_dead_peer(0, 0, &rc) == 0);
     REQUIRE(g_sigpipe_raised == 0);
-    REQUIRE(rc == WOLFCERT_ERR_IO);
+    REQUIRE(rc == WOLFCERT_ERR_CONN_CLOSED);
 
     return 0;
 }

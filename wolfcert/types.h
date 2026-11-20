@@ -59,8 +59,8 @@ typedef struct WolfCertTransport {
      * WOLFCERT_ERR_*. *conn is opaque and never NULL-tested, so 0 is valid. */
     int  (*connect)(void* ctx, const char* host, int port,
                     int timeout_ms, void** conn);
-    /* Bytes moved, or a negative WOLFCERT_ERR_*; never 0 (orderly close is
-     * CONN_CLOSED). */
+    /* Bytes moved, or a negative WOLFCERT_ERR_*; never 0. An orderly close
+     * on read is CONN_CLOSED; a write to a closed or reset peer may be too. */
     int  (*read)(void* ctx, void* conn, uint8_t* buf, size_t len,
                  int timeout_ms);
     int  (*write)(void* ctx, void* conn, const uint8_t* buf, size_t len,

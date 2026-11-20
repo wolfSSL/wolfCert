@@ -50,7 +50,18 @@ enum {
     WOLFCERT_ERR_WANT_READ   = -14,
     WOLFCERT_ERR_WANT_WRITE  = -15,
 
-    WOLFCERT_ERR_CONN_CLOSED = -16
+    WOLFCERT_ERR_CONN_CLOSED = -16,
+
+    /* The server refused the configured client certificate with an
+     * authenticated alert about it, such as unknown_ca or certificate_expired:
+     * TLS 1.3, after the handshake, with verify_server set. Any other alert,
+     * which may be forged, gives WOLFCERT_ERR_TLS with the alert named in the
+     * error message. */
+    WOLFCERT_ERR_TLS_PEER_REJECTED = -17,
+    /* The server certificate failed verification against trust_anchors:
+     * unknown issuer, outside its validity period or a name mismatch. Session
+     * open returns it when a trust anchor is not valid at the device time. */
+    WOLFCERT_ERR_TLS_UNTRUSTED     = -18
 };
 
 /* Returns a human-readable description of a wolfCert error code. */

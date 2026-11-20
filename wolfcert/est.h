@@ -158,8 +158,12 @@ WOLFCERT_API int wolfcert_est_simple_reenroll(const WolfCertServerCfg* srv,
  * request is in flight, a call for another operation, output or encoding, and
  * any blocking call, returns WOLFCERT_ERR_BAD_ARG and leaves it intact. Open
  * checks the config and connects synchronously; it does not verify the server:
- * the first request runs the TLS handshake and returns WOLFCERT_ERR_TLS if it
- * fails, or WOLFCERT_ERR_MEMORY if wolfSSL runs out of memory. HTTP Basic
+ * the first request runs the TLS handshake. Open returns
+ * WOLFCERT_ERR_TLS_UNTRUSTED if a trust anchor is not valid at the device time.
+ * Requests return WOLFCERT_ERR_TLS_UNTRUSTED if the server certificate fails
+ * verification, WOLFCERT_ERR_TLS_PEER_REJECTED if the server refuses the client
+ * certificate in TLS 1.3, WOLFCERT_ERR_MEMORY if wolfSSL runs out of memory,
+ * and WOLFCERT_ERR_TLS or WOLFCERT_ERR_IO for any other TLS failure. HTTP Basic
  * credentials are copied at open and sent on every request. With
  * proto_opts.est.allow_post_handshake_auth set, the server can request the
  * preloaded client cert via TLS 1.3 post-handshake auth (RFC 8446 section

@@ -210,12 +210,15 @@ WOLFCERT_API int wolfcert_scep_get_next_ca_cert(const WolfCertServerCfg* srv,
  * on it is blocking or _nb, and the style may change between requests. Open
  * checks the config, copies proto_opts.scep and connects synchronously; over
  * https:// it does not verify the server: the first request runs the TLS
- * handshake and returns WOLFCERT_ERR_TLS if it fails, or WOLFCERT_ERR_MEMORY
- * if wolfSSL runs out of memory. An _nb call returning WOLFCERT_ERR_WANT_READ
- * / _WANT_WRITE is repeated with the same arguments when the session fd is
- * ready. While a request is in flight, a call for another operation, output
- * or encoding, and any blocking call, returns WOLFCERT_ERR_BAD_ARG and leaves
- * it intact. */
+ * handshake. Open returns WOLFCERT_ERR_TLS_UNTRUSTED if a trust anchor is not
+ * valid at the device time. Requests return WOLFCERT_ERR_TLS_UNTRUSTED if the
+ * server certificate fails verification, WOLFCERT_ERR_TLS_PEER_REJECTED if the
+ * server refuses the client certificate in TLS 1.3, WOLFCERT_ERR_MEMORY if
+ * wolfSSL runs out of memory, and WOLFCERT_ERR_TLS or WOLFCERT_ERR_IO for any
+ * other TLS failure. An _nb call returning WOLFCERT_ERR_WANT_READ / _WANT_WRITE is
+ * repeated with the same arguments when the session fd is ready. While a
+ * request is in flight, a call for another operation, output or encoding, and
+ * any blocking call, returns WOLFCERT_ERR_BAD_ARG and leaves it intact. */
 typedef struct WolfCertScepSession WolfCertScepSession;
 
 WOLFCERT_API int  wolfcert_scep_session_open(const WolfCertServerCfg* srv,

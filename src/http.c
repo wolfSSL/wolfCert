@@ -347,6 +347,10 @@ typedef struct {
     WOLFSSL*     ssl;
     int          io_timeout_ms;   /* 0 nonblocking, < 0 unbounded */
     unsigned int connected : 1;
+    unsigned int tx_closed : 1;
+    unsigned int has_client_cert : 1;
+    unsigned int verify_server : 1;
+    unsigned int posix_read : 1;
 } WolfCertConn;
 
 /* Open a connection and take a copy of the transport that owns it. */
@@ -376,6 +380,9 @@ static int dial(WolfCertConn* c, const char* host, int port, int timeout_ms,
 #endif
     }
 
+#ifdef WOLFCERT_HAVE_BUILTIN_TRANSPORT
+    c->posix_read = c->t.read == wolfcert_posix_transport.read;
+#endif
     rc = c->t.connect(c->t.ctx, host, port, timeout_ms, &c->handle);
     if (rc != WOLFCERT_OK)
         return rc < 0 ? rc : WOLFCERT_ERR(WOLFCERT_ERR_IO, "http",
@@ -478,6 +485,8 @@ static int wolfcert_cbio_send(WOLFSSL* ssl, char* buf, int sz, void* ctx)
 
     if (c == NULL || sz <= 0)
         return WOLFSSL_CBIO_ERR_GENERAL;
+    if (c->tx_closed)
+        return sz;
 
     r = c->t.write(c->t.ctx, c->handle, (const uint8_t*)buf, (size_t)sz,
                    c->io_timeout_ms);
@@ -491,10 +500,149 @@ static int wolfcert_cbio_send(WOLFSSL* ssl, char* buf, int sz, void* ctx)
         case WOLFCERT_ERR_WANT_WRITE:
             return WOLFSSL_CBIO_ERR_WANT_WRITE;
         case WOLFCERT_ERR_CONN_CLOSED:
-            return WOLFSSL_CBIO_ERR_CONN_CLOSE;
+            if (!c->posix_read)
+                return WOLFSSL_CBIO_ERR_CONN_CLOSE;
+            /* wolfSSL stops reading after a failed send; the built-in read
+             * returns at once on a closed socket, so let it read the alert. */
+            c->tx_closed = 1;
+            return sz;
         default:
             return WOLFSSL_CBIO_ERR_GENERAL;
     }
+}
+
+/* Name of a fatal alert, else NULL. */
+static const char* alert_name(int code)
+{
+    switch (code) {
+        case unexpected_message:      return "unexpected_message";
+        case bad_record_mac:          return "bad_record_mac";
+        case record_overflow:         return "record_overflow";
+        case decompression_failure:   return "decompression_failure";
+        case handshake_failure:       return "handshake_failure";
+        case no_certificate:          return "no_certificate";
+        case bad_certificate:         return "bad_certificate";
+        case unsupported_certificate: return "unsupported_certificate";
+        case certificate_revoked:     return "certificate_revoked";
+        case certificate_expired:     return "certificate_expired";
+        case certificate_unknown:     return "certificate_unknown";
+        case illegal_parameter:       return "illegal_parameter";
+        case unknown_ca:              return "unknown_ca";
+        case access_denied:           return "access_denied";
+        case decode_error:            return "decode_error";
+        case decrypt_error:           return "decrypt_error";
+        case wolfssl_alert_protocol_version: return "protocol_version";
+        case insufficient_security:   return "insufficient_security";
+        case internal_error:          return "internal_error";
+        case inappropriate_fallback:  return "inappropriate_fallback";
+        case user_canceled:           return "user_canceled";
+        case no_renegotiation:        return "no_renegotiation";
+        case missing_extension:       return "missing_extension";
+        case unsupported_extension:   return "unsupported_extension";
+        case unrecognized_name:       return "unrecognized_name";
+        case bad_certificate_status_response:
+            return "bad_certificate_status_response";
+        case unknown_psk_identity:    return "unknown_psk_identity";
+        case certificate_required:    return "certificate_required";
+        case general_error:           return "general_error";
+        case no_application_protocol: return "no_application_protocol";
+        case ech_required:            return "ech_required";
+        default:                      return NULL;
+    }
+}
+
+/* 1 for an alert about the client certificate itself. */
+static int cert_alert(int code)
+{
+    switch (code) {
+        case bad_certificate:
+        case unsupported_certificate:
+        case certificate_revoked:
+        case certificate_expired:
+        case certificate_unknown:
+        case unknown_ca:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+static int is_untrusted_err(int e)
+{
+    switch (e) {
+        case ASN_NO_SIGNER_E:
+        case ASN_SELF_SIGNED_E:
+        case ASN_SIG_CONFIRM_E:
+        case ASN_AFTER_DATE_E:
+        case ASN_BEFORE_DATE_E:
+        case ASN_PATHLEN_INV_E:
+        case ASN_PATHLEN_SIZE_E:
+        case ASN_CRIT_EXT_E:
+        case ASN_NAME_INVALID_E:
+        case MAX_CHAIN_ERROR:
+        case DOMAIN_NAME_MISMATCH:
+        case IPADDR_MISMATCH:
+        case VERIFY_CERT_ERROR:
+        case KEYUSAGE_E:
+        case EXTKEYUSAGE_E:
+        case EXTKEYUSE_AUTH_E:
+        case KEYUSE_SIGNATURE_E:
+        case KEYUSE_ENCIPHER_E:
+        case RSA_KEY_SIZE_E:
+        case ECC_KEY_SIZE_E:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+/* Maps a wolfSSL failure to PEER_REJECTED, TLS for any other received alert,
+ * UNTRUSTED, MEMORY or fallback. */
+static int tls_failure(const WolfCertConn* c, int r, int fallback,
+                       const char* op)
+{
+    char buf[WOLFSSL_MAX_ERROR_SZ];
+    WOLFSSL_ALERT_HISTORY h;
+    const char* name;
+    int e = wolfSSL_get_error(c->ssl, r);
+    int tls13 = wolfSSL_GetVersion(c->ssl) == WOLFSSL_TLSV1_3;
+    int authed;
+    int rc = fallback;
+
+    if (e == FATAL_ERROR &&
+            wolfSSL_get_alert_history(c->ssl, &h) == WOLFSSL_SUCCESS &&
+            h.last_rx.code >= 0 &&
+            (tls13 || h.last_rx.level == alert_fatal)) {
+        /* Only a TLS 1.3 alert after the handshake with a verified server is
+         * authenticated; an earlier or TLS 1.2 alert can be forged. */
+        authed = tls13 && c->verify_server &&
+                 wolfSSL_is_init_finished(c->ssl);
+        name = alert_name(h.last_rx.code);
+        if (name == NULL)
+            name = "unrecognized";
+        if (authed && c->has_client_cert && cert_alert(h.last_rx.code)) {
+            return WOLFCERT_ERR_RC_WC(WOLFCERT_ERR_TLS_PEER_REJECTED, e,
+                "http", "the server refused the client certificate: %s "
+                "failed with alert %d (%s)", op, h.last_rx.code, name);
+        }
+        return WOLFCERT_ERR_RC_WC(WOLFCERT_ERR_TLS, e, "http",
+            "%s failed with %salert %d (%s)", op,
+            authed ? "" : "unauthenticated ", h.last_rx.code, name);
+    }
+
+    if (e == MEMORY_E || e == MEMORY_ERROR)
+        rc = WOLFCERT_ERR_MEMORY;
+    else if (is_untrusted_err(e))
+        rc = WOLFCERT_ERR_TLS_UNTRUSTED;
+    /* OPENSSL_EXTRA reports a peer close as SSL_ERROR_SYSCALL. */
+    if (e >= 0)
+        snprintf(buf, sizeof(buf), "%s", e == WOLFSSL_ERROR_SYSCALL ||
+                 e == WOLFSSL_ERROR_ZERO_RETURN ? "peer closed the connection"
+                                                : "no wolfSSL error code");
+    else
+        wolfSSL_ERR_error_string((unsigned long)e, buf);
+    return WOLFCERT_ERR_RC_WC(rc, e, "http", "%s failed: ret=%d err=%d (%s)",
+                              op, r, e, buf);
 }
 
 static int find_header(const char* headers, const char* name, char** out,
@@ -977,6 +1125,19 @@ static int check_client_key(const uint8_t* cert, size_t cert_len,
     return WOLFCERT_OK;
 }
 
+/* Maps a failed wolfSSL setup call to WOLFCERT_ERR_MEMORY or _TLS. */
+static int tls_setup_failure(int rc, const char* what)
+{
+    char buf[WOLFSSL_MAX_ERROR_SZ];
+
+    if (rc == WOLFSSL_FAILURE)
+        return WOLFCERT_ERR(WOLFCERT_ERR_TLS, "http", "%s failed", what);
+    wolfSSL_ERR_error_string((unsigned long)rc, buf);
+    return WOLFCERT_ERR_RC_WC((rc == MEMORY_E || rc == MEMORY_ERROR)
+                              ? WOLFCERT_ERR_MEMORY : WOLFCERT_ERR_TLS, rc,
+                              "http", "%s failed: %d (%s)", what, rc, buf);
+}
+
 /* A key with an id signs in its device; any other key loads as DER. */
 static int use_client_key_obj(WOLFSSL_CTX* ctx, const WolfCertKey* k)
 {
@@ -988,7 +1149,9 @@ static int use_client_key_obj(WOLFSSL_CTX* ctx, const WolfCertKey* k)
         rc = wolfSSL_CTX_use_PrivateKey_Id(ctx, k->id, (long)k->id_len,
                                            k->dev_id);
 #else
-        rc = WOLFSSL_FAILURE;
+        return WOLFCERT_ERR(WOLFCERT_ERR_UNSUPPORTED, "http",
+                            "client_key_obj has a key id, but wolfSSL lacks "
+                            "WOLF_CRYPTO_CB or WOLF_PRIVATE_KEY_ID");
 #endif
     }
     else {
@@ -1001,8 +1164,7 @@ static int use_client_key_obj(WOLFSSL_CTX* ctx, const WolfCertKey* k)
     }
 
     if (rc != WOLFSSL_SUCCESS)
-        return WOLFCERT_ERR(WOLFCERT_ERR_TLS, "http",
-                            "loading client_key_obj failed (%d)", rc);
+        return tls_setup_failure(rc, "loading client_key_obj");
     return WOLFCERT_OK;
 }
 
@@ -1017,8 +1179,7 @@ static int use_client_key(WOLFSSL_CTX* ctx, const TlsDials* d)
             (long)d->client_key_len,
             buf_filetype(d->client_key, d->client_key_len));
     if (rc != WOLFSSL_SUCCESS)
-        return WOLFCERT_ERR(WOLFCERT_ERR_TLS, "http",
-                            "loading the client key failed (%d)", rc);
+        return tls_setup_failure(rc, "loading the client key");
     return WOLFCERT_OK;
 }
 
@@ -1027,14 +1188,18 @@ static int setup_tls_ex(WolfCertConn* c, const TlsDials* dials,
 {
     WOLFSSL_CTX* ctx = wolfSSL_CTX_new(wolfTLS_client_method());
     int dev_id = wolfcert_default_dev_id();
+    int rc;
 
     if (ctx == NULL)
-        return WOLFCERT_ERR_TLS;
+        return WOLFCERT_ERR(WOLFCERT_ERR_MEMORY, "http",
+            "wolfSSL_CTX_new failed: out of memory or wolfSSL init failure");
     /* Keeps the devId wolfSSL_CTX_new picks itself, such as CAAM's. */
-    if (dev_id != INVALID_DEVID &&
-            wolfSSL_CTX_SetDevId(ctx, dev_id) != WOLFSSL_SUCCESS) {
-        wolfSSL_CTX_free(ctx);
-        return WOLFCERT_ERR_TLS;
+    if (dev_id != INVALID_DEVID) {
+        rc = wolfSSL_CTX_SetDevId(ctx, dev_id);
+        if (rc != WOLFSSL_SUCCESS) {
+            wolfSSL_CTX_free(ctx);
+            return tls_setup_failure(rc, "wolfSSL_CTX_SetDevId");
+        }
     }
 
 #ifdef WOLFSSL_NO_TLS12
@@ -1057,13 +1222,18 @@ static int setup_tls_ex(WolfCertConn* c, const TlsDials* dials,
 #endif
 
     if (dials->trust_anchors != NULL && dials->trust_anchors_len > 0) {
-        int rc = wolfSSL_CTX_load_verify_buffer(ctx, dials->trust_anchors,
-                    (long)dials->trust_anchors_len,
-                    buf_filetype(dials->trust_anchors, dials->trust_anchors_len));
-
+        rc = wolfSSL_CTX_load_verify_buffer(ctx, dials->trust_anchors,
+                (long)dials->trust_anchors_len,
+                buf_filetype(dials->trust_anchors, dials->trust_anchors_len));
+        if (rc == ASN_BEFORE_DATE_E || rc == ASN_AFTER_DATE_E) {
+            wolfSSL_CTX_free(ctx);
+            return WOLFCERT_ERR_RC_WC(WOLFCERT_ERR_TLS_UNTRUSTED, rc, "http",
+                "loading trust_anchors failed: not valid at the device time "
+                "(%d)", rc);
+        }
         if (rc != WOLFSSL_SUCCESS) {
             wolfSSL_CTX_free(ctx);
-            return WOLFCERT_ERR_TLS;
+            return tls_setup_failure(rc, "loading trust_anchors");
         }
     }
 
@@ -1073,12 +1243,12 @@ static int setup_tls_ex(WolfCertConn* c, const TlsDials* dials,
     if (dials->client_cert != NULL &&
             (dials->client_key != NULL || dials->client_key_obj != NULL)) {
         /* Load the identity on the CTX so a PHA request can still use it. */
-        int rc = wolfSSL_CTX_use_certificate_buffer(ctx, dials->client_cert,
+        rc = wolfSSL_CTX_use_certificate_buffer(ctx, dials->client_cert,
                 (long)dials->client_cert_len,
                 buf_filetype(dials->client_cert, dials->client_cert_len));
         if (rc != WOLFSSL_SUCCESS) {
             wolfSSL_CTX_free(ctx);
-            return WOLFCERT_ERR_TLS;
+            return tls_setup_failure(rc, "loading client_cert");
         }
 
         rc = use_client_key(ctx, dials);
@@ -1086,17 +1256,19 @@ static int setup_tls_ex(WolfCertConn* c, const TlsDials* dials,
             wolfSSL_CTX_free(ctx);
             return rc;
         }
+        c->has_client_cert = 1;
     }
+    c->verify_server = dials->verify_server ? 1 : 0;
 
     WOLFSSL* ssl = wolfSSL_new(ctx);
     if (ssl == NULL) {
         wolfSSL_CTX_free(ctx);
-        return WOLFCERT_ERR_TLS;
+        return WOLFCERT_ERR(WOLFCERT_ERR_MEMORY, "http",
+                            "wolfSSL_new failed: out of memory or RNG failure");
     }
 
     if (sni_host != NULL) {
         int is_ip = host_ip_len(sni_host) != 0;
-        int rc;
 
 #if defined(HAVE_SNI) && !defined(WOLFCERT_NO_SNI)
         /* RFC 6066 section 3: HostName never carries an IP literal. */
@@ -1326,7 +1498,7 @@ static int nb_write(WolfCertConn* c, const uint8_t* buf, size_t len, size_t* off
             if (e == WOLFSSL_ERROR_WANT_READ)
                 return WOLFCERT_ERR_WANT_READ;
 
-            return WOLFCERT_ERR_IO;
+            return tls_failure(c, w, WOLFCERT_ERR_IO, "wolfSSL_write");
         }
 
         int r = c->t.write(c->t.ctx, c->handle, buf + *off, len - *off,
@@ -1340,6 +1512,10 @@ static int nb_write(WolfCertConn* c, const uint8_t* buf, size_t len, size_t* off
 
         if (r == WOLFCERT_ERR_WANT_READ || r == WOLFCERT_ERR_WANT_WRITE)
             return r;
+        if (r == WOLFCERT_ERR_CONN_CLOSED) {
+            return WOLFCERT_ERR(WOLFCERT_ERR_IO, "http",
+                "write failed: connection closed by peer");
+        }
 
         return WOLFCERT_ERR_IO;
     }
@@ -1442,7 +1618,7 @@ static int nb_read_some(WolfCertHttpSession* s, size_t limit, int* ended)
             return WOLFCERT_OK;
         }
 
-        return WOLFCERT_ERR_IO;
+        return tls_failure(&s->conn, r, WOLFCERT_ERR_IO, "wolfSSL_read");
     }
 
     r = s->conn.t.read(s->conn.t.ctx, s->conn.handle, dst, room,
@@ -1657,10 +1833,8 @@ static void sm_publish(WolfCertHttpSession* s, uint8_t* body, size_t body_len)
 
 static int sm_handshake(WolfCertHttpSession* s)
 {
-    char buf[WOLFSSL_MAX_ERROR_SZ];
-    int  r = wolfSSL_connect(s->conn.ssl);
-    int  e;
-    int  rc;
+    int r = wolfSSL_connect(s->conn.ssl);
+    int e;
 
     if (r == WOLFSSL_SUCCESS) {
         s->sm_state = SM_WRITE_HEAD;
@@ -1673,11 +1847,8 @@ static int sm_handshake(WolfCertHttpSession* s)
     if (e == WOLFSSL_ERROR_WANT_WRITE)
         return WOLFCERT_ERR_WANT_WRITE;
 
-    rc = (e == MEMORY_E || e == MEMORY_ERROR) ? WOLFCERT_ERR_MEMORY
-                                               : WOLFCERT_ERR_TLS;
-    wolfSSL_ERR_error_string((unsigned long)e, buf);
-    return WOLFCERT_ERR_RC_WC(rc, e, "http",
-        "TLS handshake failed: wolfSSL_connect=%d err=%d (%s)", r, e, buf);
+    return tls_failure(&s->conn, r, WOLFCERT_ERR_TLS,
+                       "TLS handshake (wolfSSL_connect)");
 }
 
 static int sm_write_head(WolfCertHttpSession* s)
@@ -1855,6 +2026,8 @@ static int sm_read_body_eof(WolfCertHttpSession* s)
 
 static int sm_done(WolfCertHttpSession* s)
 {
+    if (s->conn.tx_closed)
+        s->closed = 1;
     sm_drop_head(s);
     WOLFCERT_XFREE(s->sm_rx, s->heap);
     s->sm_rx = NULL;

@@ -285,6 +285,8 @@ static int posix_write(void* ctx, void* conn, const uint8_t* buf, size_t len,
         if (n == 0)
             return WOLFCERT_ERR_IO;
 
+        if (errno == EPIPE || errno == ECONNRESET || errno == ENOTCONN)
+            return WOLFCERT_ERR_CONN_CLOSED;
         if (!WOLFCERT_WOULDBLOCK(errno))
             return WOLFCERT_ERR_IO;
         if (timeout_ms >= 0)

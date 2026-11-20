@@ -52,6 +52,13 @@
 
 static void* server_thread(void* arg) { wolfcert_server_run((WolfCertServer*)arg); return NULL; }
 
+/* Only an encrypted TLS 1.3 refusal is reported as PEER_REJECTED. */
+#ifdef WOLFSSL_TLS13
+#define REFUSED_RC WOLFCERT_ERR_TLS_PEER_REJECTED
+#else
+#define REFUSED_RC WOLFCERT_ERR_TLS
+#endif
+
 #ifdef KEEP_PEER_CERT
 /* Wait on the session fd in the direction a WANT_* return asked for. */
 static int wait_io(WolfCertEstSession* s, int rc)
@@ -101,7 +108,7 @@ static int test_reenroll_ignores_cfg_identity(const char* url,
     /* The server refuses the stale identity on its own */
     rc = wolfcert_est_get_cacerts(&cli, WOLFCERT_ENCODING_PEM, &ca_pem);
     wolfcert_buffer_free(&ca_pem);
-    REQUIRE(rc != WOLFCERT_OK);
+    REQUIRE(rc == REFUSED_RC);
 
     REQUIRE(wolfcert_key_from_pem(cli_key, cli_key_len, NULL, &cur_key) == WOLFCERT_OK);
     REQUIRE(wolfcert_key_generate(&kcfg, &dk) == WOLFCERT_OK);
@@ -641,8 +648,7 @@ static int test_reenroll_trust_issued(const uint8_t* tls_cert, size_t tls_cert_l
     rc = wolfcert_est_simple_reenroll(&cli, cli_cert, cli_cert_len, foreign,
                                       csr.data, csr.len, &refused);
     /* The handshake refuses it, so no HTTP answer comes. */
-    REQUIRE(rc != WOLFCERT_OK && rc != WOLFCERT_ERR_HTTP &&
-            rc != WOLFCERT_ERR_AUTH);
+    REQUIRE(rc == REFUSED_RC);
     REQUIRE(refused.cert_pem.data == NULL);
 
     /* Without a client certificate there is nothing to renew. */

@@ -439,10 +439,10 @@ wolfcert_scep_session_close(s);
 A call refused with `WOLFCERT_ERR_BAD_ARG` changes nothing. A request that
 fails at the protocol level (an HTTP error status, a FAILURE CertRep) leaves
 the session open, though the server may close the connection after such a
-reply. A failed exchange (I/O, TLS or a malformed reply), or a reply that ends
-by closing the connection, closes the session: later calls return
-`WOLFCERT_ERR_CONN_CLOSED`. After an I/O or connection error, open a new
-session.
+reply. A failed exchange (I/O, TLS or a malformed reply), a reply that ends
+by closing the connection, or a request whose write the peer refused, closes
+the session: later calls return `WOLFCERT_ERR_CONN_CLOSED`. After an I/O or
+connection error, open a new session.
 
 Every session call also has an `_nb` form that returns instead of waiting, for
 a caller-owned event loop:
@@ -560,7 +560,11 @@ The contract:
 - **`read` / `write` return a positive byte count**, or a negative
   `WOLFCERT_ERR_*`. Never `0`: an orderly peer close is
   `WOLFCERT_ERR_CONN_CLOSED`, which is what terminates a response body that
-  has neither `Content-Length` nor chunking. A response to `HEAD`, and a
+  has neither `Content-Length` nor chunking. A `write` to a peer that has
+  closed or reset may return `WOLFCERT_ERR_CONN_CLOSED` too. With the
+  built-in `read`, the TLS layer then still reads the alert the peer sent
+  before closing; with any other `read` the write fails at once. A response
+  to `HEAD`, and a
   `204` or `304`, has no body at all (RFC 9112 section 6.3) and ends at the
   header block, so no read follows it. Interim `1xx` responses are dropped,
   up to `WOLFCERT_HTTP_MAX_INTERIM` (8) before the final one; a ninth, or a

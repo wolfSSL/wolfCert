@@ -628,6 +628,47 @@ static int renewal_walks_extensions_without_san(void)
     return 0;
 }
 
+/* Renew from a DER chain: the identity comes from the leaf alone. */
+static int renewal_reads_leaf_of_der_chain(void)
+{
+    WolfCertKeyCfg cfg = { .type = WOLFCERT_KEY_ECC, .param = 256,
+                           .dev_id = INVALID_DEVID };
+    WolfCertKey* key = NULL;
+    WolfCertCertMeta meta = { 0 };
+    WolfCertBuffer csr = { 0 };
+    byte chain[2048];
+    int leaf_len;
+    int ca_len;
+    Cert* c;
+    DecodedCert dc;
+
+    REQUIRE(wolfcert_key_generate(&cfg, &key) == WOLFCERT_OK);
+    REQUIRE((c = wc_CertNew(NULL)) != NULL);
+    strcpy(c->subject.commonName, "leaf");
+    leaf_len = make_self_cert(c, key, chain, (int)sizeof(chain));
+    REQUIRE(leaf_len > 0);
+    REQUIRE((c = wc_CertNew(NULL)) != NULL);
+    strcpy(c->subject.commonName, "issuer");
+    c->isCA = 1;
+    ca_len = make_self_cert(c, key, chain + leaf_len,
+                            (int)sizeof(chain) - leaf_len);
+    REQUIRE(ca_len > 0);
+
+    REQUIRE(wolfcert_csr_build_ex(key, &meta, chain,
+                                  (size_t)(leaf_len + ca_len), &csr)
+            == WOLFCERT_OK);
+
+    wc_InitDecodedCert(&dc, csr.data, (word32)csr.len, NULL);
+    REQUIRE(wc_ParseCert(&dc, CERTREQ_TYPE, NO_VERIFY, NULL) == 0);
+    REQUIRE(dc.subjectCN != NULL && dc.subjectCNLen == 4);
+    REQUIRE(memcmp(dc.subjectCN, "leaf", 4) == 0);
+    wc_FreeDecodedCert(&dc);
+
+    wolfcert_buffer_free(&csr);
+    wolfcert_key_free(key);
+    return 0;
+}
+
 /* Pass a private key PEM where the certificate being renewed belongs. */
 static int renewal_rejects_non_certificate(void)
 {
@@ -1009,6 +1050,8 @@ int main(void)
     if (renewal_walks_extensions_without_san())
         return 1;
     if (renewal_rejects_non_certificate())
+        return 1;
+    if (renewal_reads_leaf_of_der_chain())
         return 1;
     if (csr_carries_large_san())
         return 1;

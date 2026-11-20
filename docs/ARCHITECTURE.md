@@ -158,7 +158,8 @@ with as its client identity.
    EST-only: SCEP authenticates inside the pkiMessage, so the fields live in
    the EST arm of the union and no SCEP entry point reads them.
 2. **mTLS up front** — set `client_cert` / `client_key`; they're presented
-   during the handshake.
+   during the handshake. `client_cert` holds the device cert, then any
+   intermediates the server needs to reach its trust anchor.
 3. **TLS 1.3 post-handshake auth** — set `client_cert` / `client_key` *and*
    `proto_opts.est.allow_post_handshake_auth = 1`, for one-shots and sessions
    alike. The handshake is anonymous; the server sends a `CertificateRequest`

@@ -164,7 +164,8 @@ static void print_usage(FILE* out)
         "  The renewed cert keeps --cert's subject, SAN and key (RFC 7030\n"
         "  section 4.2.2), so --subject and --san-* are rejected. On EST\n"
         "  --cert/--key also authenticate the TLS connection, so\n"
-        "  --client-cert/--client-key are rejected. On SCEP --cert/--key sign\n"
+        "  --client-cert/--client-key are rejected, and --cert may add the\n"
+        "  intermediates after the certificate. On SCEP --cert/--key sign\n"
         "  the RenewalReq, or a PKCSReq when the CA does not advertise Renewal.\n"
         "\n"
         "getcert options (SCEP only):\n"
@@ -668,6 +669,47 @@ static size_t der_cert_len(const uint8_t* p, size_t left)
 static int is_blank(uint8_t c)
 {
     return c == ' ' || c == '\t' || c == '\r' || c == '\n';
+}
+
+/* 1 if p starts SEQUENCE { SEQUENCE, SEQUENCE, BIT STRING }, a certificate. */
+static int der_cert_at(const uint8_t* p, size_t left)
+{
+    static const uint8_t tags[] = { 0x30, 0x30, 0x03 };
+    size_t total = der_cert_len(p, left);
+    word32 idx = 1;
+    int part;
+    size_t i;
+
+    if (total == 0 || GetLength(p, &idx, &part, (word32)total) < 0)
+        return 0;
+    for (i = 0; i < sizeof(tags); i++) {
+        if (idx >= total || p[idx] != tags[i])
+            return 0;
+        idx++;
+        if (GetLength(p, &idx, &part, (word32)total) < 0)
+            return 0;
+        idx += (word32)part;
+    }
+    return idx == total;
+}
+
+/* Offset of a certificate chain in buf: a DER certificate after leading
+ * whitespace, else the first PEM header, else past the whitespace. */
+static size_t chain_start(const uint8_t* buf, size_t len)
+{
+    static const char hdr[] = "-----BEGIN";
+    size_t ws = 0;
+    size_t i;
+
+    while (ws < len && is_blank(buf[ws]))
+        ws++;
+    if (der_cert_at(buf + ws, len - ws))
+        return ws;
+    for (i = 0; i + sizeof(hdr) - 1 <= len; i++) {
+        if (memcmp(buf + i, hdr, sizeof(hdr) - 1) == 0)
+            return i;
+    }
+    return ws;
 }
 
 /* A certificate given as PEM or DER, as DER owned by the caller; 0 or -1.
@@ -1765,7 +1807,8 @@ static int cmd_reenroll(int argc, char** argv)
         }
     }
 
-    if (ret == 0 && cert_to_der(cert_pem, cert_len, &cert_der) != 0) {
+    if (ret == 0 && p == WOLFCERT_PROTO_SCEP &&
+            cert_to_der(cert_pem, cert_len, &cert_der) != 0) {
         fprintf(stderr, "reenroll: bad --cert\n");
         ret = 2;
     }
@@ -1790,9 +1833,11 @@ static int cmd_reenroll(int argc, char** argv)
 
     if (ret == 0 && p == WOLFCERT_PROTO_EST) {
         meta.challenge_password = opts.challenge;
-        rc = wolfcert_client_reenroll(NULL, &srv, cert_der->buffer,
-                                      cert_der->length, current_key, NULL,
-                                      &meta, &new_key, &issued);
+        size_t at = chain_start(cert_pem, cert_len);
+
+        rc = wolfcert_client_reenroll(NULL, &srv, cert_pem + at, cert_len - at,
+                                      current_key, NULL, &meta, &new_key,
+                                      &issued);
     }
 #ifdef WOLFCERT_HAVE_SCEP
     else if (ret == 0) {

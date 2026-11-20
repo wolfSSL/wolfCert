@@ -963,6 +963,146 @@ static int buf_filetype(const uint8_t* buf, size_t len)
                                             : WOLFSSL_FILETYPE_PEM;
 }
 
+/* 1 if a DER certificate starts somewhere in buf[from..len), 2 if a PEM
+ * certificate does, else 0. */
+static int cert_follows(const uint8_t* buf, size_t len, size_t from)
+{
+    static const char* const pem[] = {
+        "-----BEGIN CERTIFICATE-----",
+        "-----BEGIN X509 CERTIFICATE-----",
+        "-----BEGIN TRUSTED CERTIFICATE-----",
+    };
+    size_t n;
+    size_t i;
+
+    for (; from < len; from++) {
+        if (buf[from] == '-') {
+            for (i = 0; i < sizeof(pem) / sizeof(pem[0]); i++) {
+                n = strlen(pem[i]);
+                if (len - from >= n && memcmp(buf + from, pem[i], n) == 0)
+                    return 2;
+            }
+        }
+        if (buf[from] != 0x30)
+            continue;
+        n = wolfcert_der_first_len(buf + from, len - from);
+        if (n > 0 && wolfcert_der_is_cert(buf + from, n))
+            return 1;
+    }
+    return 0;
+}
+
+static int cert_follows_err(const char* field, int follows, size_t off)
+{
+    if (follows == 2)
+        return WOLFCERT_ERR(WOLFCERT_ERR_TLS, "http",
+                            "%s: PEM after DER at byte %zu", field, off);
+    return WOLFCERT_ERR(WOLFCERT_ERR_TLS, "http",
+                        "%s: stray data at byte %zu before a certificate",
+                        field, off);
+}
+
+/* A certificate wolfSSL refuses is skipped, as its PEM loader does. */
+static int load_der_anchors(WOLFSSL_CTX* ctx, const uint8_t* buf, size_t len)
+{
+    size_t off = 0;
+    const uint8_t* cert = NULL;
+    size_t cert_len = 0;
+    size_t stray = 0;
+    int loaded = 0;
+    int refused = 0;
+    int follows;
+    int rc;
+
+    while ((rc = wolfcert_der_next(buf, len, &off, &cert, &cert_len)) == 1) {
+        if (!wolfcert_der_is_cert(cert, cert_len)) {
+            stray = (size_t)(cert - buf);
+            break;
+        }
+        rc = wolfSSL_CTX_load_verify_buffer(ctx, cert, (long)cert_len,
+                                            WOLFSSL_FILETYPE_ASN1);
+        if (rc == MEMORY_E)
+            return WOLFCERT_ERR_RC_WC(WOLFCERT_ERR_MEMORY, rc, "http",
+                                      "trust_anchors: out of memory");
+        if (rc == WOLFSSL_SUCCESS)
+            ++loaded;
+        else if (rc < 0)
+            refused = rc;
+    }
+
+    if (rc == WOLFCERT_ERR_BAD_ARG)
+        return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "http",
+                            "trust_anchors: too large");
+    if (rc < 0)
+        return WOLFCERT_ERR(WOLFCERT_ERR_TLS, "http",
+                            "trust_anchors: malformed DER at byte %zu", off);
+    if (rc == 0)
+        stray = off;
+    follows = cert_follows(buf, len, stray);
+    if (follows)
+        return cert_follows_err("trust_anchors", follows, stray);
+    if (loaded == 0 && refused < 0)
+        return WOLFCERT_ERR_RC_WC(WOLFCERT_ERR_TLS, refused, "http",
+                                  "trust_anchors: no certificate wolfSSL "
+                                  "accepts");
+    if (loaded == 0)
+        return WOLFCERT_ERR(WOLFCERT_ERR_TLS, "http",
+                            "trust_anchors: no certificate");
+    return WOLFCERT_OK;
+}
+
+/* Leaf, then any intermediates; DER data after the last one is dropped. */
+static int use_client_chain(WOLFSSL_CTX* ctx, const uint8_t* buf, size_t len)
+{
+    size_t off = 0;
+    const uint8_t* cert = NULL;
+    size_t cert_len = 0;
+    int format = buf_filetype(buf, len);
+    int rc;
+
+    if (format == WOLFSSL_FILETYPE_ASN1) {
+        size_t end = 0;
+        size_t stray = 0;
+
+        while ((rc = wolfcert_der_next(buf, len, &off, &cert,
+                                       &cert_len)) == 1) {
+            if (cert != buf && !wolfcert_der_is_cert(cert, cert_len)) {
+                stray = (size_t)(cert - buf);
+                break;
+            }
+            if (cert != buf + end)
+                return WOLFCERT_ERR(WOLFCERT_ERR_TLS, "http",
+                                    "client_cert: filler between "
+                                    "certificates at byte %zu", end);
+            end = off;
+        }
+        if (rc == WOLFCERT_ERR_BAD_ARG)
+            return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "http",
+                                "client_cert: too large");
+        if (rc < 0)
+            return WOLFCERT_ERR(WOLFCERT_ERR_TLS, "http",
+                                "client_cert: malformed DER at byte %zu", off);
+        if (rc == 0)
+            stray = off;
+        rc = cert_follows(buf, len, stray);
+        if (rc)
+            return cert_follows_err("client_cert", rc, stray);
+        len = end;
+    }
+
+    rc = wolfSSL_CTX_use_certificate_chain_buffer_format(ctx, buf, (long)len,
+                                                         format);
+    if (rc == MAX_CHAIN_ERROR)
+        return WOLFCERT_ERR_RC_WC(WOLFCERT_ERR_TLS, rc, "http",
+                                  "client_cert: chain longer than wolfSSL's "
+                                  "MAX_CHAIN_DEPTH");
+    if (rc != WOLFSSL_SUCCESS)
+        return WOLFCERT_ERR_RC_WC(rc == MEMORY_E ? WOLFCERT_ERR_MEMORY
+                                  : WOLFCERT_ERR_TLS, rc, "http",
+                                  "loading client_cert failed");
+    return WOLFCERT_OK;
+}
+
 static int check_client_key(const uint8_t* cert, size_t cert_len,
                             const uint8_t* key, const WolfCertKey* key_obj)
 {
@@ -1056,10 +1196,20 @@ static int setup_tls_ex(WolfCertConn* c, const TlsDials* dials,
     }
 #endif
 
-    if (dials->trust_anchors != NULL && dials->trust_anchors_len > 0) {
+    if (dials->trust_anchors != NULL && dials->trust_anchors_len > 0 &&
+            wolfcert_buffer_is_der(dials->trust_anchors,
+                                   dials->trust_anchors_len)) {
+        int rc = load_der_anchors(ctx, dials->trust_anchors,
+                                  dials->trust_anchors_len);
+
+        if (rc != WOLFCERT_OK) {
+            wolfSSL_CTX_free(ctx);
+            return rc;
+        }
+    }
+    else if (dials->trust_anchors != NULL && dials->trust_anchors_len > 0) {
         int rc = wolfSSL_CTX_load_verify_buffer(ctx, dials->trust_anchors,
-                    (long)dials->trust_anchors_len,
-                    buf_filetype(dials->trust_anchors, dials->trust_anchors_len));
+                    (long)dials->trust_anchors_len, WOLFSSL_FILETYPE_PEM);
 
         if (rc != WOLFSSL_SUCCESS) {
             wolfSSL_CTX_free(ctx);
@@ -1073,12 +1223,11 @@ static int setup_tls_ex(WolfCertConn* c, const TlsDials* dials,
     if (dials->client_cert != NULL &&
             (dials->client_key != NULL || dials->client_key_obj != NULL)) {
         /* Load the identity on the CTX so a PHA request can still use it. */
-        int rc = wolfSSL_CTX_use_certificate_buffer(ctx, dials->client_cert,
-                (long)dials->client_cert_len,
-                buf_filetype(dials->client_cert, dials->client_cert_len));
-        if (rc != WOLFSSL_SUCCESS) {
+        int rc = use_client_chain(ctx, dials->client_cert,
+                                  dials->client_cert_len);
+        if (rc != WOLFCERT_OK) {
             wolfSSL_CTX_free(ctx);
-            return WOLFCERT_ERR_TLS;
+            return rc;
         }
 
         rc = use_client_key(ctx, dials);

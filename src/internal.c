@@ -536,14 +536,118 @@ WOLFCERT_TEST_VIS int wolfcert_buffer_is_der(const uint8_t* buf, size_t len)
     return (buf != NULL && len > 0 && buf[0] == 0x30) ? 1 : 0;
 }
 
-int wolfcert_der_is_single(const uint8_t* in, size_t in_len)
+size_t wolfcert_der_first_len(const uint8_t* in, size_t in_len)
 {
     word32 idx = 1;
     int len = 0;
 
-    return (size_t)(word32)in_len == in_len &&
-           GetLength(in, &idx, &len, (word32)in_len) >= 0 &&
-           (size_t)idx + (size_t)len == in_len;
+    if (in == NULL || in_len < 2 || (size_t)(word32)in_len != in_len ||
+            GetLength(in, &idx, &len, (word32)in_len) < 0)
+        return 0;
+    return (size_t)idx + (size_t)len;
+}
+
+int wolfcert_der_is_single(const uint8_t* in, size_t in_len)
+{
+    return in_len > 0 && wolfcert_der_first_len(in, in_len) == in_len;
+}
+
+static int der_is_filler(uint8_t b)
+{
+    return b == 0x00 || b == 0xFF || b == ' ' || b == '\t' || b == '\r' ||
+           b == '\n';
+}
+
+/* 1 if buf[0..end) holds a byte other than filler, so an item came before. */
+static int der_item_before(const uint8_t* buf, size_t end)
+{
+    size_t i;
+
+    for (i = 0; i < end; i++) {
+        if (!der_is_filler(buf[i]))
+            return 1;
+    }
+    return 0;
+}
+
+WOLFCERT_TEST_VIS int wolfcert_der_next(const uint8_t* buf, size_t len,
+                                        size_t* off, const uint8_t** item,
+                                        size_t* item_len)
+{
+    word32 idx;
+    int seq_len = 0;
+
+    if (buf == NULL || off == NULL || item == NULL || item_len == NULL ||
+            (size_t)(word32)len != len || *off > len)
+        return WOLFCERT_ERR_BAD_ARG;
+
+    while (*off < len && der_is_filler(buf[*off]))
+        ++*off;
+    if (*off == len || buf[*off] != 0x30)
+        return der_item_before(buf, *off) ? 0 : WOLFCERT_ERR_PARSE;
+    idx = (word32)*off + 1;
+    if (GetLength(buf, &idx, &seq_len, (word32)len) < 0)
+        return der_item_before(buf, *off) ? 0 : WOLFCERT_ERR_PARSE;
+
+    *item = buf + *off;
+    *item_len = (size_t)idx + (size_t)seq_len - *off;
+    *off += *item_len;
+    return 1;
+}
+
+/* Skips the element at in[*idx] if it carries tag; *body gets its contents. */
+static int der_skip(const uint8_t* in, word32* idx, word32 len, uint8_t tag,
+                    word32* body)
+{
+    word32 i = *idx + 1;
+    int part = 0;
+
+    if (*idx >= len || in[*idx] != tag || GetLength(in, &i, &part, len) < 0)
+        return 0;
+    if (body != NULL)
+        *body = i;
+    *idx = i + (word32)part;
+    return 1;
+}
+
+/* A TBSCertificate has serial, signature algorithm, issuer, then Validity,
+ * where a CSR has subject after its version and a CRL has a time. */
+static int der_tbs_is_cert(const uint8_t* in, word32 len)
+{
+    word32 idx = 0;
+    word32 alg = 0;
+
+    if (len > 0 && in[0] == 0xA0 && !der_skip(in, &idx, len, 0xA0, NULL))
+        return 0;
+    return der_skip(in, &idx, len, 0x02, NULL) &&
+           der_skip(in, &idx, len, 0x30, &alg) && alg < idx &&
+           in[alg] == 0x06 && der_skip(in, &idx, len, 0x30, NULL) &&
+           idx < len && in[idx] == 0x30;
+}
+
+WOLFCERT_TEST_VIS int wolfcert_der_is_cert(const uint8_t* item, size_t len)
+{
+    static const uint8_t tags[] = { 0x30, 0x30, 0x03 };
+    word32 idx = 1;
+    int part_len = 0;
+    size_t i;
+
+    if (item == NULL || len < 2 || (size_t)(word32)len != len ||
+            item[0] != 0x30 ||
+            GetLength(item, &idx, &part_len, (word32)len) < 0 ||
+            (size_t)idx + (size_t)part_len != len)
+        return 0;
+    for (i = 0; i < sizeof(tags); i++) {
+        if (idx >= len || item[idx] != tags[i])
+            return 0;
+        ++idx;
+        if (GetLength(item, &idx, &part_len, (word32)len) < 0)
+            return 0;
+        if (i == 0 && !der_tbs_is_cert(item + idx, (word32)part_len))
+            return 0;
+        idx += (word32)part_len;
+    }
+    return idx == len;
 }
 
 int wolfcert_pem_cert_to_der(const uint8_t* pem, size_t pem_len,

@@ -22,6 +22,7 @@
 #define _POSIX_C_SOURCE 200809L
 #define _DEFAULT_SOURCE
 #define _DARWIN_C_SOURCE   /* expose memmem/strcasestr/INADDR_LOOPBACK on macOS */
+#define _GNU_SOURCE
 
 #include <wolfcert/wolfcert.h>
 #include "internal.h"
@@ -44,6 +45,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -71,6 +73,10 @@ struct srv_ctx {
     size_t key_pem_len;
     const char* version;
     int sni_len;    /* SNI HostName length the client sent, 0 if none */
+    const uint8_t* client_ca;   /* demand a client cert from this CA */
+    size_t client_ca_len;
+    int tls13;      /* serve TLS 1.3 only */
+    const uint8_t* alert;   /* answer the ClientHello with this level, code */
 };
 
 #ifdef HAVE_SNI
@@ -85,17 +91,86 @@ static int sni_cb(WOLFSSL* ssl, int* ad, void* arg)
 }
 #endif
 
+/* Read n bytes from fd into out, or discard them if out is NULL; 0 once
+ * all arrived. */
+static int recv_n(int fd, uint8_t* out, size_t n)
+{
+    struct pollfd pfd = { .fd = fd, .events = POLLIN };
+    uint8_t tmp[256];
+
+    while (n > 0) {
+        size_t want = n < sizeof(tmp) ? n : sizeof(tmp);
+        ssize_t r;
+
+        if (poll(&pfd, 1, 2000) <= 0)
+            return -1;
+        r = recv(fd, out != NULL ? out : tmp, want, 0);
+        if (r <= 0)
+            return -1;
+        if (out != NULL)
+            out += r;
+        n -= (size_t)r;
+    }
+    return 0;
+}
+
+/* Answer the first record on fd with a plaintext alert, then wait for the
+ * peer to close. */
+static void send_raw_alert(int fd, const uint8_t* alert)
+{
+    uint8_t rec[7] = { 0x15, 0x03, 0x03, 0x00, 0x02, 0, 0 };
+    uint8_t hdr[5];
+    uint8_t ch[4096];
+    size_t n;
+
+    if (recv_n(fd, hdr, sizeof(hdr)) != 0)
+        return;
+    n = ((size_t)hdr[3] << 8) | hdr[4];
+    if (n > sizeof(ch) || recv_n(fd, ch, n) != 0)
+        return;
+    rec[5] = alert[0];
+    rec[6] = alert[1];
+    (void)send(fd, rec, sizeof(rec), 0);
+    (void)shutdown(fd, SHUT_WR);
+    while (recv_n(fd, NULL, 1) == 0) {
+    }
+}
+
+/* Close after the client so its next write cannot fail first. */
+static void drain(int fd)
+{
+    struct timeval tv = { 10, 0 };
+    char junk[256];
+
+    (void)setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    while (recv(fd, junk, sizeof(junk), 0) > 0)
+        ;
+}
+
 static void* srv_thread(void* arg)
 {
     struct srv_ctx* sc = (struct srv_ctx*)arg;
     /* Single-version peer: TLS 1.2 where wolfSSL has it, TLS 1.3 otherwise. */
 #ifdef WOLFSSL_NO_TLS12
     WOLFSSL_CTX* ctx = wolfSSL_CTX_new(wolfTLSv1_3_server_method());
+#elif defined(WOLFSSL_TLS13)
+    WOLFSSL_CTX* ctx = wolfSSL_CTX_new(sc->tls13 ? wolfTLSv1_3_server_method()
+                                                 : wolfTLSv1_2_server_method());
 #else
     WOLFSSL_CTX* ctx = wolfSSL_CTX_new(wolfTLSv1_2_server_method());
 #endif
     if (ctx == NULL)
         return NULL;
+    if (sc->client_ca != NULL) {
+        if (wolfSSL_CTX_load_verify_buffer(ctx, sc->client_ca,
+                (long)sc->client_ca_len, WOLFSSL_FILETYPE_PEM)
+                != WOLFSSL_SUCCESS) {
+            wolfSSL_CTX_free(ctx);
+            return NULL;
+        }
+        wolfSSL_CTX_set_verify(ctx, WOLFSSL_VERIFY_PEER |
+                               WOLFSSL_VERIFY_FAIL_IF_NO_PEER_CERT, NULL);
+    }
 
     if (wolfSSL_CTX_use_certificate_buffer(ctx, sc->cert_pem,
             (long)sc->cert_pem_len, WOLFSSL_FILETYPE_PEM) != WOLFSSL_SUCCESS) return NULL;
@@ -125,6 +200,12 @@ static void* srv_thread(void* arg)
         wolfSSL_CTX_free(ctx);
         return NULL;
     }
+    if (sc->alert != NULL) {
+        send_raw_alert(cs, sc->alert);
+        close(cs);
+        wolfSSL_CTX_free(ctx);
+        return NULL;
+    }
     WOLFSSL* ssl = wolfSSL_new(ctx);
     wolfSSL_set_fd(ssl, cs);
     if (wolfSSL_accept(ssl) == WOLFSSL_SUCCESS) {
@@ -139,6 +220,9 @@ static void* srv_thread(void* arg)
                            "Content-Length: 2\r\nConnection: close\r\n\r\nok";
         wolfSSL_write(ssl, resp, (int)strlen(resp));
         wolfSSL_shutdown(ssl);
+    }
+    else {
+        drain(cs);
     }
     wolfSSL_free(ssl);
     close(cs);
@@ -276,6 +360,155 @@ static int get_as(struct srv_ctx* sc, const char* host, int verify,
     return rc;
 }
 
+/* GET from srv_thread presenting cert/key (none if NULL). */
+static int get_with_id(struct srv_ctx* sc, const uint8_t* cert,
+                       size_t cert_len, const uint8_t* key, size_t key_len)
+{
+    WolfCertHttpSessionCfg cfg = { .verify_server = 1 };
+    WolfCertHttpRequest req = { .method = "GET" };
+    WolfCertHttpResponse resp = { 0 };
+    WolfCertHttpSession* s = NULL;
+    pthread_t tid;
+    char url[128];
+    int rc;
+
+    if (start_srv(sc, &tid, url, sizeof(url)) != 0)
+        return WOLFCERT_ERR_GENERIC;
+    cfg.transport         = lo_transport();
+    cfg.base_url          = url;
+    cfg.trust_anchors     = sc->cert_pem;
+    cfg.trust_anchors_len = sc->cert_pem_len;
+    cfg.client_cert       = cert;
+    cfg.client_cert_len   = cert_len;
+    cfg.client_key        = key;
+    cfg.client_key_len    = key_len;
+    req.url               = url;
+
+    lo_dialed = 0;
+    rc = wolfcert_http_session_open(&cfg, &s);
+    if (rc == WOLFCERT_OK)
+        rc = wolfcert_http_session_request(s, &req, &resp);
+    wolfcert_http_response_free(&resp);
+    wolfcert_http_session_close(s);
+    if (!lo_dialed)
+        unblock_srv(WOLFSSL_ATOMIC_LOAD(sc->port));
+    pthread_join(tid, NULL);
+
+    return rc;
+}
+
+static int test_client_cert_rejected(struct srv_ctx* sc,
+                                     const struct srv_ctx* other)
+{
+    int tls13;
+
+    sc->client_ca     = sc->cert_pem;
+    sc->client_ca_len = sc->cert_pem_len;
+    for (tls13 = 0; tls13 <= 1; tls13++) {
+#if defined(WOLFSSL_NO_TLS12)
+        if (!tls13)
+            continue;
+#elif !defined(WOLFSSL_TLS13)
+        if (tls13)
+            continue;
+#endif
+        sc->tls13 = tls13;
+        REQUIRE(get_with_id(sc, sc->cert_pem, sc->cert_pem_len,
+                            sc->key_pem, sc->key_pem_len) == WOLFCERT_OK);
+        wolfcert_clear_error();
+        REQUIRE(get_with_id(sc, other->cert_pem, other->cert_pem_len,
+                            other->key_pem, other->key_pem_len)
+                == (tls13 ? WOLFCERT_ERR_TLS_PEER_REJECTED
+                          : WOLFCERT_ERR_TLS));
+        REQUIRE(strstr(wolfcert_last_error_message(),
+                       tls13 ? "refused the client certificate"
+                             : "unauthenticated alert") != NULL);
+#ifdef WOLFSSL_TLS13
+        /* certificate_required without a configured cert is no rejection. */
+        if (tls13) {
+            REQUIRE(get_with_id(sc, NULL, 0, NULL, 0) == WOLFCERT_ERR_TLS);
+            REQUIRE(strstr(wolfcert_last_error_message(),
+                           "with alert 116 (certificate_required)") != NULL);
+        }
+#endif
+    }
+    sc->client_ca = NULL;
+    sc->client_ca_len = 0;
+    sc->tls13 = 0;
+    return 0;
+}
+
+/* A plaintext alert answering the ClientHello, which anyone on the path can
+ * send. */
+static int test_forged_alert(struct srv_ctx* sc, const struct srv_ctx* other)
+{
+    static const uint8_t bad_cert[2] = { 2, 42 };
+    int rc;
+
+    sc->alert = bad_cert;
+    rc = get_with_id(sc, other->cert_pem, other->cert_pem_len,
+                     other->key_pem, other->key_pem_len);
+    sc->alert = NULL;
+    REQUIRE(rc == WOLFCERT_ERR_TLS);
+    REQUIRE(strstr(wolfcert_last_error_message(),
+                   "unauthenticated alert 42") != NULL);
+    return 0;
+}
+
+/* Fails every write of 4 KiB or more with WOLFCERT_ERR_IO. */
+static int big_write(void* ctx, void* conn, const uint8_t* buf, size_t len,
+                     int timeout_ms)
+{
+    if (len >= 4096)
+        return WOLFCERT_ERR_IO;
+    return wolfcert_posix_transport.write(ctx, conn, buf, len, timeout_ms);
+}
+
+/* POST a body the transport refuses. */
+static int post_refused(struct srv_ctx* sc)
+{
+    static uint8_t body[8000];
+    WolfCertHttpSessionCfg cfg = { .verify_server = 1 };
+    WolfCertHttpRequest req = { .method = "POST" };
+    WolfCertHttpResponse resp = { 0 };
+    WolfCertHttpSession* s = NULL;
+    pthread_t tid;
+    char url[128];
+    int rc;
+
+    if (start_srv(sc, &tid, url, sizeof(url)) != 0)
+        return WOLFCERT_ERR_GENERIC;
+    cfg.transport         = lo_transport();
+    cfg.transport.write   = big_write;
+    cfg.base_url          = url;
+    cfg.trust_anchors     = sc->cert_pem;
+    cfg.trust_anchors_len = sc->cert_pem_len;
+    req.url               = url;
+    req.content_type      = "application/octet-stream";
+    req.body              = body;
+    req.body_len          = sizeof(body);
+
+    lo_dialed = 0;
+    rc = wolfcert_http_session_open(&cfg, &s);
+    if (rc == WOLFCERT_OK)
+        rc = wolfcert_http_session_request(s, &req, &resp);
+    wolfcert_http_response_free(&resp);
+    wolfcert_http_session_close(s);
+    if (!lo_dialed)
+        unblock_srv(WOLFSSL_ATOMIC_LOAD(sc->port));
+    pthread_join(tid, NULL);
+
+    return rc;
+}
+
+static int test_refused_write(struct srv_ctx* sc)
+{
+    wolfcert_clear_error();
+    REQUIRE(post_refused(sc) == WOLFCERT_ERR_IO);
+    REQUIRE(strstr(wolfcert_last_error_message(), "wolfSSL_write") != NULL);
+    return 0;
+}
+
 #ifndef NO_ASN_TIME
 static time_t unset_clock(time_t* t)
 {
@@ -288,6 +521,12 @@ static time_t unset_clock(time_t* t)
 static int test_setup_failure_detail(struct srv_ctx* sc)
 {
     static const uint8_t junk[] = "not a certificate";
+#ifndef NO_ASN_TIME
+    static uint8_t der[8192];
+    uint8_t* ver;
+    int der_len;
+    int i;
+#endif
     WolfCertHttpSessionCfg cfg = { .verify_server = 1 };
     WolfCertHttpSession* s = NULL;
     uint16_t port;
@@ -312,21 +551,34 @@ static int test_setup_failure_detail(struct srv_ctx* sc)
     REQUIRE(strstr(wolfcert_last_error_message(), "client_cert") != NULL);
 
 #ifndef NO_ASN_TIME
+    der_len = wc_CertPemToDer(sc->cert_pem, (int)sc->cert_pem_len, der,
+                              (int)sizeof(der) / 2, CERT_TYPE);
+    REQUIRE(der_len > 0);
+    /* The anchor, then a copy wolfSSL refuses for its version before dates. */
+    memcpy(der + der_len, der, (size_t)der_len);
+    ver = memmem(der + der_len, (size_t)der_len, "\xa0\x03\x02\x01\x02", 5);
+    REQUIRE(ver != NULL);
+    ver[4] = 5;
     cfg.client_cert = NULL;
     cfg.client_cert_len = 0;
     cfg.client_key = NULL;
     cfg.client_key_len = 0;
-    wolfcert_clear_error();
-    REQUIRE(wc_SetTimeCb(unset_clock) == 0);
-    rc = wolfcert_http_session_open(&cfg, &s);
-    wc_SetTimeCb(NULL);
-    /* wolfSSL built with --enable-all loads the anchor regardless. */
-    if (rc == WOLFCERT_OK) {
-        wolfcert_http_session_close(s);
-        s = NULL;
-    }
-    else {
-        REQUIRE(rc == WOLFCERT_ERR_TLS);
+    for (i = 0; i < 2; i++) {
+        if (i == 1) {
+            cfg.trust_anchors     = der;
+            cfg.trust_anchors_len = 2 * (size_t)der_len;
+        }
+        wolfcert_clear_error();
+        REQUIRE(wc_SetTimeCb(unset_clock) == 0);
+        rc = wolfcert_http_session_open(&cfg, &s);
+        wc_SetTimeCb(NULL);
+        /* wolfSSL built with --enable-all loads the anchor regardless. */
+        if (rc == WOLFCERT_OK) {
+            wolfcert_http_session_close(s);
+            s = NULL;
+            continue;
+        }
+        REQUIRE(rc == WOLFCERT_ERR_TLS_UNTRUSTED);
         REQUIRE(s == NULL);
         REQUIRE(strstr(wolfcert_last_error_message(), "trust_anchors")
                 != NULL);
@@ -536,12 +788,11 @@ int main(void)
     REQUIRE(sc.version != NULL && strcmp(sc.version, "TLSv1.2") == 0);
 #endif
 
-    /* Trusting another self-signed cert fails the handshake with ERR_TLS
-     * and the wolfSSL code on a session's first request, after its open
-     * succeeds. */
+    /* Trusting another self-signed cert fails a session's first request,
+     * after its open succeeds. */
     wolfcert_clear_error();
     REQUIRE(get_once(&sc, other.cert_pem, other.cert_pem_len, &open_rc, &resp)
-            == WOLFCERT_ERR_TLS);
+            == WOLFCERT_ERR_TLS_UNTRUSTED);
     REQUIRE(open_rc == WOLFCERT_OK);
     REQUIRE(wolfcert_last_wolfssl_err() != 0);
     REQUIRE(resp.body == NULL && resp.status_code == 0);
@@ -559,7 +810,8 @@ int main(void)
 #endif
 
     /* A trusted cert for 127.0.0.1 does not pass as ca.example. */
-    REQUIRE(get_as(&sc, "ca.example", 1, &open_rc) == WOLFCERT_ERR_TLS);
+    REQUIRE(get_as(&sc, "ca.example", 1, &open_rc)
+            == WOLFCERT_ERR_TLS_UNTRUSTED);
     REQUIRE(open_rc == WOLFCERT_OK);
     /* A name wolfSSL will not check fails the open, before any handshake. */
     wolfcert_clear_error();
@@ -581,6 +833,9 @@ int main(void)
     /* wolfSSL exempts localhost from its two-label rule. */
     REQUIRE(get_as(&lh, "localhost", 1, &open_rc) == WOLFCERT_OK);
 
+    REQUIRE(test_client_cert_rejected(&sc, &other) == 0);
+    REQUIRE(test_forged_alert(&sc, &other) == 0);
+    REQUIRE(test_refused_write(&sc) == 0);
     REQUIRE(test_setup_failure_detail(&sc) == 0);
 
 #ifdef TEST_ALLOC_FAILURES

@@ -385,7 +385,7 @@ static int test_der_anchors(const char* url)
     /* Only the unrelated CA loads. */
     cli.trust_anchors_len = cat(ta, sizeof(ta), g_other.der,
                                 (size_t)g_other.der_len, pad, sizeof(pad), NULL, 0);
-    REQUIRE(cacerts(&cli) == WOLFCERT_ERR_TLS);
+    REQUIRE(cacerts(&cli) == WOLFCERT_ERR_TLS_UNTRUSTED);
     return 0;
 }
 

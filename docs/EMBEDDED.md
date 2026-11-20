@@ -339,7 +339,7 @@ waives the `HAVE_SNI` requirement, and also keeps the extension out of the
 handshake when wolfSSL does have SNI compiled in. Do not
 take that opt-out for a hosted EST service: the server would return its
 default certificate and `verify_server` would reject the handshake with
-`WOLFCERT_ERR_TLS`.
+`WOLFCERT_ERR_TLS_UNTRUSTED`.
 
 ## 8. Zephyr
 

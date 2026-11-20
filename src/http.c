@@ -977,6 +977,19 @@ static int check_client_key(const uint8_t* cert, size_t cert_len,
     return WOLFCERT_OK;
 }
 
+/* Maps a failed wolfSSL setup call to WOLFCERT_ERR_MEMORY or _TLS. */
+static int tls_setup_failure(int rc, const char* what)
+{
+    char buf[WOLFSSL_MAX_ERROR_SZ];
+
+    if (rc == WOLFSSL_FAILURE)
+        return WOLFCERT_ERR(WOLFCERT_ERR_TLS, "http", "%s failed", what);
+    wolfSSL_ERR_error_string((unsigned long)rc, buf);
+    return WOLFCERT_ERR_RC_WC((rc == MEMORY_E || rc == MEMORY_ERROR)
+                              ? WOLFCERT_ERR_MEMORY : WOLFCERT_ERR_TLS, rc,
+                              "http", "%s failed: %d (%s)", what, rc, buf);
+}
+
 /* A key with an id signs in its device; any other key loads as DER. */
 static int use_client_key_obj(WOLFSSL_CTX* ctx, const WolfCertKey* k)
 {
@@ -988,7 +1001,9 @@ static int use_client_key_obj(WOLFSSL_CTX* ctx, const WolfCertKey* k)
         rc = wolfSSL_CTX_use_PrivateKey_Id(ctx, k->id, (long)k->id_len,
                                            k->dev_id);
 #else
-        rc = WOLFSSL_FAILURE;
+        return WOLFCERT_ERR(WOLFCERT_ERR_UNSUPPORTED, "http",
+                            "client_key_obj has a key id, but wolfSSL lacks "
+                            "WOLF_CRYPTO_CB or WOLF_PRIVATE_KEY_ID");
 #endif
     }
     else {
@@ -1001,8 +1016,7 @@ static int use_client_key_obj(WOLFSSL_CTX* ctx, const WolfCertKey* k)
     }
 
     if (rc != WOLFSSL_SUCCESS)
-        return WOLFCERT_ERR(WOLFCERT_ERR_TLS, "http",
-                            "loading client_key_obj failed (%d)", rc);
+        return tls_setup_failure(rc, "loading client_key_obj");
     return WOLFCERT_OK;
 }
 
@@ -1017,8 +1031,7 @@ static int use_client_key(WOLFSSL_CTX* ctx, const TlsDials* d)
             (long)d->client_key_len,
             buf_filetype(d->client_key, d->client_key_len));
     if (rc != WOLFSSL_SUCCESS)
-        return WOLFCERT_ERR(WOLFCERT_ERR_TLS, "http",
-                            "loading the client key failed (%d)", rc);
+        return tls_setup_failure(rc, "loading the client key");
     return WOLFCERT_OK;
 }
 
@@ -1027,14 +1040,18 @@ static int setup_tls_ex(WolfCertConn* c, const TlsDials* dials,
 {
     WOLFSSL_CTX* ctx = wolfSSL_CTX_new(wolfTLS_client_method());
     int dev_id = wolfcert_default_dev_id();
+    int rc;
 
     if (ctx == NULL)
-        return WOLFCERT_ERR_TLS;
+        return WOLFCERT_ERR(WOLFCERT_ERR_MEMORY, "http",
+            "wolfSSL_CTX_new failed: out of memory or wolfSSL init failure");
     /* Keeps the devId wolfSSL_CTX_new picks itself, such as CAAM's. */
-    if (dev_id != INVALID_DEVID &&
-            wolfSSL_CTX_SetDevId(ctx, dev_id) != WOLFSSL_SUCCESS) {
-        wolfSSL_CTX_free(ctx);
-        return WOLFCERT_ERR_TLS;
+    if (dev_id != INVALID_DEVID) {
+        rc = wolfSSL_CTX_SetDevId(ctx, dev_id);
+        if (rc != WOLFSSL_SUCCESS) {
+            wolfSSL_CTX_free(ctx);
+            return tls_setup_failure(rc, "wolfSSL_CTX_SetDevId");
+        }
     }
 
 #ifdef WOLFSSL_NO_TLS12
@@ -1057,13 +1074,12 @@ static int setup_tls_ex(WolfCertConn* c, const TlsDials* dials,
 #endif
 
     if (dials->trust_anchors != NULL && dials->trust_anchors_len > 0) {
-        int rc = wolfSSL_CTX_load_verify_buffer(ctx, dials->trust_anchors,
-                    (long)dials->trust_anchors_len,
-                    buf_filetype(dials->trust_anchors, dials->trust_anchors_len));
-
+        rc = wolfSSL_CTX_load_verify_buffer(ctx, dials->trust_anchors,
+                (long)dials->trust_anchors_len,
+                buf_filetype(dials->trust_anchors, dials->trust_anchors_len));
         if (rc != WOLFSSL_SUCCESS) {
             wolfSSL_CTX_free(ctx);
-            return WOLFCERT_ERR_TLS;
+            return tls_setup_failure(rc, "loading trust_anchors");
         }
     }
 
@@ -1073,12 +1089,12 @@ static int setup_tls_ex(WolfCertConn* c, const TlsDials* dials,
     if (dials->client_cert != NULL &&
             (dials->client_key != NULL || dials->client_key_obj != NULL)) {
         /* Load the identity on the CTX so a PHA request can still use it. */
-        int rc = wolfSSL_CTX_use_certificate_buffer(ctx, dials->client_cert,
+        rc = wolfSSL_CTX_use_certificate_buffer(ctx, dials->client_cert,
                 (long)dials->client_cert_len,
                 buf_filetype(dials->client_cert, dials->client_cert_len));
         if (rc != WOLFSSL_SUCCESS) {
             wolfSSL_CTX_free(ctx);
-            return WOLFCERT_ERR_TLS;
+            return tls_setup_failure(rc, "loading client_cert");
         }
 
         rc = use_client_key(ctx, dials);
@@ -1091,12 +1107,12 @@ static int setup_tls_ex(WolfCertConn* c, const TlsDials* dials,
     WOLFSSL* ssl = wolfSSL_new(ctx);
     if (ssl == NULL) {
         wolfSSL_CTX_free(ctx);
-        return WOLFCERT_ERR_TLS;
+        return WOLFCERT_ERR(WOLFCERT_ERR_MEMORY, "http",
+                            "wolfSSL_new failed: out of memory or RNG failure");
     }
 
     if (sni_host != NULL) {
         int is_ip = host_ip_len(sni_host) != 0;
-        int rc;
 
 #if defined(HAVE_SNI) && !defined(WOLFCERT_NO_SNI)
         /* RFC 6066 section 3: HostName never carries an IP literal. */

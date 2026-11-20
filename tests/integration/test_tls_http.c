@@ -276,6 +276,67 @@ static int get_as(struct srv_ctx* sc, const char* host, int verify,
     return rc;
 }
 
+#ifndef NO_ASN_TIME
+static time_t unset_clock(time_t* t)
+{
+    if (t != NULL)
+        *t = 1000;
+    return 1000;
+}
+#endif
+
+static int test_setup_failure_detail(struct srv_ctx* sc)
+{
+    static const uint8_t junk[] = "not a certificate";
+    WolfCertHttpSessionCfg cfg = { .verify_server = 1 };
+    WolfCertHttpSession* s = NULL;
+    uint16_t port;
+    char url[64];
+    int ls;
+    int rc;
+
+    ls = black_hole_listener(&port);
+    REQUIRE(ls >= 0);
+    snprintf(url, sizeof(url), "https://127.0.0.1:%d/", port);
+    cfg.base_url          = url;
+    cfg.trust_anchors     = sc->cert_pem;
+    cfg.trust_anchors_len = sc->cert_pem_len;
+    cfg.client_cert       = junk;
+    cfg.client_cert_len   = sizeof(junk) - 1;
+    cfg.client_key        = sc->key_pem;
+    cfg.client_key_len    = sc->key_pem_len;
+    wolfcert_clear_error();
+    rc = wolfcert_http_session_open(&cfg, &s);
+    REQUIRE(rc == WOLFCERT_ERR_TLS);
+    REQUIRE(s == NULL);
+    REQUIRE(strstr(wolfcert_last_error_message(), "client_cert") != NULL);
+
+#ifndef NO_ASN_TIME
+    cfg.client_cert = NULL;
+    cfg.client_cert_len = 0;
+    cfg.client_key = NULL;
+    cfg.client_key_len = 0;
+    wolfcert_clear_error();
+    REQUIRE(wc_SetTimeCb(unset_clock) == 0);
+    rc = wolfcert_http_session_open(&cfg, &s);
+    wc_SetTimeCb(NULL);
+    /* wolfSSL built with --enable-all loads the anchor regardless. */
+    if (rc == WOLFCERT_OK) {
+        wolfcert_http_session_close(s);
+        s = NULL;
+    }
+    else {
+        REQUIRE(rc == WOLFCERT_ERR_TLS);
+        REQUIRE(s == NULL);
+        REQUIRE(strstr(wolfcert_last_error_message(), "trust_anchors")
+                != NULL);
+        REQUIRE(wolfcert_last_wolfssl_err() == ASN_BEFORE_DATE_E);
+    }
+#endif
+    close(ls);
+    return 0;
+}
+
 #if defined(USE_WOLFSSL_MEMORY) && !defined(WOLFSSL_STATIC_MEMORY) && \
     !defined(WOLFSSL_DEBUG_MEMORY)
 #define TEST_ALLOC_FAILURES
@@ -409,11 +470,17 @@ static int name_check_oom_case(struct srv_ctx* sc)
         oom_arm(fails);
         rc = wolfcert_http_session_open(&cfg, &s);
         failed = oom_disarm();
+#ifndef OPENSSL_EXTRA
+        /* OPENSSL_EXTRA reports some anchor-load OOM as a parse error. */
+        REQUIRE(!failed || rc == WOLFCERT_ERR_MEMORY);
+#endif
         if (rc == WOLFCERT_ERR_MEMORY &&
-                wolfcert_last_wolfssl_err() == MEMORY_E)
+                wolfcert_last_wolfssl_err() == MEMORY_E &&
+                strstr(wolfcert_last_error_message(), "SNI") != NULL)
             sni_oom = 1;
         found = rc == WOLFCERT_ERR_MEMORY &&
-                wolfcert_last_wolfssl_err() == MEMORY_ERROR;
+                wolfcert_last_wolfssl_err() == MEMORY_ERROR &&
+                strstr(wolfcert_last_error_message(), "name to check") != NULL;
         wolfcert_http_session_close(s);
         s = NULL;
         pfd.fd = ls;
@@ -513,6 +580,8 @@ int main(void)
     REQUIRE(get_as(&dns, "ca.example.", 1, &open_rc) == WOLFCERT_OK);
     /* wolfSSL exempts localhost from its two-label rule. */
     REQUIRE(get_as(&lh, "localhost", 1, &open_rc) == WOLFCERT_OK);
+
+    REQUIRE(test_setup_failure_detail(&sc) == 0);
 
 #ifdef TEST_ALLOC_FAILURES
     REQUIRE(handshake_oom_case(&sc, 0) == 0);

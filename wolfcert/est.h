@@ -164,7 +164,8 @@ WOLFCERT_API int wolfcert_est_simple_reenroll(const WolfCertServerCfg* srv,
  * proto_opts.est.allow_post_handshake_auth set, the server can request the
  * preloaded client cert via TLS 1.3 post-handshake auth (RFC 8446 section
  * 4.6.2); open then fails with WOLFCERT_ERR_UNSUPPORTED if wolfSSL lacks
- * WOLFSSL_POST_HANDSHAKE_AUTH. */
+ * WOLFSSL_POST_HANDSHAKE_AUTH. Open also returns WOLFCERT_ERR_UNSUPPORTED
+ * for an ML-DSA client cert when wolfSSL lacks TLS 1.3. */
 typedef struct WolfCertEstSession WolfCertEstSession;
 
 WOLFCERT_API int wolfcert_est_session_open(const WolfCertServerCfg* srv,

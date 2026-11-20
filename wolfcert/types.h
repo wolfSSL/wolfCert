@@ -233,7 +233,12 @@ typedef struct {
 typedef struct {
     WolfCertProtocol protocol;
     const char*      server_url;     /* e.g. https://ca.example/.well-known/est */
-    const uint8_t*   trust_anchors; /* bootstrap trust for TLS; PEM or DER; optional */
+    /* Optional bootstrap trust for TLS: one or more certificates, PEM or
+     * concatenated DER with only 0x00, 0xFF or whitespace between them. A
+     * DER certificate wolfSSL refuses is skipped, as in PEM. Data after the
+     * last DER certificate is ignored, but refused if a certificate follows
+     * it. */
+    const uint8_t*   trust_anchors;
     size_t           trust_anchors_len;
     int              verify_server;  /* must be 1 for EST and https:// SCEP */
     int              timeout_ms;     /* per-request timeout; 0 = default */

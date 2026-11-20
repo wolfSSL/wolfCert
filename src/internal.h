@@ -361,8 +361,19 @@ WOLFCERT_TEST_VIS int wolfcert_find_san(const DecodedCert* dc,
 
 WOLFCERT_TEST_VIS int wolfcert_buffer_is_der(const uint8_t* buf, size_t len);
 
+/* Length of the DER element starting at in[0], 0 if it does not parse. */
+size_t wolfcert_der_first_len(const uint8_t* in, size_t in_len);
 /* 1 if the DER element starting at in[0] spans exactly in_len bytes. */
 int wolfcert_der_is_single(const uint8_t* in, size_t in_len);
+
+/* Next SEQUENCE at *off, skipping 0x00/0xFF/whitespace: 1, 0 at the end or
+ * where none parses after an item, WOLFCERT_ERR_PARSE or _BAD_ARG. */
+WOLFCERT_TEST_VIS int wolfcert_der_next(const uint8_t* buf, size_t len,
+                                        size_t* off, const uint8_t** item,
+                                        size_t* item_len);
+
+/* 1 if item has a certificate's layout, which a CSR or CRL does not. */
+WOLFCERT_TEST_VIS int wolfcert_der_is_cert(const uint8_t* item, size_t len);
 
 /* Private key DER of a software key; fails for a key with a key_id. The
  * caller zeroizes and frees *out_der. */

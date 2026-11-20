@@ -69,6 +69,7 @@ typedef struct WolfCertHttpSession WolfCertHttpSession;
 typedef struct {
     /* Server to connect to, e.g. https://ca.example; a path is ignored. */
     const char*    base_url;
+    /* One or more certificates, PEM or concatenated DER, as in types.h. */
     const uint8_t* trust_anchors;
     size_t         trust_anchors_len;
     int            verify_server;

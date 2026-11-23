@@ -11,8 +11,10 @@ The driver covers every product tier:
 
   * Library (tier R/L/S): hash the built library with --lib.
   * Source-embedded (tier E, e.g. wolfBoot): hash a source set with --srcs-file.
-  * As-built / FIPS / kernel module: --lib with --no-artifact-hash on the
-    as-built artifact. Never substitute a source list for a certified artifact.
+  * As-built / FIPS / kernel module: pass --no-artifact-hash alone. The
+    driver sends that flag to gen-sbom. Do not pass --lib or --srcs-file
+    with it: gen-sbom accepts one checksum source and records a placeholder.
+    Never substitute a source list for a certified artifact.
   * Linker / binding: record a declared dependency with --dep-wolfssl and
     friends (feature-detected against the generator).
 
@@ -23,7 +25,11 @@ Config (choose one):
                      -D tokens are interpreted by; without it the dump is the
                      -D list alone and every derived macro is missing.
   --options-h PATH   A pre-expanded flat #define header, used verbatim (scrubbed).
-  --user-settings P  A user_settings.h. Passed to the generator, which captures it.
+  --user-settings P  Path to wolfssl/wolfcrypt/settings.h. Also pass
+                     --user-settings-include and
+                     --user-settings-define WOLFSSL_USER_SETTINGS. The
+                     generator walks settings.h; a user_settings.h path
+                     alone records only the literals in that file.
   --source-only      No build-config macros (e.g. a Kconfig-driven build).
 
 The macro capture runs the HOST compiler (never the cross compiler), so the SBOM
@@ -36,6 +42,7 @@ reach gen-sbom (for example -DPICO_SDK_PATH=/home/you/pico-sdk from arch.mk). Us
 """
 
 import argparse
+import functools
 import os
 import re
 import subprocess
@@ -117,14 +124,47 @@ def find_gen_sbom(explicit):
     return sibling  # report the sibling path in the error message
 
 
-def gen_sbom_supports(python, gen_sbom, flag):
-    """Return True if the generator advertises a flag in its --help."""
+@functools.lru_cache(maxsize=None)
+def _gen_sbom_help(python, gen_sbom):
     try:
         res = subprocess.run([python, gen_sbom, "--help"],
                              capture_output=True, text=True, check=False)
     except OSError:
-        return False
-    return flag in (res.stdout + res.stderr)
+        return ""
+    return res.stdout + res.stderr
+
+
+def gen_sbom_supports(python, gen_sbom, flag):
+    """Return True if the generator advertises a flag in its --help."""
+    return flag in _gen_sbom_help(python, gen_sbom)
+
+
+def default_source_date_epoch(root):
+    """Return the last commit time of the checkout that tracks root, or "".
+
+    Uses the same rule as build/sbom-with-sde.cmake and sbom.am: root must
+    hold tracked files, so a tarball unpacked inside another checkout does
+    not take that checkout's time.
+    """
+    def git(args, capture):
+        # ls-files prints every tracked path and only its status is used.
+        # Leave both streams unread, so a file name this locale cannot
+        # decode does not raise UnicodeDecodeError.
+        try:
+            res = subprocess.run(
+                ["git", "-C", root, *args],
+                stdout=subprocess.PIPE if capture else subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                text=capture, check=False)
+        except OSError:
+            return None
+        if res.returncode != 0:
+            return None
+        return res.stdout.strip() if capture else ""
+
+    if git(["ls-files", "--error-unmatch", "--", "."], False) is None:
+        return ""
+    return git(["log", "-1", "--format=%ct"], True) or ""
 
 
 def split_cflags(cflags):
@@ -205,6 +245,32 @@ def capture_macros(hostcc, cflags, settings_h="", include_dirs=()):
     return res.stdout
 
 
+def check_user_settings(args):
+    """Require the generator's three settings.h inputs, or none of them.
+
+    gen-sbom --user-settings is wolfssl/wolfcrypt/settings.h. settings.h
+    includes user_settings.h only when WOLFSSL_USER_SETTINGS is defined and
+    the include path can find that header. Forwarding a user_settings.h path
+    by itself records the literals in that file and drops every macro
+    settings.h derives.
+    """
+    if not args.user_settings:
+        if args.user_settings_include or args.user_settings_define:
+            sys.exit("ERROR: --user-settings-include and "
+                     "--user-settings-define require --user-settings.")
+        return
+    if not os.path.isfile(args.user_settings):
+        sys.exit(f"ERROR: --user-settings '{args.user_settings}' "
+                 f"does not exist.")
+    if not args.user_settings_include:
+        sys.exit("ERROR: --user-settings requires --user-settings-include "
+                 "(the directory that contains user_settings.h).")
+    names = [item.split("=", 1)[0] for item in args.user_settings_define]
+    if "WOLFSSL_USER_SETTINGS" not in names:
+        sys.exit("ERROR: --user-settings requires "
+                 "--user-settings-define WOLFSSL_USER_SETTINGS.")
+
+
 def load_srcs(srcs_file, skip_missing):
     """Read the source list; optionally drop paths that do not exist."""
     kept, dropped = [], 0
@@ -230,14 +296,16 @@ def main():
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
 
-    # Composition (at least one of --lib / --srcs-file; --source-only needs srcs).
+    # Composition (one of --lib / --srcs-file / --no-artifact-hash;
+    # --source-only needs srcs).
     ap.add_argument("--lib", default="",
                     help="Path to the built library to hash (tier R/L/S).")
     ap.add_argument("--srcs-file", default="",
                     help="File listing compiled-in sources (tier E).")
     ap.add_argument("--no-artifact-hash", action="store_true",
-                    help="Do not recompute the artifact hash. For as-built FIPS "
-                         "or kernel modules.")
+                    help="Record a placeholder checksum. Stands alone: do not "
+                         "pass --lib or --srcs-file. For a FIPS canister or a "
+                         "kernel module when no hashable artefact exists.")
 
     # Config (choose one).
     grp = ap.add_mutually_exclusive_group()
@@ -256,9 +324,26 @@ def main():
     grp.add_argument("--options-h", default="",
                      help="A pre-expanded flat #define header, used verbatim.")
     grp.add_argument("--user-settings", default="",
-                     help="A user_settings.h; passed to the generator.")
+                     help="Path to wolfssl/wolfcrypt/settings.h. Also pass "
+                          "--user-settings-include and "
+                          "--user-settings-define WOLFSSL_USER_SETTINGS.")
+    ap.add_argument("--user-settings-include", action="append", default=[],
+                    metavar="DIR",
+                    help="Include directory for --user-settings (repeatable). "
+                         "Point it at the directory that contains "
+                         "user_settings.h.")
+    ap.add_argument("--user-settings-define", action="append", default=[],
+                    metavar="NAME[=VALUE]",
+                    help="Predefine for --user-settings (repeatable). Pass "
+                         "WOLFSSL_USER_SETTINGS so settings.h includes "
+                         "user_settings.h.")
     grp.add_argument("--source-only", action="store_true",
                      help="Source-inventory SBOM with no build-config macros.")
+    ap.add_argument("--macro-prefix", action="append", default=[],
+                    metavar="PREFIX",
+                    help="Record only configuration macros whose name starts "
+                         "with PREFIX (repeatable). Passed through only if "
+                         "the generator supports it.")
 
     # Identity.
     ap.add_argument("--name", required=True, help="Package name in the SBOM.")
@@ -271,14 +356,22 @@ def main():
                          "primaryPackagePurpose. Use firmware for a "
                          "bootloader. Passed through only if the generator "
                          "supports it.")
+    ap.add_argument("--copyright-start", default="",
+                    help="First year of the copyright line. Passed through "
+                         "only if the generator supports it.")
     ap.add_argument("--license-file", default="")
     ap.add_argument("--license-override", default="")
     ap.add_argument("--license-text", default="")
+    ap.add_argument("--document-namespace", default="",
+                    help="SPDX documentNamespace override.")
 
     # Dependencies (feature-detected against the generator).
     ap.add_argument("--dep-wolfssl", default="")
     ap.add_argument("--dep-wolfcrypt", default="")
     ap.add_argument("--dep-openssl", default="")
+    ap.add_argument("--dep-libz", default="",
+                    help="yes|no. Record zlib. Pass the product's real "
+                         "build option; gen-sbom defaults to no.")
     ap.add_argument("--dep-version", action="append", default=[],
                     help="Dependency version, e.g. wolfssl=5.9.2 (repeatable).")
     ap.add_argument("--crypto-only", default="",
@@ -307,14 +400,22 @@ def main():
         sys.exit("ERROR: could not determine version; pass --version or "
                  "--version-file with --version-macro.")
 
-    if not args.lib and not args.srcs_file:
-        sys.exit("ERROR: pass at least one of --lib or --srcs-file.")
+    if args.no_artifact_hash:
+        if args.lib or args.srcs_file:
+            sys.exit("ERROR: --no-artifact-hash stands alone. "
+                     "Do not pass --lib or --srcs-file.")
+    elif args.lib and args.srcs_file:
+        sys.exit("ERROR: pass one of --lib or --srcs-file.")
+    elif not args.lib and not args.srcs_file:
+        sys.exit("ERROR: pass one of --lib, --srcs-file or "
+                 "--no-artifact-hash.")
     if args.source_only and not args.srcs_file:
         sys.exit("ERROR: --source-only needs --srcs-file.")
     if args.srcs_file and not os.path.isfile(args.srcs_file):
         sys.exit(f"ERROR: --srcs-file '{args.srcs_file}' does not exist.")
     if args.lib and not os.path.isfile(args.lib):
         sys.exit(f"ERROR: --lib '{args.lib}' does not exist.")
+    check_user_settings(args)
 
     gen_sbom = find_gen_sbom(args.gen_sbom)
     if not os.path.isfile(gen_sbom):
@@ -334,22 +435,24 @@ def main():
                "--cdx-out", cdx_out,
                "--spdx-out", spdx_out]
 
-        # Composition.
-        if args.srcs_file:
-            srcs = load_srcs(args.srcs_file, args.skip_missing)
-            fd, srcs_path = tempfile.mkstemp(prefix="wolfssl-compliance-tooling-srcs-", suffix=".txt")
-            os.close(fd)
-            tmp_files.append(srcs_path)
-            with open(srcs_path, "w", encoding="utf-8") as f:
-                f.write("\n".join(srcs) + "\n")
-            cmd += ["--srcs-file", srcs_path]
-            src_count = len(srcs)
-        else:
-            src_count = 0
-        if args.lib:
-            cmd += ["--lib", args.lib]
+        # Composition. gen-sbom accepts exactly one checksum source.
+        # --no-artifact-hash is that source and stands alone.
+        src_count = 0
         if args.no_artifact_hash:
             cmd += ["--no-artifact-hash"]
+        else:
+            if args.srcs_file:
+                srcs = load_srcs(args.srcs_file, args.skip_missing)
+                fd, srcs_path = tempfile.mkstemp(
+                    prefix="wolfssl-compliance-tooling-srcs-", suffix=".txt")
+                os.close(fd)
+                tmp_files.append(srcs_path)
+                with open(srcs_path, "w", encoding="utf-8") as f:
+                    f.write("\n".join(srcs) + "\n")
+                cmd += ["--srcs-file", srcs_path]
+                src_count = len(srcs)
+            if args.lib:
+                cmd += ["--lib", args.lib]
 
         # Config.
         if args.settings_h and not args.cflags:
@@ -359,10 +462,11 @@ def main():
             print("WARNING: --settings-h is only used with --cflags; "
                   "ignoring it here.", file=sys.stderr)
         if args.user_settings:
-            if not os.path.isfile(args.user_settings):
-                sys.exit(f"ERROR: --user-settings '{args.user_settings}' "
-                         f"does not exist.")
             cmd += ["--user-settings", args.user_settings]
+            for inc in args.user_settings_include:
+                cmd += ["--user-settings-include", inc]
+            for define in args.user_settings_define:
+                cmd += ["--user-settings-define", define]
         else:
             if args.source_only:
                 defines_text = ""
@@ -372,7 +476,9 @@ def main():
                 with open(args.options_h, encoding="utf-8", errors="replace") as f:
                     defines_text = f.read()
             elif args.cflags:
-                if args.settings_h and not os.path.isfile(args.settings_h):
+                # A relative path is left to the compiler's -include search.
+                if (os.path.isabs(args.settings_h)
+                        and not os.path.isfile(args.settings_h)):
                     sys.exit(f"ERROR: --settings-h '{args.settings_h}' "
                              f"does not exist.")
                 defines_text = capture_macros(
@@ -396,10 +502,17 @@ def main():
             cmd += ["--license-override", args.license_override]
         if args.license_text:
             cmd += ["--license-text", args.license_text]
+        if args.document_namespace and gen_sbom_supports(
+                args.python, gen_sbom, "--document-namespace"):
+            cmd += ["--document-namespace", args.document_namespace]
 
         if args.component_type and gen_sbom_supports(
                 args.python, gen_sbom, "--component-type"):
             cmd += ["--component-type", args.component_type]
+
+        if args.copyright_start and gen_sbom_supports(
+                args.python, gen_sbom, "--copyright-start"):
+            cmd += ["--copyright-start", args.copyright_start]
 
         # Dependencies, only if the generator supports them.
         if args.dep_wolfssl and gen_sbom_supports(args.python, gen_sbom, "--dep-wolfssl"):
@@ -409,9 +522,19 @@ def main():
             cmd += ["--dep-wolfcrypt", args.dep_wolfcrypt]
         if args.dep_openssl and gen_sbom_supports(args.python, gen_sbom, "--dep-openssl"):
             cmd += ["--dep-openssl", args.dep_openssl]
+        if args.dep_libz and gen_sbom_supports(args.python, gen_sbom, "--dep-libz"):
+            cmd += ["--dep-libz", args.dep_libz]
         if args.dep_version and gen_sbom_supports(args.python, gen_sbom, "--dep-version"):
             for dv in args.dep_version:
                 cmd += ["--dep-version", dv]
+        if args.macro_prefix:
+            if gen_sbom_supports(args.python, gen_sbom, "--macro-prefix"):
+                for prefix in args.macro_prefix:
+                    cmd += ["--macro-prefix", prefix]
+            else:
+                print("NOTE: this gen-sbom has no --macro-prefix support; "
+                      "every captured macro will be recorded.",
+                      file=sys.stderr)
         if args.crypto_only and gen_sbom_supports(
                 args.python, gen_sbom, "--crypto-only"):
             cmd += ["--crypto-only", args.crypto_only]
@@ -424,7 +547,16 @@ def main():
             print(f"  sources: {src_count} file(s)")
         print(f"  outputs: {cdx_out}  {spdx_out}")
 
-        rc = subprocess.call(cmd)
+        # Only an explicit --root selects the checkout. The working
+        # directory is not one: a front end run from inside another
+        # checkout would otherwise take that checkout's time.
+        env = None
+        if args.root and not os.environ.get("SOURCE_DATE_EPOCH"):
+            sde = default_source_date_epoch(root)
+            if sde:
+                env = dict(os.environ, SOURCE_DATE_EPOCH=sde)
+
+        rc = subprocess.call(cmd, env=env)
     finally:
         for f in tmp_files:
             try:

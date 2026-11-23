@@ -23,16 +23,42 @@
 #                       feature flags are NOT in config.h (no AC_DEFINE); when
 #                       unset the recipe derives the macros from the compiler +
 #                       config.h.  Default: unset.
+#   SBOM_USER_SETTINGS  Path to wolfssl/wolfcrypt/settings.h, for a product
+#                       configured by a user_settings.h instead of configure.
+#                       gen-sbom walks it through pcpp.  Also set
+#                       SBOM_USER_SETTINGS_INCLUDES (one directory must hold
+#                       user_settings.h) and SBOM_USER_SETTINGS_DEFINES
+#                       (include WOLFSSL_USER_SETTINGS), both space-separated.
+#                       Mutually exclusive with SBOM_OPTIONS_H.  Default: unset.
+#   SBOM_MACRO_PREFIX   Space-separated macro name prefixes.  When set, only
+#                       the captured macros starting with one of them are
+#                       recorded, e.g. WOLFCERT_ for a product that shares its
+#                       user_settings.h with wolfSSL.  Default: unset.
 #   SBOM_ARTIFACT       lib | bin - which build output to hash.  Default: lib.
 #   SBOM_LIB_STEM       Library basename w/o extension.  Default: lib$(SBOM_PKGNAME).
 #   SBOM_BIN_NAME       Program name when SBOM_ARTIFACT = bin.  Default: $(SBOM_PKGNAME).
 #   SBOM_DEP_WOLFSSL    yes | no - record wolfSSL as a dependency.  Default: no.
 #   SBOM_DEP_OPENSSL    yes | no - record OpenSSL as a dependency (wolfProvider /
 #                       wolfEngine).  Default: no.
+#   SBOM_DEP_LIBZ       yes | no - record zlib. Pass the product's real
+#                       option. Default: unset, so gen-sbom keeps its own
+#                       default of no.
+#   SBOM_DEP_VERSIONS   Space-separated KEY=VERSION list, forwarded as
+#                       repeated --dep-version flags (for example
+#                       libz=1.3.1). Use this when the host has no
+#                       pkg-config file for the dependency.
+#   SBOM_LIB_OVERRIDE   Absolute path of the library to hash. When set, the
+#                       recipe does not run a private `make install`. A traced
+#                       build (bomsh) sets this so the SBOM hash and the
+#                       OmniBOR gitoid name the same file. A later install
+#                       relinks a different file.
+#   SBOM_DOCUMENT_NAMESPACE  SPDX documentNamespace. Default: the
+#                       generator's deterministic urn:uuid.
 #   SBOM_LICENSE_OVERRIDE  SPDX expression to record instead of the licence
 #                       detected from SBOM_LICENSE_FILE.
 #   SBOM_LICENSE_TEXT   Path to licence text for any LicenseRef-* used in
 #                       SBOM_LICENSE_OVERRIDE (required by SPDX 2.3).
+#   SBOM_COPYRIGHT_START   First year of the copyright line.  Default: 2006.
 #   SBOM_WOLFSSL_VERSION   Version recorded for the wolfSSL dependency.  When
 #                       unset and WOLFSSL_DIR is set, it is read from that tree:
 #                       wolfssl/version.h, else configure.ac (version.h is
@@ -70,8 +96,8 @@
 # (AC_PATH_PROG); git is used only to derive SOURCE_DATE_EPOCH.
 #
 # NOTE: this fragment requires GNU make.  It uses GNU conditional assignment
-# (?=) and the GNU make functions $(wildcard), $(if), $(firstword) and
-# $(addprefix); under a non-GNU make the SBOM targets will not work.
+# (?=) and the GNU make functions $(wildcard), $(if), $(firstword), $(strip)
+# and $(addprefix); under a non-GNU make the SBOM targets will not work.
 # ---------------------------------------------------------------------------
 
 SBOM_ARTIFACT ?= lib
@@ -79,6 +105,8 @@ SBOM_LIB_STEM ?= lib$(SBOM_PKGNAME)
 SBOM_BIN_NAME ?= $(SBOM_PKGNAME)
 SBOM_DEP_WOLFSSL ?= no
 SBOM_DEP_OPENSSL ?= no
+# Leave unset so a product that does not know about zlib does not pass the flag.
+# wolfSSL sets this from ENABLED_LIBZ (yes or no).
 SBOM_CONFIG_H ?= $(abs_builddir)/config.h
 # Host C compiler used to capture the build macros (matching the Make/CMake
 # paths' HOSTCC), NOT the configured $(CC): on a cross build $(CC) would bake
@@ -127,15 +155,15 @@ CLEANFILES += $(SBOM_CDX) $(SBOM_SPDX) $(SBOM_SPDX_TV)
 
 # Stage a `make install` into a private tree, discover the installed artifact
 # (shared/static library or program; ELF/Mach-O/PE), hash it, capture the
-# configured build macros (from SBOM_OPTIONS_H if set, else the -D/-U/-I tokens
-# of AM_CPPFLAGS/AM_CFLAGS/CFLAGS + config.h, expanded through the HOST compiler
-# SBOM_HOSTCC so the SBOM is reproducible across cross toolchains; some products
-# carry their feature -D flags in AM_CFLAGS rather than AM_CPPFLAGS, and some
-# outside config.h entirely),
-# generate SPDX+CDX, validate
-# the SPDX, then convert to tag-value.  The staging tree and temp defines file
-# are removed unconditionally via `trap`, even on failure.  SOURCE_DATE_EPOCH is
-# honoured for reproducible output (defaults to the last git commit time).
+# configured build macros (from SBOM_USER_SETTINGS or SBOM_OPTIONS_H if set,
+# else the -D/-U/-I tokens of AM_CPPFLAGS/AM_CFLAGS/CFLAGS + config.h,
+# expanded through the HOST compiler SBOM_HOSTCC so the SBOM is reproducible
+# across cross toolchains; some products carry their feature -D flags in
+# AM_CFLAGS rather than AM_CPPFLAGS, and some outside config.h entirely),
+# generate SPDX+CDX, validate the SPDX, then convert to tag-value.  The
+# staging tree and temp defines file are removed unconditionally via `trap`,
+# even on failure.  SOURCE_DATE_EPOCH is honoured for reproducible output
+# (defaults to the last git commit time).
 sbom:
 	@test -n "$(PYTHON3)" || { \
 	    echo "ERROR: 'python3' not found in PATH. Cannot generate SBOM."; \
@@ -151,31 +179,63 @@ sbom:
 	@set -e; \
 	_defines=`mktemp $(abs_builddir)/_sbom_defines.XXXXXX`; \
 	trap 'rm -rf $(abs_builddir)/_sbom_staging "$$_defines"' EXIT INT TERM HUP; \
-	$(MAKE) install DESTDIR=$(abs_builddir)/_sbom_staging; \
 	sbom_art=""; \
-	if test "$(SBOM_ARTIFACT)" = bin; then \
-	    for art in \
-	        "$(abs_builddir)/_sbom_staging$(bindir)/$(SBOM_BIN_NAME)" \
-	        "$(abs_builddir)/_sbom_staging$(bindir)/$(SBOM_BIN_NAME)".exe; do \
-	        if test -f "$$art"; then sbom_art="$$art"; break; fi; \
-	    done; \
+	if test -n "$(SBOM_LIB_OVERRIDE)"; then \
+	    if test ! -f "$(SBOM_LIB_OVERRIDE)"; then \
+	        echo ""; \
+	        echo "ERROR: SBOM_LIB_OVERRIDE=$(SBOM_LIB_OVERRIDE) does not exist."; \
+	        echo ""; \
+	        exit 1; \
+	    fi; \
+	    sbom_art="$(SBOM_LIB_OVERRIDE)"; \
 	else \
-	    for art in \
-	        $(addprefix "$(abs_builddir)/_sbom_staging$(libdir)"/,$(SBOM_LIB_GLOBS)) \
-	        $(addprefix "$(abs_builddir)/_sbom_staging$(bindir)"/,$(SBOM_LIB_STEM).dll $(SBOM_PKGNAME).dll); do \
-	        if test -f "$$art"; then sbom_art="$$art"; break; fi; \
-	    done; \
-	fi; \
-	if test -z "$$sbom_art"; then \
-	    echo ""; \
-	    echo "ERROR: no installed $(SBOM_PKGNAME) artifact found for SBOM."; \
-	    echo "       (configure with --enable-shared or --enable-static)"; \
-	    echo ""; \
-	    exit 1; \
+	    $(MAKE) install DESTDIR=$(abs_builddir)/_sbom_staging; \
+	    if test "$(SBOM_ARTIFACT)" = bin; then \
+	        for art in \
+	            "$(abs_builddir)/_sbom_staging$(bindir)/$(SBOM_BIN_NAME)" \
+	            "$(abs_builddir)/_sbom_staging$(bindir)/$(SBOM_BIN_NAME)".exe; do \
+	            if test -f "$$art"; then sbom_art="$$art"; break; fi; \
+	        done; \
+	    else \
+	        for art in \
+	            $(addprefix "$(abs_builddir)/_sbom_staging$(libdir)"/,$(SBOM_LIB_GLOBS)) \
+	            $(addprefix "$(abs_builddir)/_sbom_staging$(bindir)"/,$(SBOM_LIB_STEM).dll $(SBOM_PKGNAME).dll); do \
+	            if test -f "$$art"; then sbom_art="$$art"; break; fi; \
+	        done; \
+	    fi; \
+	    if test -z "$$sbom_art"; then \
+	        echo ""; \
+	        echo "ERROR: no installed $(SBOM_PKGNAME) artifact found for SBOM."; \
+	        echo "       (configure with --enable-shared or --enable-static)"; \
+	        echo ""; \
+	        exit 1; \
+	    fi; \
 	fi; \
 	echo "SBOM: hashing $$sbom_art"; \
 	opts_h="$(SBOM_OPTIONS_H)"; \
-	if test -z "$$opts_h"; then \
+	set --; \
+	if test -n "$(SBOM_USER_SETTINGS)"; then \
+	    if test -n "$$opts_h"; then \
+	        echo "ERROR: set SBOM_USER_SETTINGS or SBOM_OPTIONS_H, not both."; \
+	        exit 1; \
+	    fi; \
+	    if test -z "$(strip $(SBOM_USER_SETTINGS_INCLUDES))"; then \
+	        echo "ERROR: SBOM_USER_SETTINGS needs SBOM_USER_SETTINGS_INCLUDES."; \
+	        exit 1; \
+	    fi; \
+	    case " $(SBOM_USER_SETTINGS_DEFINES) " in \
+	        *" WOLFSSL_USER_SETTINGS "*|*" WOLFSSL_USER_SETTINGS="*) ;; \
+	        *) echo "ERROR: SBOM_USER_SETTINGS_DEFINES must include WOLFSSL_USER_SETTINGS."; \
+	           exit 1;; \
+	    esac; \
+	    set -- --user-settings "$(SBOM_USER_SETTINGS)"; \
+	    for d in $(SBOM_USER_SETTINGS_INCLUDES); do \
+	        set -- "$$@" --user-settings-include "$$d"; \
+	    done; \
+	    for d in $(SBOM_USER_SETTINGS_DEFINES); do \
+	        set -- "$$@" --user-settings-define "$$d"; \
+	    done; \
+	elif test -z "$$opts_h"; then \
 	    opts_h="$$_defines"; \
 	    sbom_cpp=""; \
 	    for f in $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS); do \
@@ -185,8 +245,20 @@ sbom:
 	        $(if $(wildcard $(SBOM_CONFIG_H)),-include $(SBOM_CONFIG_H)) \
 	        -x c /dev/null > "$$_defines"; \
 	fi; \
+	if test $$# -eq 0; then set -- --options-h "$$opts_h"; fi; \
+	if test -n "$(SBOM_MACRO_PREFIX)"; then \
+	    if $(PYTHON3) "$(SBOM_GEN)" --help 2>/dev/null \
+	        | $(GREP) -q -- '--macro-prefix'; then \
+	        for p in $(SBOM_MACRO_PREFIX); do \
+	            set -- "$$@" --macro-prefix "$$p"; \
+	        done; \
+	    else \
+	        echo "NOTE: this gen-sbom has no --macro-prefix support; every"; \
+	        echo "      captured macro will be recorded."; \
+	    fi; \
+	fi; \
 	if test -z "$${SOURCE_DATE_EPOCH:-}" && test -n "$(GIT)" && \
-	   $(GIT) -C "$(srcdir)" rev-parse --git-dir >/dev/null 2>&1; then \
+	   $(GIT) -C "$(srcdir)" ls-files --error-unmatch -- . >/dev/null 2>&1; then \
 	    sde=`$(GIT) -C "$(srcdir)" log -1 --format=%ct 2>/dev/null`; \
 	    if test -n "$$sde"; then SOURCE_DATE_EPOCH="$$sde"; export SOURCE_DATE_EPOCH; fi; \
 	fi; \
@@ -238,16 +310,39 @@ sbom:
 	        echo "      not be listed as a dependency component."; \
 	    fi; \
 	fi; \
+	if test -n "$(SBOM_DEP_LIBZ)"; then \
+	    if $(PYTHON3) "$(SBOM_GEN)" --help 2>/dev/null \
+	        | $(GREP) -q -- '--dep-libz'; then \
+	        dep_args="$$dep_args --dep-libz $(SBOM_DEP_LIBZ)"; \
+	    fi; \
+	fi; \
+	if test -n "$(SBOM_DEP_VERSIONS)"; then \
+	    if $(PYTHON3) "$(SBOM_GEN)" --help 2>/dev/null \
+	        | $(GREP) -q -- '--dep-version'; then \
+	        for dv in $(SBOM_DEP_VERSIONS); do \
+	            dep_args="$$dep_args --dep-version $$dv"; \
+	        done; \
+	    fi; \
+	fi; \
+	ns_arg=""; \
+	if test -n "$(SBOM_DOCUMENT_NAMESPACE)"; then \
+	    if $(PYTHON3) "$(SBOM_GEN)" --help 2>/dev/null \
+	        | $(GREP) -q -- '--document-namespace'; then \
+	        ns_arg=--document-namespace; \
+	    fi; \
+	fi; \
 	$(PYTHON3) "$(SBOM_GEN)" \
 	    --name $(SBOM_PKGNAME) \
 	    --version $(PACKAGE_VERSION) \
 	    --supplier "wolfSSL Inc." \
 	    --license-file $(SBOM_LICENSE_FILE) \
-	    --options-h "$$opts_h" \
+	    "$$@" \
 	    --lib "$$sbom_art" \
 	    $$dep_args \
+	    $${ns_arg:+$$ns_arg '$(SBOM_DOCUMENT_NAMESPACE)'} \
 	    $(if $(SBOM_LICENSE_OVERRIDE),--license-override '$(SBOM_LICENSE_OVERRIDE)') \
 	    $(if $(SBOM_LICENSE_TEXT),--license-text '$(SBOM_LICENSE_TEXT)') \
+	    $(if $(SBOM_COPYRIGHT_START),--copyright-start '$(SBOM_COPYRIGHT_START)') \
 	    --cdx-out $(abs_builddir)/$(SBOM_CDX) \
 	    --spdx-out $(abs_builddir)/$(SBOM_SPDX); \
 	$(PYSPDXTOOLS) --infile $(abs_builddir)/$(SBOM_SPDX) \

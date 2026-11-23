@@ -334,8 +334,15 @@ EXTRA_DIST += \
     tools/sbom/sbom-driver.py \
     tools/sbom/sbom.am \
     tools/sbom/validate_sbom.py \
+    tools/sbom/build/install-sbom.cmake \
+    tools/sbom/build/sbom-fail.cmake \
+    tools/sbom/build/sbom-paths.cmake \
+    tools/sbom/build/sbom-validate.cmake \
+    tools/sbom/build/sbom-with-sde.cmake \
     tools/sbom/build/sbom.cmake \
     tools/sbom/build/sbom.mk \
+    tools/sbom/build/uninstall-sbom.cmake \
     tools/sbom/frontends/compdb_sbom.py \
     tools/sbom/frontends/iar_sbom.py \
+    tools/sbom/frontends/included_sources.py \
     tools/sbom/frontends/zephyr_sbom.py

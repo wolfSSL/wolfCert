@@ -1303,19 +1303,6 @@ int wolfcert_extract_spki(const uint8_t* der, size_t len, int is_csr,
     return rc;
 }
 
-/* Size of the DER SEQUENCE at `p`, or 0 if none fits in `len`. */
-static size_t der_seq_len(const uint8_t* p, size_t len)
-{
-    byte   tag;
-    size_t clen;
-    int    hdr = der_read_tlv(p, len, &tag, &clen);
-
-    if (hdr < 0 || tag != 0x30)
-        return 0;
-
-    return (size_t)hdr + clen;
-}
-
 WOLFCERT_TEST_VIS int wolfcert_scep_is_signed_data(const uint8_t* b,
                                                    size_t len)
 {
@@ -1361,7 +1348,7 @@ WOLFCERT_TEST_VIS int wolfcert_scep_verify_rep_signer(const uint8_t* signer_cert
     /* RFC 8894: the CA or its RA signs the CertRep, so match any bundle key. */
     rc = WOLFCERT_ERR_AUTH;
     while (off < ca_bundle_len && rc == WOLFCERT_ERR_AUTH) {
-        clen = der_seq_len(ca_bundle + off, ca_bundle_len - off);
+        clen = wolfcert_der_seq_len(ca_bundle + off, ca_bundle_len - off);
         if (clen == 0)
             break;
 
@@ -1475,7 +1462,7 @@ int wolfcert_scep_select_ra_cert(const uint8_t* bundle, size_t bundle_len,
         heap = wolfcert_default_heap();
 
     while (off < bundle_len) {
-        clen = der_seq_len(bundle + off, bundle_len - off);
+        clen = wolfcert_der_seq_len(bundle + off, bundle_len - off);
         if (clen == 0 && n > 0)
             break;
         if (clen == 0)
@@ -1494,7 +1481,7 @@ int wolfcert_scep_select_ra_cert(const uint8_t* bundle, size_t bundle_len,
 
     for (i = 0, off = 0; rc == WOLFCERT_OK && i < n; i++) {
         c[i].der = bundle + off;
-        c[i].len = der_seq_len(bundle + off, bundle_len - off);
+        c[i].len = wolfcert_der_seq_len(bundle + off, bundle_len - off);
         off += c[i].len;
         rc = ra_candidate_parse(&c[i], heap);
         if (c[i].rank > best)

@@ -798,10 +798,50 @@ int wolfcert_server_get_ca(const WolfCertServer* srv, WolfCertEncoding enc,
     return wolfcert_ca_export(&srv->ca, enc, out_cert, out_key);
 }
 
+#if defined(WOLFCERT_HAVE_EST) || defined(WOLFCERT_HAVE_SCEP)
+int wolfcert_server_issued_p7(WolfCertServer* srv, const uint8_t* issued,
+                              size_t issued_len, WolfCertBuffer* out_p7)
+{
+    const uint8_t* certs[2] = { issued, NULL };
+    size_t         lens[2]  = { issued_len, 0 };
+    size_t         n = 1;
+
+#if defined(WOLFCERT_BUILD_TESTING)
+    if (srv->issue_fault) {
+        certs[0] = srv->issue_first ? srv->issue_first : srv->ca.cert_der;
+        lens[0]  = srv->issue_first ? srv->issue_first_len
+                                    : srv->ca.cert_der_len;
+    }
+    else if (srv->issue_first != NULL) {
+        certs[0] = srv->issue_first;
+        lens[0]  = srv->issue_first_len;
+        certs[1] = issued;
+        lens[1]  = issued_len;
+        n = 2;
+    }
+#endif
+    return wolfcert_pkcs7_build_certs_only(certs, lens, n, out_p7, srv->heap);
+}
+#endif
+
 #if defined(WOLFCERT_BUILD_TESTING)
 WOLFCERT_TEST_VIS void wolfcert_server_set_request_timeout(WolfCertServer* srv,
                                                            int ms)
 {
     srv->request_timeout_ms = ms;
+}
+
+WOLFCERT_TEST_VIS void wolfcert_server_set_issue_first(WolfCertServer* srv,
+                                                       const uint8_t* der,
+                                                       size_t der_len)
+{
+    srv->issue_first     = der;
+    srv->issue_first_len = der_len;
+}
+
+WOLFCERT_TEST_VIS void wolfcert_server_set_issue_fault(WolfCertServer* srv,
+                                                       int on)
+{
+    srv->issue_fault = on;
 }
 #endif

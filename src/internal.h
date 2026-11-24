@@ -42,6 +42,7 @@
 #include <wolfssl/wolfcrypt/asn_public.h>
 #include <wolfssl/wolfcrypt/ecc.h>
 #include <wolfssl/wolfcrypt/rsa.h>
+#include <wolfssl/wolfcrypt/sha256.h>
 #include <wolfssl/wolfcrypt/random.h>
 #include <wolfssl/wolfcrypt/wc_port.h>
 #include <wolfssl/ssl.h>
@@ -165,8 +166,16 @@ struct WolfCertServer {
 #if defined(WOLFCERT_BUILD_TESTING)
     /* Set by wolfcert_server_set_request_timeout(). */
     int                     request_timeout_ms;
+    /* Set by wolfcert_server_set_issue_fault() and _first(). */
+    int                     issue_fault;
+    const uint8_t*          issue_first;
+    size_t                  issue_first_len;
 #endif
 };
+
+/* Certs-only PKCS#7 carrying an issued certificate. */
+int wolfcert_server_issued_p7(WolfCertServer* srv, const uint8_t* issued,
+                              size_t issued_len, WolfCertBuffer* out_p7);
 
 /* wolfSSL_read/write on a TLS connection, else recv()/send(). */
 ssize_t wolfcert_io_recv(WolfCertServer* srv, int fd, void* buf, size_t len);
@@ -211,6 +220,16 @@ WOLFCERT_API const WolfCertServerOps* wolfcert_scep_server_ops(void);
  * 0 restores it and a negative value disables the deadline. */
 WOLFCERT_TEST_VIS void wolfcert_server_set_request_timeout(WolfCertServer* srv,
                                                            int ms);
+
+/* Issued-cert replies put der ahead of the issued cert; NULL clears it. */
+WOLFCERT_TEST_VIS void wolfcert_server_set_issue_first(WolfCertServer* srv,
+                                                       const uint8_t* der,
+                                                       size_t der_len);
+
+/* While on, those replies leave the issued cert out, sending the
+ * _issue_first cert, else the CA cert, alone. */
+WOLFCERT_TEST_VIS void wolfcert_server_set_issue_fault(WolfCertServer* srv,
+                                                       int on);
 
 /* GetCert faults: answer with the CA cert, or drop the signer cert. */
 WOLFCERT_TEST_VIS void wolfcert_scep_server_set_getcert_fault(WolfCertServer* s,
@@ -361,6 +380,12 @@ WOLFCERT_TEST_VIS int wolfcert_find_san(const DecodedCert* dc,
 
 WOLFCERT_TEST_VIS int wolfcert_buffer_is_der(const uint8_t* buf, size_t len);
 
+/* Reads the header of the element with tag at in[*idx] and moves *idx to its
+ * content; -1 if it is missing, truncated or of indefinite length. */
+int wolfcert_der_next(const uint8_t* in, word32* idx, word32 end, byte tag,
+                      int* len);
+/* Length of the DER SEQUENCE starting at in[0], 0 if none fits in in_len. */
+size_t wolfcert_der_seq_len(const uint8_t* in, size_t in_len);
 /* 1 if the DER element starting at in[0] spans exactly in_len bytes. */
 int wolfcert_der_is_single(const uint8_t* in, size_t in_len);
 
@@ -374,6 +399,20 @@ WOLFCERT_TEST_VIS int wolfcert_pkcs7_certs_to_pem(const uint8_t* p7_der, size_t 
                                                   WolfCertBuffer* out_pem, void* heap);
 WOLFCERT_TEST_VIS int wolfcert_pkcs7_certs_to_der(const uint8_t* p7_der, size_t p7_der_len,
                                                   WolfCertBuffer* out_der, void* heap);
+
+/* SHA-256 of the SubjectPublicKeyInfo in a DER cert or, with is_csr, CSR. */
+WOLFCERT_TEST_VIS int wolfcert_spki_hash(const uint8_t* der, size_t der_len,
+    int is_csr, uint8_t hash[WC_SHA256_DIGEST_SIZE], void* heap);
+
+/* SHA-256 of the DER encoding of a PEM or DER buffer's first cert. */
+int wolfcert_cert_der_hash(const uint8_t* cert, size_t cert_len,
+                           uint8_t hash[WC_SHA256_DIGEST_SIZE], void* heap);
+
+/* As _to_pem, the cert with key_hash's SPKI first; one whose DER hashes to
+ * avoid_hash never counts. WOLFCERT_ERR_PROTOCOL when none matches. */
+WOLFCERT_TEST_VIS int wolfcert_pkcs7_issued_to_pem(const uint8_t* p7_der,
+    size_t p7_der_len, const uint8_t key_hash[WC_SHA256_DIGEST_SIZE],
+    const uint8_t* avoid_hash, WolfCertBuffer* out_pem, void* heap);
 
 WOLFCERT_TEST_VIS int wolfcert_pkcs7_build_certs_only(const uint8_t* const* certs_der,
                                                       const size_t* certs_len, size_t count,

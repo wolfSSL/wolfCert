@@ -336,8 +336,10 @@ static int poll_path(WolfCertServer* s)
         wolfcert_scep_result_free(&rm);
     }
 
-    /* Step 2: GetCertInitial with signer_cert NULL -> SUCCESS, chains to CA. */
+    /* Step 2: GetCertInitial with signer_cert NULL -> SUCCESS, chains to CA.
+     * The CA cert comes first in the CertRep and last in the result. */
     WolfCertScepResult r2 = { 0 };
+    wolfcert_server_set_issue_first(s, ca_der->buffer, ca_der->length);
     rc = wolfcert_scep_get_cert_initial(&cli, &caps,
                                         ca_der->buffer, ca_der->length,
                                         ca_der->buffer, ca_der->length,
@@ -345,11 +347,11 @@ static int poll_path(WolfCertServer* s)
                                         dk, csr.data, csr.len,
                                         r1.transaction_id, r1.transaction_id_len,
                                         &r2);
+    wolfcert_server_set_issue_first(s, NULL, 0);
     REQUIRE(rc == WOLFCERT_OK);
     REQUIRE(r2.status == WOLFCERT_SCEP_STATUS_SUCCESS);
-    REQUIRE(r2.cert_pem.data != NULL);
-    REQUIRE(memmem(r2.cert_pem.data, r2.cert_pem.len,
-                   "BEGIN CERTIFICATE", 17) != NULL);
+    REQUIRE(test_pem_cert_is(&r2.cert_pem, 1, ca_der->buffer,
+                             ca_der->length));
 
     WOLFSSL_CERT_MANAGER* cm = wolfSSL_CertManagerNew();
     REQUIRE(cm != NULL);
@@ -361,6 +363,7 @@ static int poll_path(WolfCertServer* s)
     REQUIRE(wolfSSL_CertManagerVerifyBuffer(cm, issued_der->buffer,
                                             (long)issued_der->length,
                                             WOLFSSL_FILETYPE_ASN1) == WOLFSSL_SUCCESS);
+    REQUIRE(test_first_has_csr_key(&r2.cert_pem, &csr));
     wc_FreeDer(&issued_der);
     wolfSSL_CertManagerFree(cm);
 

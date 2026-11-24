@@ -51,12 +51,13 @@ WOLFCERT_API int  wolfcert_client_fetch_meta(WolfCertClient* client,
 
 /* Generate a new key (honoring cfg->dev_id for CryptoCb offloading), build
  * a CSR from meta, and enroll. On success out_key owns the key and
- * out_cert_pem owns the issued certificate. A pending enrollment returns
- * WOLFCERT_ERR_PENDING. On any failure neither is handed out, except that a
- * key generated under a key_id stays in the backend and out_key still owns
- * it, so the caller can delete it there under wolfcert_key_id. Every call
- * generates a new key, so polling a pending request with that key takes
- * wolfcert_csr_build and wolfcert_est_simple_enroll. */
+ * out_cert_pem the certs, ordered as for WolfCertEstStatus SUCCESS (est.h).
+ * A pending enrollment returns WOLFCERT_ERR_PENDING. On any failure neither
+ * is handed out, except that a key generated under a key_id stays in the
+ * backend and out_key still owns it, so the caller can delete it there
+ * under wolfcert_key_id. Every call generates a new key, so polling a
+ * pending request with that key takes wolfcert_csr_build and
+ * wolfcert_est_simple_enroll. */
 WOLFCERT_API int  wolfcert_client_enroll(WolfCertClient* client,
                                          const WolfCertServerCfg* srv,
                                          const WolfCertKeyCfg* key_cfg,

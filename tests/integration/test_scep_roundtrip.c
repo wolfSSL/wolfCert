@@ -451,6 +451,100 @@ static int check_default_dev_id(const WolfCertServerCfg* cli,
 }
 #endif /* WOLF_CRYPTO_CB */
 
+/* A CertRep with the CA cert first still hands out the device cert first,
+ * and one without the device cert fails. */
+static int check_issued_first(WolfCertServer* s, const WolfCertServerCfg* cli,
+                              const WolfCertScepCaps* caps, WolfCertKey* dk,
+                              const WolfCertBuffer* csr,
+                              const uint8_t* ca_der_buf, size_t ca_der_len)
+{
+    WolfCertScepResult r = { 0 };
+    int rc;
+
+    wolfcert_server_set_issue_first(s, ca_der_buf, ca_der_len);
+    rc = wolfcert_scep_pkcs_req(cli, caps, ca_der_buf, ca_der_len,
+                                ca_der_buf, ca_der_len,
+                                dk, csr->data, csr->len, &r);
+    REQUIRE(rc == WOLFCERT_OK);
+    REQUIRE(r.status == WOLFCERT_SCEP_STATUS_SUCCESS);
+    REQUIRE(test_first_has_csr_key(&r.cert_pem, csr));
+    REQUIRE(test_pem_cert_is(&r.cert_pem, 1, ca_der_buf, ca_der_len));
+    wolfcert_scep_result_free(&r);
+
+    wolfcert_server_set_issue_fault(s, 1);
+    rc = wolfcert_scep_pkcs_req(cli, caps, ca_der_buf, ca_der_len,
+                                ca_der_buf, ca_der_len,
+                                dk, csr->data, csr->len, &r);
+    wolfcert_server_set_issue_fault(s, 0);
+    wolfcert_server_set_issue_first(s, NULL, 0);
+    REQUIRE(rc == WOLFCERT_ERR_PROTOCOL);
+    REQUIRE(r.status == WOLFCERT_SCEP_STATUS_UNSET);
+    REQUIRE(r.cert_pem.data == NULL);
+    wolfcert_scep_result_free(&r);
+    return 0;
+}
+
+/* A RenewalReq never takes the cert being renewed, its signer: the new cert
+ * comes first, and a CertRep holding only the old cert fails. */
+static int check_renewal_skips_old(WolfCertServer* s,
+                                   const WolfCertServerCfg* cli,
+                                   const WolfCertScepCaps* caps,
+                                   WolfCertKey* dk, const WolfCertBuffer* csr,
+                                   const uint8_t* ca_der_buf, size_t ca_der_len,
+                                   const uint8_t* old, size_t old_len)
+{
+    WolfCertScepResult r = { 0 };
+    int rc;
+
+    wolfcert_server_set_issue_first(s, old, old_len);
+    rc = wolfcert_scep_renewal_req(cli, caps, ca_der_buf, ca_der_len,
+                                   ca_der_buf, ca_der_len, old, old_len, dk,
+                                   csr->data, csr->len, &r);
+    REQUIRE(rc == WOLFCERT_OK);
+    REQUIRE(r.status == WOLFCERT_SCEP_STATUS_SUCCESS);
+    REQUIRE(test_first_has_csr_key(&r.cert_pem, csr));
+    REQUIRE(!test_pem_cert_is(&r.cert_pem, 0, old, old_len));
+    REQUIRE(test_pem_cert_is(&r.cert_pem, 1, old, old_len));
+    wolfcert_scep_result_free(&r);
+
+    wolfcert_server_set_issue_fault(s, 1);
+    rc = wolfcert_scep_renewal_req(cli, caps, ca_der_buf, ca_der_len,
+                                   ca_der_buf, ca_der_len, old, old_len, dk,
+                                   csr->data, csr->len, &r);
+    wolfcert_server_set_issue_fault(s, 0);
+    wolfcert_server_set_issue_first(s, NULL, 0);
+    REQUIRE(rc == WOLFCERT_ERR_PROTOCOL);
+    REQUIRE(r.cert_pem.data == NULL);
+    wolfcert_scep_result_free(&r);
+    return 0;
+}
+
+/* A RenewalReq whose CSR has no readable key fails without sending it. */
+static int check_unparseable_csr(const WolfCertScepCaps* caps, WolfCertKey* dk,
+                                 const uint8_t* ca_der_buf, size_t ca_der_len,
+                                 const uint8_t* old, size_t old_len)
+{
+    static const uint8_t not_csr[] = { 0x30, 0x03, 0x02, 0x01, 0x00 };
+    WolfCertScepResult r = { 0 };
+    uint16_t port = 0;
+    char url[128];
+    int fd = black_hole_listener(&port);
+    int rc;
+
+    REQUIRE(fd >= 0);
+    snprintf(url, sizeof(url), "http://127.0.0.1:%u/scep", port);
+    WolfCertServerCfg cli = { .protocol = WOLFCERT_PROTO_SCEP,
+                              .server_url = url, .timeout_ms = 2000 };
+    rc = wolfcert_scep_renewal_req(&cli, caps, ca_der_buf, ca_der_len,
+                                   ca_der_buf, ca_der_len, old, old_len, dk,
+                                   not_csr, sizeof(not_csr), &r);
+    close(fd);
+    REQUIRE(rc == WOLFCERT_ERR_PARSE);
+    REQUIRE(r.status == WOLFCERT_SCEP_STATUS_UNSET);
+    wolfcert_scep_result_free(&r);
+    return 0;
+}
+
 /* Two PKCSReqs of one key under txid_mode PUBKEY_HASH carry the same
  * transactionID, the upper-case hex SHA-256 of the CSR's SPKI. */
 static int check_pubkey_txid(const WolfCertServerCfg* cli,
@@ -2338,6 +2432,9 @@ int main(void)
                                             WOLFSSL_FILETYPE_ASN1) == WOLFSSL_SUCCESS);
     wolfSSL_CertManagerFree(cm);
 
+    REQUIRE(check_issued_first(s, &cli, &caps, dk, &csr, ca_der->buffer,
+                               ca_der->length) == 0);
+
     REQUIRE(check_get_fallback(&cli, &caps, &kcfg,
                                ca_der->buffer, ca_der->length) == WOLFCERT_OK);
 
@@ -2407,6 +2504,13 @@ int main(void)
     REQUIRE(check_content_cipher(&cli, &caps, &kcfg, ca_der->buffer,
                                  ca_der->length, WOLFCERT_SCEP_CIPHER_AES128)
             == WOLFCERT_OK);
+
+    REQUIRE(check_renewal_skips_old(s, &cli, &caps, dk, &csr, ca_der->buffer,
+                                    ca_der->length, issued_der->buffer,
+                                    issued_der->length) == 0);
+    REQUIRE(check_unparseable_csr(&caps, dk, ca_der->buffer, ca_der->length,
+                                  issued_der->buffer,
+                                  issued_der->length) == 0);
 
     REQUIRE(check_renewal_msg_type(&caps, ca_der->buffer, ca_der->length,
                                    issued_der->buffer, issued_der->length, dk,

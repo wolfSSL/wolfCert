@@ -536,13 +536,35 @@ WOLFCERT_TEST_VIS int wolfcert_buffer_is_der(const uint8_t* buf, size_t len)
     return (buf != NULL && len > 0 && buf[0] == 0x30) ? 1 : 0;
 }
 
-int wolfcert_der_is_single(const uint8_t* in, size_t in_len)
+int wolfcert_der_next(const uint8_t* in, word32* idx, word32 end, byte tag,
+                      int* len)
 {
-    word32 idx = 1;
+    *len = 0;
+    if (*idx >= end || end - *idx < 2 || in[*idx] != tag ||
+            in[*idx + 1] == 0x80)
+        return -1;
+    ++*idx;
+    return GetLength(in, idx, len, end) < 0 ? -1 : 0;
+}
+
+size_t wolfcert_der_seq_len(const uint8_t* in, size_t in_len)
+{
+    word32 idx = 0;
     int len = 0;
 
-    return (size_t)(word32)in_len == in_len &&
-           GetLength(in, &idx, &len, (word32)in_len) >= 0 &&
+    if (in == NULL || (size_t)(word32)in_len != in_len ||
+            wolfcert_der_next(in, &idx, (word32)in_len, 0x30, &len) != 0)
+        return 0;
+    return (size_t)idx + (size_t)len;
+}
+
+int wolfcert_der_is_single(const uint8_t* in, size_t in_len)
+{
+    word32 idx = 0;
+    int len = 0;
+
+    return in != NULL && in_len > 0 && (size_t)(word32)in_len == in_len &&
+           wolfcert_der_next(in, &idx, (word32)in_len, in[0], &len) == 0 &&
            (size_t)idx + (size_t)len == in_len;
 }
 

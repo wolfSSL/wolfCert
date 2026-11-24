@@ -17,7 +17,7 @@
  * along with wolfCert.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-/* Built-in POSIX transport: connect timeout and SIGPIPE suppression. */
+/* Built-in POSIX transport: connect timeouts, signals, SIGPIPE suppression. */
 
 #define _POSIX_C_SOURCE 200809L
 #define _DEFAULT_SOURCE
@@ -34,6 +34,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 #define REQUIRE(cond) \
@@ -121,6 +122,72 @@ static int test_sock_nosigpipe_suppresses(void)
 }
 #endif
 
+static void note_alarm(int sig)
+{
+    (void)sig;
+}
+
+/* SIGALRM every 20 ms without SA_RESTART, so blocking calls see EINTR. */
+static int alarms_start(void)
+{
+    struct sigaction sa;
+    struct itimerval it;
+    sigset_t alrm;
+
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = note_alarm;
+    sigemptyset(&sa.sa_mask);
+    sigemptyset(&alrm);
+    sigaddset(&alrm, SIGALRM);
+    REQUIRE(sigaction(SIGALRM, &sa, NULL) == 0);
+    REQUIRE(sigprocmask(SIG_UNBLOCK, &alrm, NULL) == 0);
+
+    memset(&it, 0, sizeof(it));
+    it.it_interval.tv_usec = 20000;
+    it.it_value.tv_usec    = 20000;
+    REQUIRE(setitimer(ITIMER_REAL, &it, NULL) == 0);
+    return 0;
+}
+
+static int alarms_stop(void)
+{
+    struct itimerval off;
+
+    memset(&off, 0, sizeof(off));
+    REQUIRE(setitimer(ITIMER_REAL, &off, NULL) == 0);
+    return 0;
+}
+
+/* Signals during a timed connect must not stretch or cut short its deadline.
+ * Needs a host where 10.255.255.1 times out; baseline_ms is that timeout. */
+static int test_connect_eintr_keeps_deadline(int64_t baseline_ms)
+{
+    int64_t t0;
+    int64_t elapsed;
+    int fd;
+
+    if (baseline_ms < 240) {
+        printf("skip: 10.255.255.1 is refused here, not blackholed\n");
+        return 0;
+    }
+
+    if (alarms_start())
+        return 1;
+    t0 = wolfcert_mono_ms();
+    fd = wolfcert_posix_connect("10.255.255.1", 9, 300, NULL);
+    elapsed = wolfcert_mono_ms() - t0;
+    if (alarms_stop())
+        return 1;
+    if (fd >= 0)
+        close(fd);
+
+    REQUIRE(fd < 0);
+    REQUIRE(elapsed >= 250);
+    REQUIRE(elapsed < 3000);
+    printf("connect under signals returned in %ldms\n", (long)elapsed);
+    return 0;
+}
+
 int main(void)
 {
     /* Connect with a 1000 ms timeout to a loopback listener succeeds. */
@@ -140,6 +207,9 @@ int main(void)
     int fd = wolfcert_posix_connect("127.0.0.1", port, 1000, NULL);
     REQUIRE(fd >= 0);
     close(fd);
+    fd = wolfcert_posix_connect("127.0.0.1", port, 0, NULL);
+    REQUIRE(fd >= 0);
+    close(fd);
     close(ls);
 
     /* An unroutable address must fail well under the OS default (~75s). */
@@ -148,6 +218,9 @@ int main(void)
     int64_t elapsed = wolfcert_mono_ms() - t0;
     REQUIRE(fd2 < 0);
     REQUIRE(elapsed < 3000);
+
+    if (test_connect_eintr_keeps_deadline(elapsed))
+        return 1;
 
     if (test_no_sigpipe_on_dead_peer())
         return 1;

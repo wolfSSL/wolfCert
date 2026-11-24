@@ -174,7 +174,8 @@ wolfcert_cleanup();
 - **Pending approval:** the enroll calls report PENDING in their result's
   status; poll again later (EST: re-POST after `retry_after_sec`; SCEP:
   `wolfcert_scep_get_cert_initial`). `wolfcert_client_enroll` and
-  `wolfcert_client_reenroll` return `WOLFCERT_ERR_PENDING`.
+  `wolfcert_client_reenroll` return `WOLFCERT_ERR_PENDING` and drop the
+  CSR, so a CA that parks requests needs the step-by-step calls.
 - **Renewal:** `wolfcert_client_reenroll` (EST, authenticates with the
   certificate being renewed) or `wolfcert_scep_renewal_req`.
 - **Hardware keys:** `examples/enroll_cryptocb.c`, and `examples/enroll_tpm.c`

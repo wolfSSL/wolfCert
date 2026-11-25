@@ -261,7 +261,7 @@ static int cert_spki(const uint8_t* cert, size_t cert_len, void* heap,
 {
     WolfCertBuffer pem_der = { 0 };
     const uint8_t* der = cert;
-    size_t         der_len = cert_len;
+    size_t         der_len = wolfcert_der_seq_len(cert, cert_len);
     uint8_t*       spki = NULL;
     word32         spki_len = 0;
     int            rc = WOLFCERT_OK;

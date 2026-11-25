@@ -36,8 +36,9 @@ extern "C" {
 WOLFCERT_API int wolfcert_key_generate(const WolfCertKeyCfg* cfg, WolfCertKey** out_key);
 
 /* Reference a key a CryptoCb device holds under cfg->key_id, its public half
- * from `cert`, PEM or DER: a curve or RSA size keygen makes, matching a
- * non-zero cfg->param. Nothing checks that `cert` belongs to that key.
+ * from `cert`, a PEM or DER certificate or a chain led by it: a curve or RSA
+ * size keygen makes, matching a non-zero cfg->param. Nothing checks that
+ * `cert` belongs to that key.
  * *out_key is NULL after a failure. */
 WOLFCERT_API int wolfcert_key_from_id(const WolfCertKeyCfg* cfg,
                                       const uint8_t* cert, size_t cert_len,

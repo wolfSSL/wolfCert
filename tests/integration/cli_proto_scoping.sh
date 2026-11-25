@@ -491,9 +491,12 @@ else
 
         { printf ' 0 s:CN=ok\n'; cat "$tmp/renewed.crt"; } \
             >"$tmp/renewed-pre.crt"
+        { printf '0 s:CN=ok\n'; cat "$tmp/renewed.crt"; } \
+            >"$tmp/renewed-zero.crt"
         { printf '\n '; cat "$tmp/renewed.der"; } >"$tmp/renewed-ws.der"
         { cat "$tmp/renewed.der"; printf '\n'; } >"$tmp/renewed-nl.der"
-        for f in renewed-pre.crt renewed-ws.der renewed-nl.der; do
+        for f in renewed-pre.crt renewed-zero.crt renewed-ws.der \
+                renewed-nl.der; do
             if "$CLI" reenroll --proto scep --url "$PIN_URL" \
                     --ca-fingerprint "$fp" --cert "$tmp/$f" \
                     --key "$tmp/ok.key" --out-cert "$tmp/$f.out" \
@@ -533,7 +536,17 @@ else
             skip_group "EST reenroll --cert forms (no mTLS server would start)"
             cat "$tmp/tls-enroll.log" "$tmp/est-server.log" 2>/dev/null
         else
-            for f in renewed.crt renewed-pre.crt renewed-ws.der renewed-nl.der; do
+            # A chain after the certificate goes out as the TLS client chain;
+            # a DER leaf followed by PEM renews with the DER leaf alone.
+            cat "$tmp/renewed.crt" "$tmp/pin-ca.pem" >"$tmp/renewed-chain.crt"
+            cat "$tmp/renewed.der" "$tmp/pin-ca.pem" >"$tmp/renewed-mixed.der"
+            { cat "$tmp/renewed.der"
+              awk '/^-----BEGIN/ { f = 1; next } /^-----END/ { exit } f' \
+                  "$tmp/pin-ca.pem" | base64 --decode; } \
+                >"$tmp/renewed-chain.der"
+            for f in renewed.crt renewed-pre.crt renewed-zero.crt \
+                    renewed-ws.der renewed-nl.der renewed-chain.crt \
+                    renewed-chain.der renewed-mixed.der; do
                 if "$CLI" reenroll --proto est --url "$est_url" \
                         --trust "$tmp/pin-ca.pem" --cert "$tmp/$f" \
                         --key "$tmp/ok.key" --out-cert "$tmp/est-$f.out" \

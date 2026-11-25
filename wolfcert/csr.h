@@ -33,8 +33,9 @@ WOLFCERT_API int wolfcert_csr_build(const WolfCertKey*      key,
                                     const WolfCertCertMeta* meta,
                                     WolfCertBuffer*         out_der);
 
-/* wolfcert_csr_build() for a renewal: with renew_cert (PEM or DER) set, the
- * CSR carries that certificate's Subject and SAN. Returns WOLFCERT_ERR_BAD_ARG
+/* wolfcert_csr_build() for a renewal: with renew_cert (a PEM or DER
+ * certificate, or a chain led by it) set, the CSR carries that certificate's
+ * Subject and SAN. Returns WOLFCERT_ERR_BAD_ARG
  * when meta also sets a subject or SAN, WOLFCERT_ERR_PARSE when renew_cert is
  * not a certificate and WOLFCERT_ERR_UNSUPPORTED when its Subject or SAN does
  * not fit a CSR; otherwise as wolfcert_csr_build(). */

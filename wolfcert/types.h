@@ -244,9 +244,12 @@ typedef struct {
     int              timeout_ms;     /* per-request timeout; 0 = default */
 
     /* Optional mutual-TLS client identity (both set), PEM or DER. For EST, a
-     * session's identity is the cert its /simplereenroll renews. An ML-DSA
-     * identity needs TLS 1.3: without it in wolfSSL, https:// calls return
-     * WOLFCERT_ERR_UNSUPPORTED before connecting. */
+     * session's identity is the cert its /simplereenroll renews. client_cert
+     * is the leaf, then up to wolfSSL's MAX_CHAIN_DEPTH intermediates, laid
+     * out as trust_anchors except that filler between DER certificates fails
+     * with WOLFCERT_ERR_TLS. An ML-DSA identity needs TLS 1.3: without it in
+     * wolfSSL, https:// calls return WOLFCERT_ERR_UNSUPPORTED before
+     * connecting. */
     const uint8_t*   client_cert;
     size_t           client_cert_len;
     const uint8_t*   client_key;

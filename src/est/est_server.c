@@ -924,10 +924,8 @@ static int handler_enroll(WolfCertServer* s, int fd, const EstRequest* req,
         return rc;
     }
 
-    const uint8_t* certs[1] = { issued };
-    size_t         clen[1]  = { issued_len };
     WolfCertBuffer p7 = { 0 };
-    rc = wolfcert_pkcs7_build_certs_only(certs, clen, 1, &p7, s->heap);
+    rc = wolfcert_server_issued_p7(s, issued, issued_len, &p7);
 
     WOLFCERT_XFREE(issued, s->heap);
     if (rc != WOLFCERT_OK) {

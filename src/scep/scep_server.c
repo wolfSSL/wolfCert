@@ -578,11 +578,9 @@ static int send_cert_rep(WolfCertServer* s, int fd,
     WolfCertBuffer resp_env = { 0 };
 
     if (strcmp(pki_status, "0") == 0) {
-        const uint8_t* cs[1] = { issued_cert };
-        size_t         cl[1] = { issued_cert_len };
         WolfCertBuffer p7 = { 0 };
 
-        rc = wolfcert_pkcs7_build_certs_only(cs, cl, 1, &p7, s->heap);
+        rc = wolfcert_server_issued_p7(s, issued_cert, issued_cert_len, &p7);
         if (rc != WOLFCERT_OK) {
             send_text(s, fd, 500, "Server Error", "text/plain", "");
             return rc;

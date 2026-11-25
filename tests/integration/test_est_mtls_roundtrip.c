@@ -193,28 +193,29 @@ static int test_reenroll_rejects_non_csr(const char* url,
                                          const uint8_t* cli_cert, size_t cli_cert_len,
                                          const uint8_t* cli_key, size_t cli_key_len)
 {
-    static const uint8_t not_csr[] = { 0x30, 0x03, 0x02, 0x01, 0x00 };
-    WolfCertServerCfg cli = {
-        .protocol          = WOLFCERT_PROTO_EST,
-        .server_url        = url,
-        .trust_anchors     = tls_cert,
-        .trust_anchors_len = tls_cert_len,
-        .verify_server     = 1,
-    };
-    WolfCertKey* cur_key = NULL;
-    WolfCertEstResult issued = { 0 };
+    static const char req[] =
+        "POST /.well-known/est/simplereenroll HTTP/1.1\r\n"
+        "Host: 127.0.0.1\r\nContent-Type: application/pkcs10\r\n"
+        "Content-Transfer-Encoding: base64\r\nContent-Length: 8\r\n"
+        "Connection: close\r\n\r\nMAMCAQA=";
+    TestTlsConn c;
+    unsigned port = 0;
+    char resp[64] = { 0 };
     int rc;
 
-    REQUIRE(wolfcert_key_from_pem(cli_key, cli_key_len, NULL, &cur_key) == WOLFCERT_OK);
-    rc = wolfcert_est_simple_reenroll(&cli, cli_cert, cli_cert_len, cur_key,
-                                      not_csr, sizeof(not_csr), &issued);
-    wolfcert_key_free(cur_key);
-    if (rc != WOLFCERT_ERR_HTTP)
-        fprintf(stderr, "non-CSR reenroll rc=%d (%s)\n", rc,
-                wolfcert_last_error_message());
-    REQUIRE(rc == WOLFCERT_ERR_HTTP);
-    REQUIRE(issued.cert_pem.data == NULL);
-    REQUIRE(strstr(wolfcert_last_error_message(), "HTTP 400") != NULL);
+    REQUIRE(sscanf(url, "https://127.0.0.1:%u", &port) == 1);
+    REQUIRE(test_tls_setup(&c, (uint16_t)port, tls_cert, tls_cert_len) == 0);
+    REQUIRE(wolfSSL_use_certificate_buffer(c.ssl, cli_cert, (long)cli_cert_len,
+                                           WOLFSSL_FILETYPE_PEM) ==
+            WOLFSSL_SUCCESS);
+    REQUIRE(wolfSSL_use_PrivateKey_buffer(c.ssl, cli_key, (long)cli_key_len,
+                                          WOLFSSL_FILETYPE_PEM) ==
+            WOLFSSL_SUCCESS);
+    REQUIRE(wolfSSL_connect(c.ssl) == WOLFSSL_SUCCESS);
+    REQUIRE(test_tls_write(&c, req, sizeof(req) - 1) == 0);
+    rc = test_tls_read(&c, resp, sizeof(resp) - 1);
+    test_tls_close(&c);
+    REQUIRE(rc >= 12 && strncmp(resp + 9, "400", 3) == 0);
     return 0;
 }
 

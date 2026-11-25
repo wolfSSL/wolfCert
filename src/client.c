@@ -207,7 +207,7 @@ int wolfcert_client_enroll(WolfCertClient* client, const WolfCertServerCfg* srv,
     rc = WOLFCERT_ERR_UNSUPPORTED;
 #endif
 
-    wolfcert_buffer_free(&csr);
+    wolfcert_buffer_free_secure(&csr);
     return hand_back(key, rc, out_key);
 }
 
@@ -255,6 +255,6 @@ int wolfcert_client_reenroll(WolfCertClient* client, const WolfCertServerCfg* sr
     rc = WOLFCERT_ERR_UNSUPPORTED;
 #endif
 
-    wolfcert_buffer_free(&csr);
+    wolfcert_buffer_free_secure(&csr);
     return hand_back(nk, rc, out_key);
 }

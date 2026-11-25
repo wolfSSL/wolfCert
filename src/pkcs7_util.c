@@ -26,8 +26,10 @@
 #include <wolfcert/errors.h>
 
 #include <wolfssl/wolfcrypt/pkcs7.h>
+#include <wolfssl/wolfcrypt/asn.h>
 #include <wolfssl/wolfcrypt/asn_public.h>
 #include <wolfssl/wolfcrypt/error-crypt.h>
+#include <wolfssl/wolfcrypt/sha256.h>
 
 #include <stdint.h>
 #include <string.h>
@@ -77,9 +79,126 @@ static int append_cert(WolfCertBuffer* acc, size_t* cap, const uint8_t* der,
     return rc;
 }
 
-static int pkcs7_certs_extract(const uint8_t* p7_der, size_t p7_der_len,
-                               WolfCertBuffer* out, void* heap, int as_pem)
+static int sha256(const uint8_t* in, size_t len,
+                  uint8_t hash[WC_SHA256_DIGEST_SIZE], void* heap)
 {
+    int rc = wc_Sha256Hash_ex(in, (word32)len, hash, heap,
+                              wolfcert_default_dev_id());
+
+    return rc == 0 ? WOLFCERT_OK : WOLFCERT_ERR_WC(rc, "pkcs7", "Sha256Hash");
+}
+
+/* Offset and length of the SubjectPublicKeyInfo in a DER cert or CSR. */
+static int spki_find(const uint8_t* der, word32 der_len, int is_csr,
+                     word32* out_off, word32* out_len)
+{
+    /* Tags before the SPKI in a TBSCertificate or CertificationRequestInfo. */
+    const char* skip = is_csr ? "\x02\x30" : "\x02\x30\x30\x30\x30";
+    word32 idx = 0;
+    word32 end = der_len;
+    int len = 0;
+    int rc = 0;
+
+    for (int i = 0; rc == 0 && i < 2; ++i) {
+        rc = wolfcert_der_next(der, &idx, end, 0x30, &len);
+        end = idx + (word32)len;
+    }
+    if (rc == 0 && !is_csr && idx < end && der[idx] == 0xA0) {
+        rc = wolfcert_der_next(der, &idx, end, 0xA0, &len);
+        idx += (word32)len;
+    }
+    for (; rc == 0 && *skip != '\0'; ++skip) {
+        rc = wolfcert_der_next(der, &idx, end, (uint8_t)*skip, &len);
+        idx += (word32)len;
+    }
+    *out_off = idx;
+    if (rc == 0)
+        rc = wolfcert_der_next(der, &idx, end, 0x30, &len);
+    *out_len = idx + (word32)len - *out_off;
+    return rc;
+}
+
+WOLFCERT_TEST_VIS int wolfcert_spki_hash(const uint8_t* der, size_t der_len,
+    int is_csr, uint8_t hash[WC_SHA256_DIGEST_SIZE], void* heap)
+{
+    word32 off = 0;
+    word32 n = 0;
+
+    if (der == NULL || hash == NULL || (size_t)(word32)der_len != der_len)
+        return WOLFCERT_ERR_BAD_ARG;
+
+    if (spki_find(der, (word32)der_len, is_csr, &off, &n) != 0)
+        return WOLFCERT_ERR(WOLFCERT_ERR_PARSE, "pkcs7",
+                            "no public key in the %s",
+                            is_csr ? "CSR" : "certificate");
+
+    return sha256(der + off, n, hash, heap);
+}
+
+int wolfcert_cert_der_hash(const uint8_t* cert, size_t cert_len,
+                           uint8_t hash[WC_SHA256_DIGEST_SIZE], void* heap)
+{
+    WolfCertBuffer der = { 0 };
+    int rc;
+
+    if (cert == NULL || cert_len == 0)
+        return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "pkcs7", "no certificate");
+
+    if (wolfcert_buffer_is_der(cert, cert_len)) {
+        size_t n = wolfcert_der_seq_len(cert, cert_len);
+        if (n == 0)
+            return WOLFCERT_ERR(WOLFCERT_ERR_PARSE, "pkcs7",
+                                "certificate is not a DER SEQUENCE");
+        return sha256(cert, n, hash, heap);
+    }
+
+    rc = wolfcert_pem_cert_to_der(cert, cert_len, &der, heap);
+    if (rc == WOLFCERT_OK)
+        rc = sha256(der.data, der.len, hash, heap);
+    wolfcert_buffer_free(&der);
+    return rc;
+}
+
+/* Sets *out_idx to the first cert in p7->cert[] holding the key, passing over
+ * certs the walk cannot read; WOLFCERT_ERR_PROTOCOL for none. */
+static int find_issued_cert(const PKCS7* p7, const uint8_t* key_hash,
+                            const uint8_t* avoid_hash, int* out_idx,
+                            void* heap)
+{
+    uint8_t hash[WC_SHA256_DIGEST_SIZE];
+    word32  off = 0;
+    word32  n = 0;
+
+    *out_idx = -1;
+    for (int i = 0; *out_idx < 0 && i < MAX_PKCS7_CERTS; ++i) {
+        if (p7->cert[i] == NULL || p7->certSz[i] == 0)
+            continue;
+
+        if (avoid_hash != NULL &&
+                (sha256(p7->cert[i], p7->certSz[i], hash, heap) !=
+                     WOLFCERT_OK ||
+                 memcmp(hash, avoid_hash, sizeof(hash)) == 0))
+            continue;
+
+        if (spki_find(p7->cert[i], p7->certSz[i], 0, &off, &n) == 0 &&
+                sha256(p7->cert[i] + off, n, hash, heap) == WOLFCERT_OK &&
+                memcmp(hash, key_hash, sizeof(hash)) == 0)
+            *out_idx = i;
+    }
+
+    if (*out_idx < 0)
+        return WOLFCERT_ERR(WOLFCERT_ERR_PROTOCOL, "pkcs7",
+                            "no certificate in the reply holds the CSR's key");
+    return WOLFCERT_OK;
+}
+
+static int pkcs7_certs_extract(const uint8_t* p7_der, size_t p7_der_len,
+                               const uint8_t* key_hash,
+                               const uint8_t* avoid_hash, WolfCertBuffer* out,
+                               void* heap, int as_pem)
+{
+    int first = -1;
+
     if (p7_der == NULL || p7_der_len == 0 || out == NULL)
         return WOLFCERT_ERR_BAD_ARG;
 
@@ -93,25 +212,30 @@ static int pkcs7_certs_extract(const uint8_t* p7_der, size_t p7_der_len,
         return WOLFCERT_ERR_WC(rc, "pkcs7", "VerifySignedData");
     }
 
+    rc = WOLFCERT_OK;
+    if (key_hash != NULL)
+        rc = find_issued_cert(p7, key_hash, avoid_hash, &first, heap);
+
     WolfCertBuffer acc = { .heap = heap };
     size_t cap = 0;
 
-    for (int i = 0; i < MAX_PKCS7_CERTS; ++i) {
-        if (p7->cert[i] == NULL || p7->certSz[i] == 0)
+    if (rc == WOLFCERT_OK && first >= 0)
+        rc = append_cert(&acc, &cap, p7->cert[first], p7->certSz[first],
+                         as_pem, heap);
+
+    for (int i = 0; rc == WOLFCERT_OK && i < MAX_PKCS7_CERTS; ++i) {
+        if (i == first || p7->cert[i] == NULL || p7->certSz[i] == 0)
             continue;
 
         rc = append_cert(&acc, &cap, p7->cert[i], p7->certSz[i], as_pem, heap);
-        if (rc != WOLFCERT_OK) {
-            WOLFCERT_XFREE(acc.data, heap);
-            wc_PKCS7_Free(p7);
-            return rc;
-        }
     }
 
     wc_PKCS7_Free(p7);
-    if (acc.len == 0) {
+    if (rc == WOLFCERT_OK && acc.len == 0)
+        rc = WOLFCERT_ERR_NOT_FOUND;
+    if (rc != WOLFCERT_OK) {
         WOLFCERT_XFREE(acc.data, heap);
-        return WOLFCERT_ERR_NOT_FOUND;
+        return rc;
     }
 
     *out = acc;
@@ -121,13 +245,26 @@ static int pkcs7_certs_extract(const uint8_t* p7_der, size_t p7_der_len,
 WOLFCERT_TEST_VIS int wolfcert_pkcs7_certs_to_pem(const uint8_t* p7_der,
     size_t p7_der_len, WolfCertBuffer* out_pem, void* heap)
 {
-    return pkcs7_certs_extract(p7_der, p7_der_len, out_pem, heap, 1);
+    return pkcs7_certs_extract(p7_der, p7_der_len, NULL, NULL, out_pem,
+                               heap, 1);
 }
 
 WOLFCERT_TEST_VIS int wolfcert_pkcs7_certs_to_der(const uint8_t* p7_der,
     size_t p7_der_len, WolfCertBuffer* out_der, void* heap)
 {
-    return pkcs7_certs_extract(p7_der, p7_der_len, out_der, heap, 0);
+    return pkcs7_certs_extract(p7_der, p7_der_len, NULL, NULL, out_der,
+                               heap, 0);
+}
+
+WOLFCERT_TEST_VIS int wolfcert_pkcs7_issued_to_pem(const uint8_t* p7_der,
+    size_t p7_der_len, const uint8_t key_hash[WC_SHA256_DIGEST_SIZE],
+    const uint8_t* avoid_hash, WolfCertBuffer* out_pem, void* heap)
+{
+    if (key_hash == NULL)
+        return WOLFCERT_ERR_BAD_ARG;
+
+    return pkcs7_certs_extract(p7_der, p7_der_len, key_hash, avoid_hash,
+                               out_pem, heap, 1);
 }
 
 static int validate_certs(const uint8_t* const* certs, const size_t* lens, size_t count)

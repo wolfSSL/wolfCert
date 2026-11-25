@@ -111,7 +111,11 @@ typedef enum {
 
 typedef struct {
     WolfCertScepStatus status;
-    /* cert_pem is owned and populated iff status == SUCCESS. */
+    /* Owned and populated iff status == SUCCESS: the cert whose
+     * SubjectPublicKeyInfo equals the CSR's byte for byte first, then any
+     * others as received; GetCert keeps the CA's order. The request's signer
+     * never counts as that cert, and a reply without one is
+     * WOLFCERT_ERR_PROTOCOL. */
     WolfCertBuffer     cert_pem;
     /* transaction_id (PrintableString) is owned and populated whenever the
      * server returns a CertRep; callers echo it back via get_cert_initial. */

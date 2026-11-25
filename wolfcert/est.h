@@ -108,13 +108,19 @@ WOLFCERT_API int wolfcert_csr_attrs_build(const WolfCertCsrAttrItem* items,
 
 /* Outcome of the enroll calls (RFC 7030 section 4.2), matching the
  * WolfCertScepStatus values:
- *   SUCCESS - returns WOLFCERT_OK; cert_pem holds the issued cert.
+ *   SUCCESS - returns WOLFCERT_OK; cert_pem starts with the cert whose
+ *             SubjectPublicKeyInfo equals the CSR's byte for byte, then any
+ *             others as received. The TLS client cert never counts as that
+ *             cert.
  *   PENDING - returns WOLFCERT_OK; cert_pem is empty and the caller re-POSTs
  *             the identical request after retry_after_sec (section 4.2.3).
  *   FAILURE - a reply came back but cannot be used: an HTTP error status
- *             (WOLFCERT_ERR_AUTH for 401/403, else WOLFCERT_ERR_HTTP) or a
- *             body that is empty or does not parse.
- *   UNSET   - no reply was received; the int return code says why. */
+ *             (WOLFCERT_ERR_AUTH for 401/403, else WOLFCERT_ERR_HTTP), a
+ *             body that is empty or does not parse, or no cert holding the
+ *             CSR's key (WOLFCERT_ERR_PROTOCOL).
+ *   UNSET   - no reply was received; the int return code says why, e.g.
+ *             WOLFCERT_ERR_PARSE for a CSR whose key cannot be read, which
+ *             is not sent. */
 typedef enum {
     WOLFCERT_EST_STATUS_UNSET   = 0,
     WOLFCERT_EST_STATUS_SUCCESS = 1,

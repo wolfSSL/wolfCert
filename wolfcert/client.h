@@ -66,7 +66,8 @@ WOLFCERT_API int  wolfcert_client_enroll(WolfCertClient* client,
                                          WolfCertBuffer* out_cert_pem);
 
 /* Re-enroll using an existing cert/key; a NULL new_key_cfg reuses the key.
- * The CSR copies current_cert's Subject and SAN: WOLFCERT_ERR_BAD_ARG if meta
+ * current_cert is laid out as WolfCertServerCfg.client_cert, and the CSR
+ * copies its leaf's Subject and SAN: WOLFCERT_ERR_BAD_ARG if meta
  * sets them, _PARSE for a bad cert, _UNSUPPORTED if one cannot be carried.
  * A pending renewal returns WOLFCERT_ERR_PENDING. On failure a new key with a
  * key_id stays in the backend and in out_key, as for enroll. A CA that parks

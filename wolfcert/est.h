@@ -150,7 +150,8 @@ WOLFCERT_API int wolfcert_est_simple_enroll(const WolfCertServerCfg* srv,
                                             WolfCertEstResult* out);
 
 /* POST /.well-known/est/simplereenroll. Uses the caller's current cert/key
- * as the TLS client credential. */
+ * as the TLS client credential; current_cert is laid out as
+ * WolfCertServerCfg.client_cert. */
 WOLFCERT_API int wolfcert_est_simple_reenroll(const WolfCertServerCfg* srv,
                                               const uint8_t* current_cert, size_t current_cert_len,
                                               const WolfCertKey* current_key,

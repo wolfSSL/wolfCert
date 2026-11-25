@@ -963,6 +963,87 @@ static int buf_filetype(const uint8_t* buf, size_t len)
                                             : WOLFSSL_FILETYPE_PEM;
 }
 
+static int load_der_anchors(WOLFSSL_CTX* ctx, const uint8_t* buf, size_t len)
+{
+    size_t off = 0;
+    const uint8_t* cert = NULL;
+    size_t cert_len = 0;
+    int loaded = 0;
+    int refused = 0;
+    int rc;
+
+    while ((rc = wolfcert_der_chain_next(buf, len, &off, &cert,
+                                         &cert_len)) == 1 &&
+            wolfcert_der_is_cert(cert, cert_len)) {
+        rc = wolfSSL_CTX_load_verify_buffer(ctx, cert, (long)cert_len,
+                                            WOLFSSL_FILETYPE_ASN1);
+        if (rc == MEMORY_E)
+            return WOLFCERT_ERR_RC_WC(WOLFCERT_ERR_MEMORY, rc, "http",
+                                      "trust_anchors: out of memory");
+        if (rc == WOLFSSL_SUCCESS)
+            ++loaded;
+        else
+            refused = rc < 0 ? rc : WOLFSSL_FATAL_ERROR;
+    }
+
+    if (rc == WOLFCERT_ERR_BAD_ARG)
+        return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "http",
+                            "trust_anchors: too large");
+    if (cert == NULL)
+        return WOLFCERT_ERR(WOLFCERT_ERR_TLS, "http",
+                            "trust_anchors: malformed DER");
+    if (loaded == 0 && refused < 0)
+        return WOLFCERT_ERR_RC_WC(WOLFCERT_ERR_TLS, refused, "http",
+                                  "trust_anchors: no certificate wolfSSL "
+                                  "accepts");
+    if (loaded == 0)
+        return WOLFCERT_ERR(WOLFCERT_ERR_TLS, "http",
+                            "trust_anchors: no certificate");
+    return WOLFCERT_OK;
+}
+
+static int use_client_chain(WOLFSSL_CTX* ctx, const uint8_t* buf, size_t len)
+{
+    size_t off = 0;
+    const uint8_t* cert = NULL;
+    size_t cert_len = 0;
+    int format = buf_filetype(buf, len);
+    int rc;
+
+    if (format == WOLFSSL_FILETYPE_ASN1) {
+        size_t end = 0;
+
+        while ((rc = wolfcert_der_chain_next(buf, len, &off, &cert,
+                                             &cert_len)) == 1 &&
+                (cert == buf || wolfcert_der_is_cert(cert, cert_len))) {
+            if (cert != buf + end)
+                return WOLFCERT_ERR(WOLFCERT_ERR_TLS, "http",
+                                    "client_cert: filler between "
+                                    "certificates at byte %zu", end);
+            end = off;
+        }
+        if (rc == WOLFCERT_ERR_BAD_ARG)
+            return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "http",
+                                "client_cert: too large");
+        if (end == 0)
+            return WOLFCERT_ERR(WOLFCERT_ERR_TLS, "http",
+                                "client_cert: malformed DER");
+        len = end;
+    }
+
+    rc = wolfSSL_CTX_use_certificate_chain_buffer_format(ctx, buf, (long)len,
+                                                         format);
+    if (rc == MAX_CHAIN_ERROR)
+        return WOLFCERT_ERR_RC_WC(WOLFCERT_ERR_TLS, rc, "http",
+                                  "client_cert: chain longer than wolfSSL's "
+                                  "MAX_CHAIN_DEPTH");
+    if (rc != WOLFSSL_SUCCESS)
+        return WOLFCERT_ERR_RC_WC(rc == MEMORY_E ? WOLFCERT_ERR_MEMORY
+                                  : WOLFCERT_ERR_TLS, rc, "http",
+                                  "loading client_cert failed");
+    return WOLFCERT_OK;
+}
+
 static int check_client_key(const uint8_t* cert, size_t cert_len,
                             const uint8_t* key, const WolfCertKey* key_obj)
 {
@@ -983,16 +1064,17 @@ static int check_client_alg(const WolfCertHttpSessionCfg* cfg, void* heap)
 {
     WolfCertBuffer pem_der = { 0 };
     const uint8_t* der = cfg->client_cert;
-    size_t der_len = cfg->client_cert_len;
+    size_t len = cfg->client_cert_len;
+    size_t der_len = wolfcert_der_seq_len(der, len);
     DecodedCert* dc;
     int wrc;
     int rc;
 
-    if (der == NULL || der_len == 0 || (size_t)(word32)der_len != der_len ||
+    if (der == NULL || len == 0 || (size_t)(word32)len != len ||
             (cfg->client_key == NULL && cfg->client_key_obj == NULL))
         return WOLFCERT_OK;
-    if (!wolfcert_buffer_is_der(der, der_len)) {
-        rc = wolfcert_pem_cert_to_der(der, der_len, &pem_der, heap);
+    if (!wolfcert_buffer_is_der(der, len)) {
+        rc = wolfcert_pem_cert_to_der(der, len, &pem_der, heap);
         if (rc != WOLFCERT_OK)
             return rc == WOLFCERT_ERR_MEMORY ? rc : WOLFCERT_OK;
         der = pem_der.data;
@@ -1102,13 +1184,19 @@ static int setup_tls_ex(WolfCertConn* c, const TlsDials* dials,
 #endif
 
     if (dials->trust_anchors != NULL && dials->trust_anchors_len > 0) {
-        int rc = wolfSSL_CTX_load_verify_buffer(ctx, dials->trust_anchors,
-                    (long)dials->trust_anchors_len,
-                    buf_filetype(dials->trust_anchors, dials->trust_anchors_len));
+        int rc = WOLFCERT_OK;
 
-        if (rc != WOLFSSL_SUCCESS) {
+        if (wolfcert_buffer_is_der(dials->trust_anchors,
+                                   dials->trust_anchors_len))
+            rc = load_der_anchors(ctx, dials->trust_anchors,
+                                  dials->trust_anchors_len);
+        else if (wolfSSL_CTX_load_verify_buffer(ctx, dials->trust_anchors,
+                     (long)dials->trust_anchors_len, WOLFSSL_FILETYPE_PEM) !=
+                 WOLFSSL_SUCCESS)
+            rc = WOLFCERT_ERR_TLS;
+        if (rc != WOLFCERT_OK) {
             wolfSSL_CTX_free(ctx);
-            return WOLFCERT_ERR_TLS;
+            return rc;
         }
     }
 
@@ -1118,12 +1206,11 @@ static int setup_tls_ex(WolfCertConn* c, const TlsDials* dials,
     if (dials->client_cert != NULL &&
             (dials->client_key != NULL || dials->client_key_obj != NULL)) {
         /* Load the identity on the CTX so a PHA request can still use it. */
-        int rc = wolfSSL_CTX_use_certificate_buffer(ctx, dials->client_cert,
-                (long)dials->client_cert_len,
-                buf_filetype(dials->client_cert, dials->client_cert_len));
-        if (rc != WOLFSSL_SUCCESS) {
+        int rc = use_client_chain(ctx, dials->client_cert,
+                                  dials->client_cert_len);
+        if (rc != WOLFCERT_OK) {
             wolfSSL_CTX_free(ctx);
-            return WOLFCERT_ERR_TLS;
+            return rc;
         }
 
         rc = use_client_key(ctx, dials);

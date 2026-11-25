@@ -297,7 +297,7 @@ static int copy_cert_identity(Cert* cert, const uint8_t* renew_cert,
 {
     WolfCertBuffer pem_der = { 0 };
     const uint8_t* der = renew_cert;
-    size_t der_len = renew_cert_len;
+    size_t der_len = wolfcert_der_seq_len(renew_cert, renew_cert_len);
     DecodedCert* dc = NULL;
     const byte* san = NULL;
     word32 san_len = 0;

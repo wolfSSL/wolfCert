@@ -322,21 +322,22 @@ static int reenroll_key_type(const WolfCertServerCfg* cli, WolfCertKeyType type,
     REQUIRE(rc == want);
     REQUIRE(want != WOLFCERT_OK ||
             renewed.status == WOLFCERT_EST_STATUS_SUCCESS);
-    /* get_cacerts refuses the raw PEM key with the cert as DER too. */
+    /* get_cacerts refuses the raw PEM key with the cert in a DER chain too. */
     if (want != WOLFCERT_OK) {
         WolfCertServerCfg raw = *cli;
         WolfCertBuffer pem = { 0 };
         WolfCertBuffer ca = { 0 };
-        uint8_t* der = (uint8_t*)malloc(cert.cert_pem.len);
+        uint8_t* der = (uint8_t*)malloc(cert.cert_pem.len * 2);
         int der_len;
 
         REQUIRE(der != NULL);
         der_len = wc_CertPemToDer(cert.cert_pem.data, (int)cert.cert_pem.len,
                                   der, (int)cert.cert_pem.len, CERT_TYPE);
         REQUIRE(der_len > 0);
+        memcpy(der + der_len, der, (size_t)der_len);
         REQUIRE(wolfcert_key_to_pem(key, &pem) == WOLFCERT_OK);
         raw.client_cert     = der;
-        raw.client_cert_len = (size_t)der_len;
+        raw.client_cert_len = (size_t)der_len * 2;
         raw.client_key      = pem.data;
         raw.client_key_len  = pem.len;
         REQUIRE(wolfcert_est_get_cacerts(&raw, WOLFCERT_ENCODING_PEM, &ca) ==

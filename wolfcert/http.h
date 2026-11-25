@@ -69,6 +69,7 @@ typedef struct WolfCertHttpSession WolfCertHttpSession;
 typedef struct {
     /* Server to connect to, e.g. https://ca.example; a path is ignored. */
     const char*    base_url;
+    /* As in WolfCertServerCfg. */
     const uint8_t* trust_anchors;
     size_t         trust_anchors_len;
     int            verify_server;
@@ -95,8 +96,10 @@ typedef struct {
 } WolfCertHttpSessionCfg;
 
 /* Connects without verifying the server; the first request runs the TLS
- * handshake and returns WOLFCERT_ERR_TLS if it fails, or WOLFCERT_ERR_MEMORY
- * if wolfSSL runs out of memory. */
+ * handshake. Open loads the trust anchors and client identity and returns
+ * WOLFCERT_ERR_TLS, _BAD_ARG or _MEMORY if that fails. Requests return
+ * WOLFCERT_ERR_TLS if the handshake fails, or WOLFCERT_ERR_MEMORY if wolfSSL
+ * runs out of memory. */
 WOLFCERT_API int  wolfcert_http_session_open (const WolfCertHttpSessionCfg* cfg,
                                               WolfCertHttpSession** out);
 

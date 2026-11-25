@@ -568,6 +568,80 @@ int wolfcert_der_is_single(const uint8_t* in, size_t in_len)
            (size_t)idx + (size_t)len == in_len;
 }
 
+static int der_is_filler(uint8_t b)
+{
+    return b == 0x00 || b == 0xFF || b == ' ' || b == '\t' || b == '\r' ||
+           b == '\n';
+}
+
+WOLFCERT_TEST_VIS int wolfcert_der_chain_next(const uint8_t* buf, size_t len,
+                                              size_t* off, const uint8_t** item,
+                                              size_t* item_len)
+{
+    size_t n;
+
+    if (buf == NULL || off == NULL || item == NULL || item_len == NULL ||
+            (size_t)(word32)len != len || *off > len)
+        return WOLFCERT_ERR_BAD_ARG;
+
+    while (*off < len && der_is_filler(buf[*off]))
+        ++*off;
+    n = wolfcert_der_seq_len(buf + *off, len - *off);
+    if (n == 0)
+        return 0;
+
+    *item = buf + *off;
+    *item_len = n;
+    *off += n;
+    return 1;
+}
+
+/* Skips the element at in[*idx] if it carries tag; *body gets its contents. */
+static int der_skip(const uint8_t* in, word32* idx, word32 len, uint8_t tag,
+                    word32* body)
+{
+    word32 i = *idx;
+    int part = 0;
+
+    if (wolfcert_der_next(in, &i, len, tag, &part) != 0)
+        return 0;
+    if (body != NULL)
+        *body = i;
+    *idx = i + (word32)part;
+    return 1;
+}
+
+/* A TBSCertificate has serial, signature algorithm, issuer, then Validity,
+ * where a CSR has subject after its version and a CRL has a time. */
+static int der_tbs_is_cert(const uint8_t* in, word32 len)
+{
+    word32 idx = 0;
+    word32 alg = 0;
+
+    if (len > 0 && in[0] == 0xA0 && !der_skip(in, &idx, len, 0xA0, NULL))
+        return 0;
+    return der_skip(in, &idx, len, 0x02, NULL) &&
+           der_skip(in, &idx, len, 0x30, &alg) && alg < idx &&
+           in[alg] == 0x06 && der_skip(in, &idx, len, 0x30, NULL) &&
+           idx < len && in[idx] == 0x30;
+}
+
+WOLFCERT_TEST_VIS int wolfcert_der_is_cert(const uint8_t* item, size_t len)
+{
+    word32 idx = 0;
+    word32 tbs = 0;
+    int outer = 0;
+
+    if (item == NULL || (size_t)(word32)len != len ||
+            wolfcert_der_next(item, &idx, (word32)len, 0x30, &outer) != 0 ||
+            (size_t)idx + (size_t)outer != len)
+        return 0;
+    return der_skip(item, &idx, (word32)len, 0x30, &tbs) &&
+           der_tbs_is_cert(item + tbs, idx - tbs) &&
+           der_skip(item, &idx, (word32)len, 0x30, NULL) &&
+           der_skip(item, &idx, (word32)len, 0x03, NULL) && idx == len;
+}
+
 int wolfcert_pem_cert_to_der(const uint8_t* pem, size_t pem_len,
                               WolfCertBuffer* out_der, void* heap)
 {

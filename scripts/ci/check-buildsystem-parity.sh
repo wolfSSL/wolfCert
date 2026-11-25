@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # Fail on library or test source drift between CMake and autoconf, Zephyr
-# module sources that differ from the client set, or a version or shared
-# library version mismatch.
+# module sources that differ from the client set, vendored tools/sbom files
+# missing from EXTRA_DIST, or a version or shared library version mismatch.
 
 set -euo pipefail
 
@@ -71,6 +71,14 @@ cmake_tests="$(extract_tests_cmake "$ROOT/tests/CMakeLists.txt")"
 am_tests="$(extract_tests_am "$ROOT/Makefile.am")"
 compare "test sources" \
     "$cmake_tests" tests/CMakeLists.txt "$am_tests" Makefile.am
+
+if [ -e "$ROOT/.git" ]; then
+    sbom_git="$(git -C "$ROOT" ls-files tools/sbom | sort -u)"
+    sbom_dist="$(grep -oE 'tools/sbom/[A-Za-z0-9_./-]+' "$ROOT/Makefile.am" \
+        | sort -u)"
+    compare "vendored files" \
+        "$sbom_git" "git ls-files tools/sbom" "$sbom_dist" Makefile.am
+fi
 
 # The SBOM takes the version from AC_INIT, project() or version.h.
 am_ver="$(sed -n 's/^AC_INIT(\[wolfCert\], *\[\([^]]*\)\].*/\1/p' "$ROOT/configure.ac")"

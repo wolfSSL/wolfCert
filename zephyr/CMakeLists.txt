@@ -115,7 +115,8 @@ if(CONFIG_WOLFCERT)
       LICENSE ${WOLFCERT_DIR}/LICENSING
       DEP_WOLFSSL yes
       DEP_VERSION wolfssl=${_wc_version}
-      TARGET_NAME wolfcert-sbom)
+      TARGET_NAME wolfcert-sbom
+      NO_INSTALL)
     if(WOLFCERT_SBOM_LICENSE)
       list(APPEND _wc_sbom_args LICENSE_OVERRIDE "${WOLFCERT_SBOM_LICENSE}")
     endif()

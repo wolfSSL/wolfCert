@@ -483,7 +483,7 @@ configure_file(
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/wolfcert.pc"
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
 
-# SBOM: the wolfcert-sbom target, also named sbom when wolfCert is top level.
+# SBOM: wolfcert-{sbom,install-sbom,uninstall-sbom}, unprefixed at top level.
 set(WOLFCERT_SBOM_LICENSE "" CACHE STRING
     "SPDX license expression recorded in the SBOM (default: from LICENSING)")
 set(WOLFCERT_SBOM_LICENSE_TEXT "" CACHE FILEPATH
@@ -518,7 +518,8 @@ if(NOT _wc_wolfssl_version)
 endif()
 
 if(WIN32 AND NOT (MINGW OR MSYS))
-    set(_wc_sbom_error "needs a POSIX shell, use MSYS2, Cygwin or WSL")
+    string(CONCAT _wc_sbom_error "native Windows is not supported, "
+           "use MSYS2, Cygwin or WSL")
 elseif(NOT WOLFCERT_PYTHON3)
     set(_wc_sbom_error "python3 not found")
 elseif(NOT WOLFCERT_PYSPDXTOOLS)
@@ -526,6 +527,8 @@ elseif(NOT WOLFCERT_PYSPDXTOOLS)
 elseif(WOLFCERT_USER_SETTINGS AND
        (MSVC OR NOT CMAKE_C_COMPILER_ID MATCHES "GNU|Clang"))
     set(_wc_sbom_error "reading user_settings.h needs GCC or Clang")
+elseif(CMAKE_SKIP_INSTALL_RULES)
+    set(_wc_sbom_error "needs install rules, CMAKE_SKIP_INSTALL_RULES is set")
 elseif(NOT _wc_wolfssl_version)
     string(CONCAT _wc_sbom_error "cannot read the wolfSSL version from "
            "wolfssl/version.h, set WOLFCERT_SBOM_WOLFSSL_VERSION")
@@ -534,11 +537,16 @@ else()
 endif()
 
 if(NOT _wc_sbom_error STREQUAL "")
-    add_custom_target(wolfcert-sbom
-        COMMAND ${CMAKE_COMMAND} -E echo "sbom: ${_wc_sbom_error}"
-        COMMAND ${CMAKE_COMMAND} -E false
-        VERBATIM)
+    foreach(_t IN ITEMS sbom install-sbom uninstall-sbom)
+        add_custom_target(wolfcert-${_t}
+            COMMAND ${CMAKE_COMMAND} -E echo "${_t}: ${_wc_sbom_error}"
+            COMMAND ${CMAKE_COMMAND} -E false
+            VERBATIM)
+    endforeach()
 else()
+    if(NOT Python3_EXECUTABLE)
+        set(Python3_EXECUTABLE "${WOLFCERT_PYTHON3}")
+    endif()
     include(${CMAKE_CURRENT_SOURCE_DIR}/tools/sbom/build/sbom.cmake)
 
     if(WOLFCERT_USER_SETTINGS)
@@ -582,38 +590,26 @@ else()
     endif()
 
     set(_wc_sbom_out "${CMAKE_CURRENT_BINARY_DIR}/wolfcert-${PROJECT_VERSION}")
-    set(_wc_sbom_stage "${CMAKE_CURRENT_BINARY_DIR}/_sbom_staging")
-    if((WIN32 OR CYGWIN) AND WOLFCERT_BUILD_SHARED)
-        set(_wc_dir BINDIR)
-    else()
-        set(_wc_dir LIBDIR)
-    endif()
-    set(_wc_rel "${CMAKE_INSTALL_${_wc_dir}}")
-    if(CMAKE_STAGING_PREFIX AND NOT IS_ABSOLUTE "${_wc_rel}")
-        set(_wc_sbom_libdir "${CMAKE_STAGING_PREFIX}/${_wc_rel}")
-    else()
-        set(_wc_sbom_libdir "${CMAKE_INSTALL_FULL_${_wc_dir}}")
-    endif()
-    # DESTDIR drops the drive letter of a Windows install path.
-    string(REGEX REPLACE "^[A-Za-z]:" "" _wc_sbom_libdir "${_wc_sbom_libdir}")
-    set(_wc_sbom_lib
-        "${_wc_sbom_stage}${_wc_sbom_libdir}/$<TARGET_FILE_NAME:wolfcert>")
-    if(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME)
-        set(_wc_sbom_component "${CMAKE_INSTALL_DEFAULT_COMPONENT_NAME}")
-    else()
-        set(_wc_sbom_component Unspecified)
-    endif()
     set(_wc_sbom_args
         NAME wolfcert
         VERSION ${PROJECT_VERSION}
-        LIB "${_wc_sbom_lib}"
+        STAGE_TARGET wolfcert
         OPTIONS_H "${_wc_sbom_opts}"
         LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/LICENSING"
         DEP_WOLFSSL yes
         DEP_VERSION "wolfssl=${_wc_wolfssl_version}"
         CDX_OUT "${_wc_sbom_out}.cdx.json"
         SPDX_OUT "${_wc_sbom_out}.spdx.json"
-        TARGET_NAME wolfcert-sbom-gen)
+        VALIDATE
+        PYSPDXTOOLS "${WOLFCERT_PYSPDXTOOLS}"
+        TARGET_NAME wolfcert-sbom
+        INSTALL_TARGET wolfcert-install-sbom
+        UNINSTALL_TARGET wolfcert-uninstall-sbom)
+    # autoconf's docdir uses the lower-case package name.
+    if("$CACHE{CMAKE_INSTALL_DOCDIR}" STREQUAL "")
+        list(APPEND _wc_sbom_args
+            INSTALL_DIR "${CMAKE_INSTALL_DATAROOTDIR}/doc/wolfcert")
+    endif()
     if(WOLFCERT_SBOM_LICENSE)
         list(APPEND _wc_sbom_args LICENSE_OVERRIDE "${WOLFCERT_SBOM_LICENSE}")
     endif()
@@ -622,33 +618,17 @@ else()
     endif()
     wolfssl_compliance_tooling_add_sbom(${_wc_sbom_args})
 
-    # Hash the library as installed; installing rewrites its RPATH.
-    add_custom_target(wolfcert-sbom-stage
-        COMMAND ${CMAKE_COMMAND} -E remove_directory "${_wc_sbom_stage}"
-        COMMAND ${CMAKE_COMMAND} -E env "DESTDIR=${_wc_sbom_stage}"
-                ${CMAKE_COMMAND} --install "${CMAKE_CURRENT_BINARY_DIR}"
-                --config $<CONFIG> --component ${_wc_sbom_component}
-        VERBATIM)
-    foreach(_t IN ITEMS wolfcert wolfcert-client wolfcert-server)
-        if(TARGET ${_t})
-            add_dependencies(wolfcert-sbom-stage ${_t})
-        endif()
-    endforeach()
-    add_dependencies(wolfcert-sbom-gen wolfcert-sbom-stage)
     if(WOLFCERT_USER_SETTINGS)
-        add_dependencies(wolfcert-sbom-gen wolfcert-sbom-options)
+        add_dependencies(wolfcert-sbom wolfcert-sbom-options)
     endif()
-
-    add_custom_target(wolfcert-sbom
-        COMMAND ${WOLFCERT_PYSPDXTOOLS} --infile "${_wc_sbom_out}.spdx.json"
-                --outfile "${_wc_sbom_out}.spdx"
-        COMMAND ${CMAKE_COMMAND} -E remove_directory "${_wc_sbom_stage}"
-        VERBATIM)
-    add_dependencies(wolfcert-sbom wolfcert-sbom-gen)
 endif()
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     add_custom_target(sbom)
     add_dependencies(sbom wolfcert-sbom)
+    add_custom_target(install-sbom)
+    add_dependencies(install-sbom wolfcert-install-sbom)
+    add_custom_target(uninstall-sbom)
+    add_dependencies(uninstall-sbom wolfcert-uninstall-sbom)
 endif()
 
 message(STATUS "wolfCert ${PROJECT_VERSION}: EST=${WOLFCERT_ENABLE_EST}, "

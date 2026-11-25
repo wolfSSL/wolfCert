@@ -8,7 +8,7 @@
 # The including Makefile MUST set, before `include .../build/sbom.mk`:
 #   SBOM_NAME        Product name recorded in the SBOM (e.g. wolfboot).
 #
-# Composition - set at least one:
+# Composition - set one of SBOM_SRCS or SBOM_LIB, or SBOM_NO_ARTIFACT_HASH:
 #   SBOM_SRCS        Source files compiled into the artifact (tier E), e.g.:
 #                      SBOM_SRCS := $(patsubst %.o,%.c,$(OBJS))
 #   SBOM_LIB         Path to the built library to hash (tier R/L/S).
@@ -18,8 +18,19 @@
 #                    The driver keeps the -D tokens and forwards -I/-isystem;
 #                    all other flags are dropped.
 #   SBOM_OPTIONS_H   A pre-expanded flat #define header (verbatim, scrubbed).
-#   SBOM_USER_SETTINGS  A user_settings.h.
+#   SBOM_USER_SETTINGS  Path to wolfssl/wolfcrypt/settings.h. Also set
+#                       SBOM_USER_SETTINGS_INCLUDES and
+#                       SBOM_USER_SETTINGS_DEFINES. A user_settings.h path
+#                       alone records only the literals in that file.
+#   SBOM_USER_SETTINGS_INCLUDES
+#                       Directories for that preprocess, space-separated.
+#                       One of them must contain user_settings.h.
+#   SBOM_USER_SETTINGS_DEFINES
+#                       Predefines for that preprocess, space-separated.
+#                       Include WOLFSSL_USER_SETTINGS.
 #   SBOM_SOURCE_ONLY = 1   Source-inventory SBOM with no build-config macros.
+#   SBOM_MACRO_PREFIX   Record only the captured macros whose name starts
+#                       with one of these prefixes, space-separated.
 #
 # Config, strongly recommended alongside SBOM_CFLAGS:
 #   SBOM_SETTINGS_H     Settings header -include'd during the capture, so the
@@ -52,6 +63,7 @@
 #                         component.type, mirrored to SPDX
 #                         primaryPackagePurpose. Default: library. A
 #                         bootloader or a flashed image should say firmware.
+#   SBOM_COPYRIGHT_START  First year of the copyright line. Default: 2006.
 #   SBOM_LICENSE_OVERRIDE SPDX expression recorded instead of the one inferred
 #                         from SBOM_LICENSE_FILE. Needed whenever that file is
 #                         the *full* licence text rather than a licensing
@@ -63,11 +75,16 @@
 #                         in SBOM_LICENSE_OVERRIDE (required by SPDX 2.3).
 #   SBOM_GEN              Path to gen-sbom. Default: driver auto-discovery.
 #   GEN_SBOM              Legacy alias for SBOM_GEN.
-#   SBOM_NO_ARTIFACT_HASH = 1   As-built FIPS/kernel: do not re-hash.
+#   SBOM_NO_ARTIFACT_HASH = 1   As-built FIPS/kernel with no hashable
+#                         artefact. Stands alone: do not set SBOM_LIB or
+#                         SBOM_SRCS. The driver sends --no-artifact-hash,
+#                         and gen-sbom records a placeholder checksum.
 #   SBOM_DEP_WOLFSSL      yes/no - record wolfSSL as a dependency.
 #   SBOM_DEP_WOLFCRYPT    yes/no - record wolfCrypt as a nested component
 #                         (PURL; matching uses the wolfssl CPE).
 #   SBOM_DEP_OPENSSL      yes/no - record OpenSSL as a dependency.
+#   SBOM_DEP_LIBZ         yes/no - record zlib. Pass the product's real option.
+#   SBOM_DOCUMENT_NAMESPACE  SPDX documentNamespace override.
 #   SBOM_CRYPTO_ONLY      auto/yes/no - whether only the wolfCrypt subset of
 #                         the wolfSSL release is compiled in. Default auto:
 #                         read WOLFCRYPT_ONLY out of the captured macros,
@@ -118,80 +135,106 @@ SBOM_ROOT     ?= $(CURDIR)
 SBOM_LICENSE_FILE ?= $(SBOM_ROOT)/LICENSE
 HOSTCC        ?= cc
 
+# wolfSSL's source check rejects literal tabs in .mk files. Recipe lines in
+# the rule below start with $(SBOM_TAB) instead. $(call) expands it before
+# $(eval) parses the rule, so make still sees a tab.
+override SBOM_TAB := $(shell printf '\t')
+ifeq ($(SBOM_TAB),)
+$(error sbom.mk needs a POSIX shell with printf to build its recipes)
+endif
+
 define wolfssl_compliance_tooling_sbom_rule
 .PHONY: $(1)
 $(1): $($(2)PREREQS)
-	@test -n "$($(2)NAME)" || { echo "ERROR: set $(2)NAME"; exit 1; }
-	@test -n "$(strip $($(2)SRCS))$($(2)LIB)" || \
-	    { echo "ERROR: set $(2)SRCS or $(2)LIB"; exit 1; }
-	@set -e; \
-	if [ -n "$(strip $($(2)SRCS))" ]; then \
-	    trap 'rm -f "$(CURDIR)/.$(1)-wolfssl-compliance-tooling-srcs.txt"' EXIT INT TERM HUP; \
-	    printf '%s\n' $($(2)SRCS) > "$(CURDIR)/.$(1)-wolfssl-compliance-tooling-srcs.txt"; \
-	fi; \
-	dep_ver=""; \
-	if [ -n "$($(2)DEP_VERSION)" ]; then \
-	    for dv in $($(2)DEP_VERSION); do \
-	        dep_ver="$$$$dep_ver --dep-version $$$$dv"; \
-	    done; \
-	fi; \
-	if [ "$($(2)DEP_WOLFSSL)" = "yes" ] || [ "$($(2)DEP_WOLFSSL)" = "1" ]; then \
-	    wv="$($(2)WOLFSSL_VERSION)"; \
-	    if [ -z "$$$$wv" ] && [ -n "$(WOLFSSL_DIR)" ] && \
-	        [ -f "$(WOLFSSL_DIR)/wolfssl/version.h" ]; then \
-	        wv=`sed -n 's/.*LIBWOLFSSL_VERSION_STRING[[:space:]]*"\([^"]*\)".*/\1/p' \
-	            "$(WOLFSSL_DIR)/wolfssl/version.h" | head -1`; \
-	    fi; \
-	    if [ -n "$$$$wv" ]; then \
-	        dep_ver="$$$$dep_ver --dep-version wolfssl=$$$$wv"; \
-	    fi; \
-	fi; \
-	if [ "$($(2)DEP_WOLFCRYPT)" = "yes" ] || [ "$($(2)DEP_WOLFCRYPT)" = "1" ]; then \
-	    case " $$$$dep_ver " in \
-	        *" --dep-version wolfcrypt="*) ;; \
-	        *) \
-	            cv="$($(2)WOLFSSL_VERSION)"; \
-	            if [ -z "$$$$cv" ] && [ -n "$(WOLFSSL_DIR)" ] && \
-	                [ -f "$(WOLFSSL_DIR)/wolfssl/version.h" ]; then \
-	                cv=`sed -n 's/.*LIBWOLFSSL_VERSION_STRING[[:space:]]*"\([^"]*\)".*/\1/p' \
-	                    "$(WOLFSSL_DIR)/wolfssl/version.h" | head -1`; \
-	            fi; \
-	            if [ -n "$$$$cv" ]; then \
-	                dep_ver="$$$$dep_ver --dep-version wolfcrypt=$$$$cv"; \
-	            fi; \
-	            ;; \
-	    esac; \
-	fi; \
-	CRA_PYTHON="$(CRA_PYTHON)" HOSTCC="$(or $($(2)HOSTCC),$(HOSTCC))" \
-	"$(or $($(2)DRIVER),$(SBOM_DRIVER))" \
-	    --name "$($(2)NAME)" \
-	    --root "$(or $($(2)ROOT),$(SBOM_ROOT))" \
-	    --license-file "$(or $($(2)LICENSE_FILE),$(SBOM_LICENSE_FILE))" \
-	    --skip-missing \
-	    $(if $(strip $($(2)SRCS)),--srcs-file "$(CURDIR)/.$(1)-wolfssl-compliance-tooling-srcs.txt") \
-	    $(if $($(2)LIB),--lib "$($(2)LIB)") \
-	    $(if $(filter 1,$($(2)NO_ARTIFACT_HASH)),--no-artifact-hash) \
-	    $(if $(filter 1,$($(2)SOURCE_ONLY)),--source-only) \
-	    $(if $($(2)CFLAGS),--cflags="$$($(2)CFLAGS)") \
-	    $(if $($(2)SETTINGS_H),--settings-h "$($(2)SETTINGS_H)") \
-	    $(foreach d,$($(2)INCLUDE_DIRS),--include-dir "$(d)") \
-	    $(if $($(2)OPTIONS_H),--options-h "$($(2)OPTIONS_H)") \
-	    $(if $($(2)USER_SETTINGS),--user-settings "$($(2)USER_SETTINGS)") \
-	    $(if $($(2)COMPONENT_TYPE),--component-type "$($(2)COMPONENT_TYPE)") \
-	    $(if $($(2)LICENSE_OVERRIDE),--license-override '$($(2)LICENSE_OVERRIDE)') \
-	    $(if $($(2)LICENSE_TEXT),--license-text "$($(2)LICENSE_TEXT)") \
-	    $(if $($(2)VERSION),--version "$($(2)VERSION)") \
-	    $(if $($(2)VERSION_FILE),--version-file "$($(2)VERSION_FILE)") \
-	    $(if $($(2)VERSION_MACRO),--version-macro "$($(2)VERSION_MACRO)") \
-	    $(if $($(2)DEP_WOLFSSL),--dep-wolfssl "$($(2)DEP_WOLFSSL)") \
-	    $(if $($(2)DEP_WOLFCRYPT),--dep-wolfcrypt "$($(2)DEP_WOLFCRYPT)") \
-	    $(if $($(2)DEP_OPENSSL),--dep-openssl "$($(2)DEP_OPENSSL)") \
-	    $(if $($(2)CRYPTO_ONLY),--crypto-only "$($(2)CRYPTO_ONLY)") \
-	    $$$$dep_ver \
-	    $(if $(or $($(2)GEN),$(GEN_SBOM)),--gen-sbom "$(or $($(2)GEN),$(GEN_SBOM))") \
-	    $(if $($(2)CDX_OUT),--cdx-out "$($(2)CDX_OUT)") \
-	    $(if $($(2)SPDX_OUT),--spdx-out "$($(2)SPDX_OUT)")
+$(SBOM_TAB)@test -n "$($(2)NAME)" || { echo "ERROR: set $(2)NAME"; exit 1; }
+$(SBOM_TAB)@if [ "$($(2)NO_ARTIFACT_HASH)" = "1" ]; then \
+        test -z "$(strip $($(2)SRCS))$($(2)LIB)" || \
+            { echo "ERROR: $(2)NO_ARTIFACT_HASH stands alone. Do not set $(2)SRCS or $(2)LIB."; exit 1; }; \
+    else \
+        test -n "$(strip $($(2)SRCS))$($(2)LIB)" || \
+            { echo "ERROR: set $(2)SRCS or $(2)LIB"; exit 1; }; \
+        $(if $(and $(strip $($(2)SRCS)),$($(2)LIB)),{ echo "ERROR: set $(2)SRCS or $(2)LIB but not both"; exit 1; };) \
+    fi
+$(SBOM_TAB)@set -e; \
+    if [ -n "$(strip $($(2)SRCS))" ]; then \
+        trap 'rm -f "$(CURDIR)/.$(1)-wolfssl-compliance-tooling-srcs.txt"' EXIT INT TERM HUP; \
+        printf '%s\n' $($(2)SRCS) > "$(CURDIR)/.$(1)-wolfssl-compliance-tooling-srcs.txt"; \
+    fi; \
+    dep_ver=""; \
+    if [ -n "$($(2)DEP_VERSION)" ]; then \
+        for dv in $($(2)DEP_VERSION); do \
+            dep_ver="$$$$dep_ver --dep-version $$$$dv"; \
+        done; \
+    fi; \
+    if [ "$($(2)DEP_WOLFSSL)" = "yes" ] || [ "$($(2)DEP_WOLFSSL)" = "1" ]; then \
+        wv="$($(2)WOLFSSL_VERSION)"; \
+        if [ -z "$$$$wv" ] && [ -n "$(WOLFSSL_DIR)" ] && \
+            [ -f "$(WOLFSSL_DIR)/wolfssl/version.h" ]; then \
+            wv=`sed -n 's/.*LIBWOLFSSL_VERSION_STRING[[:space:]]*"\([^"]*\)".*/\1/p' \
+                "$(WOLFSSL_DIR)/wolfssl/version.h" | head -1`; \
+        fi; \
+        if [ -n "$$$$wv" ]; then \
+            dep_ver="$$$$dep_ver --dep-version wolfssl=$$$$wv"; \
+        fi; \
+    fi; \
+    if [ "$($(2)DEP_WOLFCRYPT)" = "yes" ] || [ "$($(2)DEP_WOLFCRYPT)" = "1" ]; then \
+        case " $$$$dep_ver " in \
+            *" --dep-version wolfcrypt="*) ;; \
+            *) \
+                cv="$($(2)WOLFSSL_VERSION)"; \
+                if [ -z "$$$$cv" ] && [ -n "$(WOLFSSL_DIR)" ] && \
+                    [ -f "$(WOLFSSL_DIR)/wolfssl/version.h" ]; then \
+                    cv=`sed -n 's/.*LIBWOLFSSL_VERSION_STRING[[:space:]]*"\([^"]*\)".*/\1/p' \
+                        "$(WOLFSSL_DIR)/wolfssl/version.h" | head -1`; \
+                fi; \
+                if [ -n "$$$$cv" ]; then \
+                    dep_ver="$$$$dep_ver --dep-version wolfcrypt=$$$$cv"; \
+                fi; \
+                ;; \
+        esac; \
+    fi; \
+    CRA_PYTHON="$(CRA_PYTHON)" HOSTCC="$(or $($(2)HOSTCC),$(HOSTCC))" \
+    "$(or $($(2)DRIVER),$(SBOM_DRIVER))" \
+        --name "$($(2)NAME)" \
+        --root "$(or $($(2)ROOT),$(SBOM_ROOT))" \
+        --license-file "$(or $($(2)LICENSE_FILE),$(SBOM_LICENSE_FILE))" \
+        --skip-missing \
+        $(if $(filter 1,$($(2)NO_ARTIFACT_HASH)),--no-artifact-hash) \
+        $(if $(filter 1,$($(2)NO_ARTIFACT_HASH)),, \
+            $(if $(strip $($(2)SRCS)),--srcs-file "$(CURDIR)/.$(1)-wolfssl-compliance-tooling-srcs.txt")) \
+        $(if $(filter 1,$($(2)NO_ARTIFACT_HASH)),, \
+            $(if $($(2)LIB),--lib "$($(2)LIB)")) \
+        $(if $(filter 1,$($(2)SOURCE_ONLY)),--source-only) \
+        $(if $($(2)CFLAGS),--cflags="$$($(2)CFLAGS)") \
+        $(if $($(2)SETTINGS_H),--settings-h "$($(2)SETTINGS_H)") \
+        $(foreach d,$($(2)INCLUDE_DIRS),--include-dir "$(d)") \
+        $(if $($(2)OPTIONS_H),--options-h "$($(2)OPTIONS_H)") \
+        $(if $($(2)USER_SETTINGS),--user-settings "$($(2)USER_SETTINGS)") \
+        $(foreach d,$($(2)USER_SETTINGS_INCLUDES),--user-settings-include "$(d)") \
+        $(foreach d,$($(2)USER_SETTINGS_DEFINES),--user-settings-define "$(d)") \
+        $(if $($(2)COMPONENT_TYPE),--component-type "$($(2)COMPONENT_TYPE)") \
+        $(if $($(2)COPYRIGHT_START),--copyright-start "$($(2)COPYRIGHT_START)") \
+        $(if $($(2)LICENSE_OVERRIDE),--license-override '$($(2)LICENSE_OVERRIDE)') \
+        $(if $($(2)LICENSE_TEXT),--license-text "$($(2)LICENSE_TEXT)") \
+        $(if $($(2)VERSION),--version "$($(2)VERSION)") \
+        $(if $($(2)VERSION_FILE),--version-file "$($(2)VERSION_FILE)") \
+        $(if $($(2)VERSION_MACRO),--version-macro "$($(2)VERSION_MACRO)") \
+        $(if $($(2)DEP_WOLFSSL),--dep-wolfssl "$($(2)DEP_WOLFSSL)") \
+        $(if $($(2)DEP_WOLFCRYPT),--dep-wolfcrypt "$($(2)DEP_WOLFCRYPT)") \
+        $(if $($(2)DEP_OPENSSL),--dep-openssl "$($(2)DEP_OPENSSL)") \
+        $(if $($(2)DEP_LIBZ),--dep-libz "$($(2)DEP_LIBZ)") \
+        $(if $($(2)DOCUMENT_NAMESPACE),--document-namespace "$($(2)DOCUMENT_NAMESPACE)") \
+        $(if $($(2)CRYPTO_ONLY),--crypto-only "$($(2)CRYPTO_ONLY)") \
+        $(foreach p,$($(2)MACRO_PREFIX),--macro-prefix "$(p)") \
+        $$$$dep_ver \
+        $(if $(or $($(2)GEN),$(GEN_SBOM)),--gen-sbom "$(or $($(2)GEN),$(GEN_SBOM))") \
+        $(if $($(2)CDX_OUT),--cdx-out "$($(2)CDX_OUT)") \
+        $(if $($(2)SPDX_OUT),--spdx-out "$($(2)SPDX_OUT)")
 endef
+
+# Products vendored before the rename still call wolfglass_sbom_rule.
+# Use a recursive reference, not $(value): $(call) must expand $(1) and $(2).
+wolfglass_sbom_rule = $(wolfssl_compliance_tooling_sbom_rule)
 
 SBOM_TARGET ?= sbom
 $(eval $(call wolfssl_compliance_tooling_sbom_rule,$(SBOM_TARGET),SBOM_))

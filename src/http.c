@@ -977,6 +977,51 @@ static int check_client_key(const uint8_t* cert, size_t cert_len,
     return WOLFCERT_OK;
 }
 
+#if defined(WOLFSSL_HAVE_MLDSA) && !defined(WOLFSSL_TLS13)
+/* ML-DSA has no TLS 1.2 signature algorithm. */
+static int check_client_alg(const WolfCertHttpSessionCfg* cfg, void* heap)
+{
+    WolfCertBuffer pem_der = { 0 };
+    const uint8_t* der = cfg->client_cert;
+    size_t der_len = cfg->client_cert_len;
+    DecodedCert* dc;
+    int wrc;
+    int rc;
+
+    if (der == NULL || der_len == 0 || (size_t)(word32)der_len != der_len ||
+            (cfg->client_key == NULL && cfg->client_key_obj == NULL))
+        return WOLFCERT_OK;
+    if (!wolfcert_buffer_is_der(der, der_len)) {
+        rc = wolfcert_pem_cert_to_der(der, der_len, &pem_der, heap);
+        if (rc != WOLFCERT_OK)
+            return rc == WOLFCERT_ERR_MEMORY ? rc : WOLFCERT_OK;
+        der = pem_der.data;
+        der_len = pem_der.len;
+    }
+    dc = (DecodedCert*)WOLFCERT_XMALLOC(sizeof(*dc), heap);
+    if (dc == NULL) {
+        wolfcert_buffer_free(&pem_der);
+        return WOLFCERT_ERR_MEMORY;
+    }
+
+    wc_InitDecodedCert(dc, der, (word32)der_len, heap);
+    wrc = wc_ParseCert(dc, CERT_TYPE, NO_VERIFY, NULL);
+    if (dc->keyOID == ML_DSA_44k || dc->keyOID == ML_DSA_65k ||
+            dc->keyOID == ML_DSA_87k)
+        rc = WOLFCERT_ERR(WOLFCERT_ERR_UNSUPPORTED, "http",
+                          "an ML-DSA client certificate needs TLS 1.3, "
+                          "which this wolfSSL lacks");
+    else if (wrc == MEMORY_E)
+        rc = WOLFCERT_ERR_MEMORY;
+    else
+        rc = WOLFCERT_OK;
+    wc_FreeDecodedCert(dc);
+    WOLFCERT_XFREE(dc, heap);
+    wolfcert_buffer_free(&pem_der);
+    return rc;
+}
+#endif
+
 /* A key with an id signs in its device; any other key loads as DER. */
 static int use_client_key_obj(WOLFSSL_CTX* ctx, const WolfCertKey* k)
 {
@@ -1190,11 +1235,17 @@ int wolfcert_http_session_open(const WolfCertHttpSessionCfg* cfg,
         WOLFCERT_XFREE(s, heap);
         return rc;
     }
-    if (cfg->client_key_obj != NULL && !s->base.tls) {
+    if (cfg->client_key_obj != NULL && !s->base.tls)
+        rc = WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "http",
+                          "client_key_obj needs an https:// URL");
+#if defined(WOLFSSL_HAVE_MLDSA) && !defined(WOLFSSL_TLS13)
+    if (rc == WOLFCERT_OK && s->base.tls)
+        rc = check_client_alg(cfg, heap);
+#endif
+    if (rc != WOLFCERT_OK) {
         wolfcert_http_url_free(&s->base);
         WOLFCERT_XFREE(s, heap);
-        return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "http",
-                            "client_key_obj needs an https:// URL");
+        return rc;
     }
 
     rc = dial(&s->conn, s->base.host, s->base.port, cfg->timeout_ms,

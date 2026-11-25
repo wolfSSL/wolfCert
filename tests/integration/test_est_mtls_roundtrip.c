@@ -287,7 +287,8 @@ static int csr_with_critical_san(const WolfCertBuffer* cert_pem,
 }
 #endif
 
-/* A software key of each type re-enrolls; its DER reaches TLS untyped. */
+/* A software key of each type re-enrolls, ML-DSA only with TLS 1.3; its DER
+ * reaches TLS untyped. */
 static int reenroll_key_type(const WolfCertServerCfg* cli, WolfCertKeyType type,
                              int param)
 {
@@ -298,8 +299,14 @@ static int reenroll_key_type(const WolfCertServerCfg* cli, WolfCertKeyType type,
     WolfCertBuffer csr = { 0 };
     WolfCertEstResult cert = { 0 };
     WolfCertEstResult renewed = { 0 };
+    int want = WOLFCERT_OK;
     int rc;
 
+#if defined(WOLFCERT_HAVE_MLDSA) && !defined(WOLFSSL_TLS13)
+    if (type == WOLFCERT_KEY_MLDSA44 || type == WOLFCERT_KEY_MLDSA65 ||
+            type == WOLFCERT_KEY_MLDSA87)
+        want = WOLFCERT_ERR_UNSUPPORTED;
+#endif
     REQUIRE(wolfcert_key_generate(&kcfg, &key) == WOLFCERT_OK);
     REQUIRE(wolfcert_csr_build(key, &meta, &csr) == WOLFCERT_OK);
     REQUIRE(wolfcert_est_simple_enroll(cli, csr.data, csr.len, &cert) ==
@@ -308,11 +315,35 @@ static int reenroll_key_type(const WolfCertServerCfg* cli, WolfCertKeyType type,
     rc = wolfcert_est_simple_reenroll(cli, cert.cert_pem.data,
                                       cert.cert_pem.len, key, csr.data,
                                       csr.len, &renewed);
-    if (rc != WOLFCERT_OK)
+    if (rc != want)
         fprintf(stderr, "key type %d reenroll rc=%d (%s)\n", (int)type, rc,
                 wolfcert_last_error_message());
-    REQUIRE(rc == WOLFCERT_OK);
-    REQUIRE(renewed.status == WOLFCERT_EST_STATUS_SUCCESS);
+    REQUIRE(rc == want);
+    REQUIRE(want != WOLFCERT_OK ||
+            renewed.status == WOLFCERT_EST_STATUS_SUCCESS);
+    /* get_cacerts refuses the raw PEM key with the cert as DER too. */
+    if (want != WOLFCERT_OK) {
+        WolfCertServerCfg raw = *cli;
+        WolfCertBuffer pem = { 0 };
+        WolfCertBuffer ca = { 0 };
+        uint8_t* der = (uint8_t*)malloc(cert.cert_pem.len);
+        int der_len;
+
+        REQUIRE(der != NULL);
+        der_len = wc_CertPemToDer(cert.cert_pem.data, (int)cert.cert_pem.len,
+                                  der, (int)cert.cert_pem.len, CERT_TYPE);
+        REQUIRE(der_len > 0);
+        REQUIRE(wolfcert_key_to_pem(key, &pem) == WOLFCERT_OK);
+        raw.client_cert     = der;
+        raw.client_cert_len = (size_t)der_len;
+        raw.client_key      = pem.data;
+        raw.client_key_len  = pem.len;
+        REQUIRE(wolfcert_est_get_cacerts(&raw, WOLFCERT_ENCODING_PEM, &ca) ==
+                want);
+        REQUIRE(ca.data == NULL);
+        wolfcert_buffer_free_secure(&pem);
+        free(der);
+    }
 
     wolfcert_est_result_free(&renewed);
     wolfcert_est_result_free(&cert);

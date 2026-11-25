@@ -107,6 +107,10 @@ jobs:
             os: ubuntu-latest
             build: cmake
             wolfssl: tls13-only
+          - name: cmake-tls12-only
+            os: ubuntu-latest
+            build: cmake
+            wolfssl: tls12-only
           # ML-DSA per-level gating
           - name: cmake-mldsa-44off
             os: ubuntu-latest

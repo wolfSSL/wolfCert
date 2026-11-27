@@ -134,7 +134,9 @@ The layering rules that matter to an integrator:
 **Issued certificate first.** Every enroll and renewal result, EST and SCEP,
 starts with the certificate that holds the CSR's public key, followed by any
 other certificates in the order the server sent them. A reply with no such
-certificate fails with `WOLFCERT_ERR_PROTOCOL`.
+certificate fails with `WOLFCERT_ERR_PROTOCOL`. Like the CA calls, every
+enroll call takes a `WolfCertEncoding`: PEM blocks, or the same certificates
+as concatenated DER.
 
 ### EST (RFC 7030)
 
@@ -149,7 +151,7 @@ four endpoints a typical device needs:
 | `POST /simplereenroll` | `wolfcert_est_simple_reenroll` | Same, with the cert being renewed used as the implicit client identity. The test server's requirements for it are at `WolfCertServerCfgSrv.tls_client_ca_pem` in `wolfcert/server.h`. |
 
 A typical flow is: `wolfcert_key_generate` → `wolfcert_csr_build` →
-`wolfcert_est_simple_enroll` → persist the issued PEM. Every endpoint also has
+`wolfcert_est_simple_enroll` → persist the issued cert. Every endpoint also has
 session calls (`wolfcert_est_session_get_cacerts`/`_nb`, etc.) on the keep-alive
 `WolfCertEstSession`, which carries several requests on one TLS connection.
 `wolfcert_est_session_simple_reenroll` renews the cert the session was opened
@@ -238,7 +240,7 @@ HTTP GET form, carrying the message base64-encoded and percent-escaped in the
 a URL longer than `WOLFCERT_SCEP_MAX_GET_URL`). The in-tree test server accepts
 both.
 The server's `pkiStatus` maps to a `WolfCertScepResult.status` of `SUCCESS`
-(cert in `cert_pem`), `PENDING` (poll with `GetCertInitial`, quoting the
+(cert in `cert`), `PENDING` (poll with `GetCertInitial`, quoting the
 returned transaction ID), or `FAILURE`.
 
 Moving an existing wolfSCEP integration across is covered separately in
@@ -432,7 +434,8 @@ if (rc == WOLFCERT_OK)          /* pin it: GetCACert is unauthenticated */
 if (rc == WOLFCERT_OK)
     rc = wolfcert_scep_session_get_ca_caps(s, &caps);
 if (rc == WOLFCERT_OK)
-    rc = wolfcert_scep_session_pkcs_req(s, &caps, ca.data, ca.len,
+    rc = wolfcert_scep_session_pkcs_req(s, WOLFCERT_ENCODING_PEM,
+                                        &caps, ca.data, ca.len,
                                         ca.data, ca.len, key,
                                         csr.data, csr.len, &res);
 /* On WOLFCERT_OK, res.status is SUCCESS, PENDING or FAILURE. */
@@ -523,7 +526,8 @@ wolfSSL leaves `THREAD_LS_T` empty. Otherwise (RTOS and bare-metal builds) the
 state is one global, so keep wolfCert calls on one thread. After any failing call:
 
 ```c
-int rc = wolfcert_est_simple_enroll(&srv, csr, csr_len, &res);
+int rc = wolfcert_est_simple_enroll(&srv, WOLFCERT_ENCODING_PEM,
+                                    csr, csr_len, &res);
 if (rc != WOLFCERT_OK) {
     LOG("wolfCert: %s (ssl=%d): %s",
         wolfcert_strerror(rc),

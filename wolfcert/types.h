@@ -46,7 +46,9 @@ typedef enum {
     WOLFCERT_PROTO_SCEP = 2
 } WolfCertProtocol;
 
-/* Serialization format for certificate/key buffers. */
+/* Encoding of certificate/key buffers. DER for several certificates is
+ * their DER concatenated in the PEM order. A call that takes one returns
+ * WOLFCERT_ERR_BAD_ARG for any other value before anything is sent. */
 typedef enum {
     WOLFCERT_ENCODING_PEM = 0,
     WOLFCERT_ENCODING_DER = 1

@@ -256,15 +256,16 @@ WOLFCERT_TEST_VIS int wolfcert_pkcs7_certs_to_der(const uint8_t* p7_der,
                                heap, 0);
 }
 
-WOLFCERT_TEST_VIS int wolfcert_pkcs7_issued_to_pem(const uint8_t* p7_der,
+WOLFCERT_TEST_VIS int wolfcert_pkcs7_issued_certs(const uint8_t* p7_der,
     size_t p7_der_len, const uint8_t key_hash[WC_SHA256_DIGEST_SIZE],
-    const uint8_t* avoid_hash, WolfCertBuffer* out_pem, void* heap)
+    const uint8_t* avoid_hash, WolfCertEncoding enc, WolfCertBuffer* out,
+    void* heap)
 {
-    if (key_hash == NULL)
+    if (key_hash == NULL || !wolfcert_enc_ok(enc))
         return WOLFCERT_ERR_BAD_ARG;
 
-    return pkcs7_certs_extract(p7_der, p7_der_len, key_hash, avoid_hash,
-                               out_pem, heap, 1);
+    return pkcs7_certs_extract(p7_der, p7_der_len, key_hash, avoid_hash, out,
+                               heap, enc == WOLFCERT_ENCODING_PEM);
 }
 
 static int validate_certs(const uint8_t* const* certs, const size_t* lens, size_t count)

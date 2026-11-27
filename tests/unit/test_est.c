@@ -325,16 +325,19 @@ static int test_est_require_server_auth(void)
     REQUIRE(wolfcert_est_get_cacerts(&srv, WOLFCERT_ENCODING_PEM,
                                      &out) == WOLFCERT_ERR_TLS);
     REQUIRE(wolfcert_est_get_csr_attrs(&srv, &out) == WOLFCERT_ERR_TLS);
-    REQUIRE(wolfcert_est_simple_enroll(&srv, dummy_csr, sizeof(dummy_csr),
+    REQUIRE(wolfcert_est_simple_enroll(&srv, WOLFCERT_ENCODING_PEM,
+                                       dummy_csr, sizeof(dummy_csr),
                                        &res) == WOLFCERT_ERR_TLS);
 
     /* Reenroll with a generated key so verify_server = 0 is what fails it. */
     REQUIRE(wolfcert_key_generate(&kcfg, &rk) == WOLFCERT_OK);
-    REQUIRE(wolfcert_est_simple_reenroll(&srv, dummy_csr, sizeof(dummy_csr), rk,
+    REQUIRE(wolfcert_est_simple_reenroll(&srv, WOLFCERT_ENCODING_PEM,
+                                         dummy_csr, sizeof(dummy_csr), rk,
                                          dummy_csr, sizeof(dummy_csr), &res)
             == WOLFCERT_ERR_TLS);
     /* An empty current cert is refused before the config is checked. */
-    REQUIRE(wolfcert_est_simple_reenroll(&srv, dummy_csr, 0, rk, dummy_csr,
+    REQUIRE(wolfcert_est_simple_reenroll(&srv, WOLFCERT_ENCODING_PEM,
+                                         dummy_csr, 0, rk, dummy_csr,
                                          sizeof(dummy_csr), &res)
             == WOLFCERT_ERR_BAD_ARG);
     wolfcert_key_free(rk);
@@ -358,7 +361,8 @@ static int test_est_require_server_auth(void)
     /* Bad arguments fail before the dial. */
     REQUIRE(wolfcert_est_get_cacerts(&srv, WOLFCERT_ENCODING_PEM,
                                      NULL) == WOLFCERT_ERR_BAD_ARG);
-    REQUIRE(wolfcert_est_simple_enroll(&srv, NULL, 0, &res)
+    REQUIRE(wolfcert_est_simple_enroll(&srv, WOLFCERT_ENCODING_PEM,
+                                       NULL, 0, &res)
             == WOLFCERT_ERR_BAD_ARG);
 
     return 0;
@@ -405,11 +409,13 @@ static int test_est_rejects_scep_cfg(void)
     REQUIRE(wolfcert_est_get_cacerts(&srv, WOLFCERT_ENCODING_PEM,
                                      &out) == WOLFCERT_ERR_BAD_ARG);
     REQUIRE(wolfcert_est_get_csr_attrs(&srv, &out) == WOLFCERT_ERR_BAD_ARG);
-    REQUIRE(wolfcert_est_simple_enroll(&srv, dummy_csr, sizeof(dummy_csr),
+    REQUIRE(wolfcert_est_simple_enroll(&srv, WOLFCERT_ENCODING_PEM,
+                                       dummy_csr, sizeof(dummy_csr),
                                        &res) == WOLFCERT_ERR_BAD_ARG);
 
     REQUIRE(wolfcert_key_generate(&kcfg, &rk) == WOLFCERT_OK);
-    REQUIRE(wolfcert_est_simple_reenroll(&srv, dummy_csr, sizeof(dummy_csr), rk,
+    REQUIRE(wolfcert_est_simple_reenroll(&srv, WOLFCERT_ENCODING_PEM,
+                                         dummy_csr, sizeof(dummy_csr), rk,
                                          dummy_csr, sizeof(dummy_csr), &res)
             == WOLFCERT_ERR_BAD_ARG);
     wolfcert_key_free(rk);
@@ -461,8 +467,8 @@ static int est_result_defined(const char* what, int rc, const WolfCertEstResult*
         fprintf(stderr, "FAIL %s: expected BAD_ARG, got %d\n", what, rc);
         return 1;
     }
-    if (r->status != WOLFCERT_EST_STATUS_UNSET || r->cert_pem.data != NULL ||
-            r->cert_pem.len != 0 || r->retry_after_sec != 0 || r->heap != NULL) {
+    if (r->status != WOLFCERT_EST_STATUS_UNSET || r->cert.data != NULL ||
+            r->cert.len != 0 || r->retry_after_sec != 0 || r->heap != NULL) {
         fprintf(stderr, "FAIL %s: result left indeterminate\n", what);
         return 1;
     }
@@ -486,7 +492,8 @@ static int test_est_result_defined_on_early_return(void)
 
     memset(&r, 0xA5, sizeof(r));
     if (est_result_defined("simple_enroll",
-            wolfcert_est_simple_enroll(NULL, blob, sizeof(blob), &r), &r)) {
+            wolfcert_est_simple_enroll(NULL, WOLFCERT_ENCODING_PEM,
+                                       blob, sizeof(blob), &r), &r)) {
         wolfcert_key_free(key);
         return 1;
     }
@@ -494,7 +501,8 @@ static int test_est_result_defined_on_early_return(void)
 
     memset(&r, 0xA5, sizeof(r));
     if (est_result_defined("simple_reenroll",
-            wolfcert_est_simple_reenroll(NULL, blob, sizeof(blob), key,
+            wolfcert_est_simple_reenroll(NULL, WOLFCERT_ENCODING_PEM,
+                                         blob, sizeof(blob), key,
                                          blob, sizeof(blob), &r), &r)) {
         wolfcert_key_free(key);
         return 1;
@@ -503,7 +511,8 @@ static int test_est_result_defined_on_early_return(void)
 
     memset(&r, 0xA5, sizeof(r));
     if (est_result_defined("session_simple_enroll",
-            wolfcert_est_session_simple_enroll(NULL, blob, sizeof(blob),
+            wolfcert_est_session_simple_enroll(NULL, WOLFCERT_ENCODING_PEM,
+                                               blob, sizeof(blob),
                                                &r), &r)) {
         wolfcert_key_free(key);
         return 1;
@@ -512,16 +521,19 @@ static int test_est_result_defined_on_early_return(void)
 
     memset(&r, 0xA5, sizeof(r));
     if (est_result_defined("session_simple_enroll_nb",
-            wolfcert_est_session_simple_enroll_nb(NULL, blob, sizeof(blob),
+            wolfcert_est_session_simple_enroll_nb(NULL, WOLFCERT_ENCODING_PEM,
+                                                  blob, sizeof(blob),
                                                   &r), &r)) {
         wolfcert_key_free(key);
         return 1;
     }
     wolfcert_est_result_free(&r);
 
-    if (wolfcert_est_session_simple_enroll(NULL, blob, sizeof(blob), NULL)
+    if (wolfcert_est_session_simple_enroll(NULL, WOLFCERT_ENCODING_PEM,
+                                           blob, sizeof(blob), NULL)
             != WOLFCERT_ERR_BAD_ARG ||
-        wolfcert_est_session_simple_enroll_nb(NULL, blob, sizeof(blob), NULL)
+        wolfcert_est_session_simple_enroll_nb(NULL, WOLFCERT_ENCODING_PEM,
+                                              blob, sizeof(blob), NULL)
             != WOLFCERT_ERR_BAD_ARG) {
         fprintf(stderr, "FAIL session enroll: NULL out not rejected\n");
         wolfcert_key_free(key);
@@ -558,7 +570,9 @@ static int pump_simple_enroll(WolfCertEstSession* s,
 {
     int fd = wolfcert_est_session_fd(s);
     for (;;) {
-        int rc = wolfcert_est_session_simple_enroll_nb(s, csr, csr_len, out);
+        int rc = wolfcert_est_session_simple_enroll_nb(s,
+                                                       WOLFCERT_ENCODING_PEM,
+                                                       csr, csr_len, out);
         if (rc == WOLFCERT_OK)
             return 0;
         if (rc == WOLFCERT_ERR_WANT_READ || rc == WOLFCERT_ERR_WANT_WRITE) {
@@ -600,12 +614,14 @@ static int check_empty_body(WOLFSSL_CTX* ctx, const WolfCertServerCfg* tmpl,
     REQUIRE(out.data == NULL);
     /* A one-shot closes after its request; a session keeps the connection. */
     REQUIRE(strstr(sc.request, "Connection: close\r\n") != NULL);
-    REQUIRE(wolfcert_est_simple_enroll(&srv, csr, csr_len, &res)
+    REQUIRE(wolfcert_est_simple_enroll(&srv, WOLFCERT_ENCODING_PEM,
+                                       csr, csr_len, &res)
             == WOLFCERT_ERR_HTTP);
-    REQUIRE(res.cert_pem.data == NULL);
-    REQUIRE(wolfcert_est_simple_reenroll(&srv, cur, cur_len, dk, csr, csr_len,
+    REQUIRE(res.cert.data == NULL);
+    REQUIRE(wolfcert_est_simple_reenroll(&srv, WOLFCERT_ENCODING_PEM,
+                                         cur, cur_len, dk, csr, csr_len,
                                          &res) == WOLFCERT_ERR_HTTP);
-    REQUIRE(res.cert_pem.data == NULL);
+    REQUIRE(res.cert.data == NULL);
 
     REQUIRE(wolfcert_est_session_open(&srv, &sess) == WOLFCERT_OK);
     REQUIRE(wolfcert_est_session_get_cacerts(sess, WOLFCERT_ENCODING_PEM,
@@ -616,10 +632,11 @@ static int check_empty_body(WOLFSSL_CTX* ctx, const WolfCertServerCfg* tmpl,
 
     sess = NULL;
     REQUIRE(wolfcert_est_session_open(&srv, &sess) == WOLFCERT_OK);
-    REQUIRE(wolfcert_est_session_simple_enroll(sess, csr, csr_len, &res)
+    REQUIRE(wolfcert_est_session_simple_enroll(sess, WOLFCERT_ENCODING_PEM,
+                                               csr, csr_len, &res)
             == WOLFCERT_ERR_HTTP);
     wolfcert_est_session_close(sess);
-    REQUIRE(res.cert_pem.data == NULL);
+    REQUIRE(res.cert.data == NULL);
 
     pthread_join(tid, NULL);
     return 0;
@@ -694,10 +711,11 @@ static int check_body_decodes_empty(WOLFSSL_CTX* ctx,
     REQUIRE(wolfcert_est_get_cacerts(&srv, WOLFCERT_ENCODING_DER,
                                      &certs) == WOLFCERT_ERR_HTTP);
     REQUIRE(certs.data == NULL);
-    REQUIRE(wolfcert_est_simple_enroll(&srv, csr, csr_len, &res)
+    REQUIRE(wolfcert_est_simple_enroll(&srv, WOLFCERT_ENCODING_PEM,
+                                       csr, csr_len, &res)
             == WOLFCERT_ERR_HTTP);
     REQUIRE(res.status == WOLFCERT_EST_STATUS_FAILURE);
-    REQUIRE(res.cert_pem.data == NULL);
+    REQUIRE(res.cert.data == NULL);
     pthread_join(tid, NULL);
     REQUIRE(meta.subject_dn == NULL && meta.key_usage == NULL);
     return 0;
@@ -721,8 +739,8 @@ static int test_issued_unparsed(const uint8_t* ca_der, size_t ca_len)
     rc = wolfcert_spki_hash(crit_ext_cert, sizeof(crit_ext_cert), 0, hash,
                             NULL);
     if (rc == WOLFCERT_OK)
-        rc = wolfcert_pkcs7_issued_to_pem(p7.data, p7.len, hash, NULL, &pem,
-                                          NULL);
+        rc = wolfcert_pkcs7_issued_certs(p7.data, p7.len, hash, NULL,
+                                         WOLFCERT_ENCODING_PEM, &pem, NULL);
     REQUIRE(rc == WOLFCERT_OK);
     REQUIRE(test_pem_cert_is(&pem, 0, crit_ext_cert, sizeof(crit_ext_cert)));
     wolfcert_buffer_free(&pem);
@@ -730,8 +748,8 @@ static int test_issued_unparsed(const uint8_t* ca_der, size_t ca_len)
     rc = wolfcert_spki_hash(unknown_attr_csr, sizeof(unknown_attr_csr), 1,
                             hash, NULL);
     if (rc == WOLFCERT_OK)
-        rc = wolfcert_pkcs7_issued_to_pem(p7.data, p7.len, hash, NULL, &pem,
-                                          NULL);
+        rc = wolfcert_pkcs7_issued_certs(p7.data, p7.len, hash, NULL,
+                                         WOLFCERT_ENCODING_PEM, &pem, NULL);
     wolfcert_buffer_free(&p7);
     REQUIRE(rc == WOLFCERT_OK);
     REQUIRE(test_pem_cert_is(&pem, 0, unknown_attr_cert,
@@ -769,7 +787,8 @@ static int test_issued_short_tbs(const uint8_t* ca_der, size_t ca_len,
     REQUIRE(wolfcert_pkcs7_build_certs_only(certs, lens, 4, &p7, NULL)
             == WOLFCERT_OK);
     wolfcert_clear_error();
-    rc = wolfcert_pkcs7_issued_to_pem(p7.data, p7.len, hash, NULL, &pem, NULL);
+    rc = wolfcert_pkcs7_issued_certs(p7.data, p7.len, hash, NULL,
+                                     WOLFCERT_ENCODING_PEM, &pem, NULL);
     wolfcert_buffer_free(&p7);
     REQUIRE(rc == WOLFCERT_OK);
     REQUIRE(wolfcert_last_error_message()[0] == '\0');
@@ -843,11 +862,12 @@ static int check_renewal_skips_old(WOLFSSL_CTX* ctx,
             memcpy(cur + old_len, ca_der, ca_len);
             n = (int)(old_len + ca_len);
         }
-        REQUIRE(wolfcert_est_simple_reenroll(&srv, cur, (size_t)n, dk,
+        REQUIRE(wolfcert_est_simple_reenroll(&srv, WOLFCERT_ENCODING_PEM,
+                                             cur, (size_t)n, dk,
                                              csr->data, csr->len, &res)
                 == WOLFCERT_OK);
-        REQUIRE(test_pem_cert_is(&res.cert_pem, 0, fresh, fresh_len));
-        REQUIRE(test_pem_cert_is(&res.cert_pem, 1, old, old_len));
+        REQUIRE(test_pem_cert_is(&res.cert, 0, fresh, fresh_len));
+        REQUIRE(test_pem_cert_is(&res.cert, 1, old, old_len));
         wolfcert_est_result_free(&res);
     }
     pthread_join(tid, NULL);
@@ -855,13 +875,14 @@ static int check_renewal_skips_old(WOLFSSL_CTX* ctx,
 
     REQUIRE(start_canned(ctx, &sc, &tid, &b64, certs, lens, 1, 1, url,
                          sizeof(url)) == 0);
-    int rc = wolfcert_est_simple_reenroll(&srv, old, old_len, dk, csr->data,
+    int rc = wolfcert_est_simple_reenroll(&srv, WOLFCERT_ENCODING_PEM,
+                                          old, old_len, dk, csr->data,
                                           csr->len, &res);
     pthread_join(tid, NULL);
     wolfcert_buffer_free(&b64);
     REQUIRE(rc == WOLFCERT_ERR_PROTOCOL);
     REQUIRE(res.status == WOLFCERT_EST_STATUS_FAILURE);
-    REQUIRE(res.cert_pem.data == NULL);
+    REQUIRE(res.cert.data == NULL);
     return 0;
 }
 
@@ -884,16 +905,56 @@ static int check_unparseable_csr(WOLFSSL_CTX* ctx,
     REQUIRE(pthread_create(&tid, NULL, srv_thread, &sc) == 0);
     snprintf(url, sizeof(url), "https://127.0.0.1:%d/.well-known/est", port);
     srv.server_url = url;
-    REQUIRE(wolfcert_est_simple_enroll(&srv, not_csr, sizeof(not_csr), &res)
+    REQUIRE(wolfcert_est_simple_enroll(&srv, WOLFCERT_ENCODING_PEM,
+                                       not_csr, sizeof(not_csr), &res)
             == WOLFCERT_ERR_PARSE);
     REQUIRE(res.status == WOLFCERT_EST_STATUS_UNSET);
     REQUIRE(wolfcert_est_session_open(&srv, &sess) == WOLFCERT_OK);
-    REQUIRE(wolfcert_est_session_simple_enroll_nb(sess, not_csr,
+    REQUIRE(wolfcert_est_session_simple_enroll_nb(sess, WOLFCERT_ENCODING_PEM,
+                                                  not_csr,
                                                   sizeof(not_csr), &res)
             == WOLFCERT_ERR_PARSE);
     wolfcert_est_session_close(sess);
     pthread_join(tid, NULL);
     REQUIRE(sc.request_len == 0);
+    return 0;
+}
+
+/* DER output from simpleenroll, issued cert first, then the CA; an unknown
+ * encoding is BAD_ARG before the dial. */
+static int check_der_output(WOLFSSL_CTX* ctx, const WolfCertServerCfg* tmpl,
+                            uint8_t* body, size_t body_len,
+                            const uint8_t* csr, size_t csr_len,
+                            const uint8_t* ca_der, size_t ca_len,
+                            const uint8_t* dev_der, size_t dev_len)
+{
+    struct srv_ctx sc = { .body = body, .len = body_len, .ctx = ctx,
+                          .conns = 1 };
+    WolfCertServerCfg srv = *tmpl;
+    WolfCertServerCfg closed = *tmpl;
+    WolfCertEstResult res = { 0 };
+    pthread_t tid;
+    char url[128];
+    int port = 0;
+
+    closed.server_url = "https://127.0.0.1:1/.well-known/est";
+    REQUIRE(wolfcert_est_simple_enroll(&closed, (WolfCertEncoding)7, csr,
+                                       csr_len, &res) == WOLFCERT_ERR_BAD_ARG);
+    REQUIRE(strstr(wolfcert_last_error_message(), "bad encoding") != NULL);
+
+    sc.listen_fd = listen_loopback(&port);
+    REQUIRE(sc.listen_fd >= 0);
+    REQUIRE(pthread_create(&tid, NULL, srv_thread, &sc) == 0);
+    snprintf(url, sizeof(url), "https://127.0.0.1:%d/.well-known/est", port);
+    srv.server_url = url;
+
+    REQUIRE(wolfcert_est_simple_enroll(&srv, WOLFCERT_ENCODING_DER, csr,
+                                       csr_len, &res) == WOLFCERT_OK);
+    REQUIRE(test_der_cert_is(&res.cert, 0, dev_der, dev_len));
+    REQUIRE(test_der_cert_is(&res.cert, 1, ca_der, ca_len));
+    wolfcert_est_result_free(&res);
+
+    pthread_join(tid, NULL);
     return 0;
 }
 
@@ -915,12 +976,13 @@ static int check_no_key_cert(WOLFSSL_CTX* ctx, const WolfCertServerCfg* tmpl,
     REQUIRE(start_canned(ctx, &sc, &tid, &b64, certs, lens, 1, 1, url,
                          sizeof(url)) == 0);
     srv.server_url = url;
-    rc = wolfcert_est_simple_enroll(&srv, csr, csr_len, &res);
+    rc = wolfcert_est_simple_enroll(&srv, WOLFCERT_ENCODING_PEM,
+                                    csr, csr_len, &res);
     pthread_join(tid, NULL);
     wolfcert_buffer_free(&b64);
     REQUIRE(rc == WOLFCERT_ERR_PROTOCOL);
     REQUIRE(res.status == WOLFCERT_EST_STATUS_FAILURE);
-    REQUIRE(res.cert_pem.data == NULL);
+    REQUIRE(res.cert.data == NULL);
     return 0;
 }
 
@@ -1018,25 +1080,29 @@ int main(void)
     wolfcert_buffer_free(&ca_pem);
 
     WolfCertEstResult enrolled = { 0 };
-    REQUIRE(wolfcert_est_simple_enroll(&srv, csr.data, csr.len, &enrolled) == WOLFCERT_OK);
-    REQUIRE(test_pem_cert_is(&enrolled.cert_pem, 0, dev_der, dev_len));
-    REQUIRE(test_pem_cert_is(&enrolled.cert_pem, 1, ca_der, ca_len));
+    REQUIRE(wolfcert_est_simple_enroll(&srv, WOLFCERT_ENCODING_PEM,
+                                       csr.data, csr.len, &enrolled)
+            == WOLFCERT_OK);
+    REQUIRE(test_pem_cert_is(&enrolled.cert, 0, dev_der, dev_len));
+    REQUIRE(test_pem_cert_is(&enrolled.cert, 1, ca_der, ca_len));
     wolfcert_est_result_free(&enrolled);
 
     WolfCertEstResult reenrolled = { 0 };
-    REQUIRE(wolfcert_est_simple_reenroll(&srv, ca_der, ca_len, dk,
+    REQUIRE(wolfcert_est_simple_reenroll(&srv, WOLFCERT_ENCODING_PEM,
+                                         ca_der, ca_len, dk,
                                          csr.data, csr.len, &reenrolled) == WOLFCERT_OK
             && reenrolled.status == WOLFCERT_EST_STATUS_SUCCESS);
-    REQUIRE(test_pem_cert_is(&reenrolled.cert_pem, 0, dev_der, dev_len));
+    REQUIRE(test_pem_cert_is(&reenrolled.cert, 0, dev_der, dev_len));
     wolfcert_est_result_free(&reenrolled);
 
     /* Session enroll sends the base64 CTE header (RFC 7030 section 4.2.1). */
     WolfCertEstSession* sess = NULL;
     REQUIRE(wolfcert_est_session_open(&srv, &sess) == WOLFCERT_OK);
     WolfCertEstResult sess_enrolled = { 0 };
-    REQUIRE(wolfcert_est_session_simple_enroll(sess, csr.data, csr.len,
+    REQUIRE(wolfcert_est_session_simple_enroll(sess, WOLFCERT_ENCODING_PEM,
+                                               csr.data, csr.len,
                                                &sess_enrolled) == WOLFCERT_OK);
-    REQUIRE(test_pem_cert_is(&sess_enrolled.cert_pem, 0, dev_der, dev_len));
+    REQUIRE(test_pem_cert_is(&sess_enrolled.cert, 0, dev_der, dev_len));
     wolfcert_est_result_free(&sess_enrolled);
     wolfcert_est_session_close(sess);
 
@@ -1046,7 +1112,7 @@ int main(void)
     WolfCertEstResult sess_nb_enrolled = { 0 };
     REQUIRE(pump_simple_enroll(sess_nb, csr.data, csr.len,
                                &sess_nb_enrolled) == 0);
-    REQUIRE(test_pem_cert_is(&sess_nb_enrolled.cert_pem, 0, dev_der,
+    REQUIRE(test_pem_cert_is(&sess_nb_enrolled.cert, 0, dev_der,
                              dev_len));
     wolfcert_est_result_free(&sess_nb_enrolled);
     wolfcert_est_session_close(sess_nb);
@@ -1060,6 +1126,8 @@ int main(void)
             == 0);
     REQUIRE(check_no_key_cert(ctx, &srv, csr.data, csr.len, ca_der,
                               ca_len) == 0);
+    REQUIRE(check_der_output(ctx, &srv, b64.data, b64.len, csr.data, csr.len,
+                             ca_der, ca_len, dev_der, dev_len) == 0);
 
     wolfcert_buffer_free(&csr);
     wolfcert_key_free(dk);

@@ -124,7 +124,8 @@ static int enroll_with_challenge(WolfCertServer* s)
 
     WolfCertKey* key = NULL;
     WolfCertBuffer cert_pem = { 0 };
-    int rc = wolfcert_client_enroll(cli, &srv, &key_cfg, &meta,
+    int rc = wolfcert_client_enroll(cli, &srv, WOLFCERT_ENCODING_PEM,
+                                    &key_cfg, &meta,
                                     &key, &cert_pem);
     REQUIRE(rc == WOLFCERT_OK);
     REQUIRE(cert_pem.len > 0);
@@ -157,7 +158,8 @@ static int enroll_without_challenge(WolfCertServer* s)
 
     WolfCertKey* key = NULL;
     WolfCertBuffer cert_pem = { 0 };
-    int rc = wolfcert_client_enroll(cli, &srv, &key_cfg, &meta,
+    int rc = wolfcert_client_enroll(cli, &srv, WOLFCERT_ENCODING_PEM,
+                                    &key_cfg, &meta,
                                     &key, &cert_pem);
     REQUIRE(rc == WOLFCERT_ERR_HTTP);
     REQUIRE(cert_pem.len == 0);
@@ -339,7 +341,8 @@ static int values_only_policy_does_not_block(WolfCertServer* s)
 
     WolfCertKey* key = NULL;
     WolfCertBuffer cert_pem = { 0 };
-    int rc = wolfcert_client_enroll(cli, &srv, &key_cfg, &meta,
+    int rc = wolfcert_client_enroll(cli, &srv, WOLFCERT_ENCODING_PEM,
+                                    &key_cfg, &meta,
                                     &key, &cert_pem);
     REQUIRE(rc == WOLFCERT_OK);
     REQUIRE(cert_pem.len > 0);

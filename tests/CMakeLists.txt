@@ -79,6 +79,7 @@ if(WOLFCERT_ENABLE_EST)
 
         add_executable(test_est_devid_roundtrip integration/test_est_devid_roundtrip.c)
         target_link_libraries(test_est_devid_roundtrip PRIVATE wolfcert Threads::Threads)
+        target_include_directories(test_est_devid_roundtrip PRIVATE ${CMAKE_SOURCE_DIR}/src)
         add_test(NAME est_devid_roundtrip COMMAND test_est_devid_roundtrip)
         set_tests_properties(est_devid_roundtrip PROPERTIES SKIP_RETURN_CODE 77)
 

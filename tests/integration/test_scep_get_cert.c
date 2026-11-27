@@ -79,15 +79,15 @@ static int get_cert_path(WolfCertServer* s)
 
     /* Step 1: enroll, so the CA has a certificate to hand back. */
     WolfCertScepResult r1 = { 0 };
-    REQUIRE(wolfcert_scep_pkcs_req(&cli, &caps,
+    REQUIRE(wolfcert_scep_pkcs_req(&cli, WOLFCERT_ENCODING_PEM, &caps,
                                    ca_der->buffer, ca_der->length,
                                    ca_der->buffer, ca_der->length,
                                    dk, csr.data, csr.len, &r1) == WOLFCERT_OK);
     REQUIRE(r1.status == WOLFCERT_SCEP_STATUS_SUCCESS);
-    REQUIRE(r1.cert_pem.data != NULL);
+    REQUIRE(r1.cert.data != NULL);
 
     DerBuffer* issued_der = NULL;
-    REQUIRE(wc_PemToDer(r1.cert_pem.data, (long)r1.cert_pem.len, CERT_TYPE,
+    REQUIRE(wc_PemToDer(r1.cert.data, (long)r1.cert.len, CERT_TYPE,
                         &issued_der, NULL, NULL, NULL) == 0);
 
     DecodedCert ic;
@@ -97,17 +97,17 @@ static int get_cert_path(WolfCertServer* s)
 
     /* Step 2: GetCert for that serial returns the same DER. */
     WolfCertScepResult r2 = { 0 };
-    int rc = wolfcert_scep_get_cert(&cli, &caps,
+    int rc = wolfcert_scep_get_cert(&cli, WOLFCERT_ENCODING_PEM, &caps,
                                     ca_der->buffer, ca_der->length,
                                     ca_der->buffer, ca_der->length,
                                     issued_der->buffer, issued_der->length,
                                     dk, ic.serial, (size_t)ic.serialSz, &r2);
     REQUIRE(rc == WOLFCERT_OK);
     REQUIRE(r2.status == WOLFCERT_SCEP_STATUS_SUCCESS);
-    REQUIRE(r2.cert_pem.data != NULL);
+    REQUIRE(r2.cert.data != NULL);
 
     DerBuffer* fetched_der = NULL;
-    REQUIRE(wc_PemToDer(r2.cert_pem.data, (long)r2.cert_pem.len, CERT_TYPE,
+    REQUIRE(wc_PemToDer(r2.cert.data, (long)r2.cert.len, CERT_TYPE,
                         &fetched_der, NULL, NULL, NULL) == 0);
     REQUIRE(fetched_der->length == issued_der->length);
     REQUIRE(memcmp(fetched_der->buffer, issued_der->buffer,
@@ -117,7 +117,7 @@ static int get_cert_path(WolfCertServer* s)
      * next GetCert succeeds again. */
     wolfcert_scep_result_free(&r2);
     wolfcert_scep_server_set_oom_fault(s, 4);
-    rc = wolfcert_scep_get_cert(&cli, &caps,
+    rc = wolfcert_scep_get_cert(&cli, WOLFCERT_ENCODING_PEM, &caps,
                                 ca_der->buffer, ca_der->length,
                                 ca_der->buffer, ca_der->length,
                                 issued_der->buffer, issued_der->length,
@@ -125,7 +125,7 @@ static int get_cert_path(WolfCertServer* s)
     wolfcert_scep_server_set_oom_fault(s, 0);
     REQUIRE(rc == WOLFCERT_ERR_HTTP);
     wolfcert_scep_result_free(&r2);
-    rc = wolfcert_scep_get_cert(&cli, &caps,
+    rc = wolfcert_scep_get_cert(&cli, WOLFCERT_ENCODING_PEM, &caps,
                                 ca_der->buffer, ca_der->length,
                                 ca_der->buffer, ca_der->length,
                                 issued_der->buffer, issued_der->length,
@@ -133,11 +133,37 @@ static int get_cert_path(WolfCertServer* s)
     REQUIRE(rc == WOLFCERT_OK);
     REQUIRE(r2.status == WOLFCERT_SCEP_STATUS_SUCCESS);
 
+    /* Step 2c: DER keeps the reply's order, CA cert first, and the issuer and
+     * serial check still finds the requested cert; the wrong cert fails it. */
+    wolfcert_scep_result_free(&r2);
+    wolfcert_server_set_issue_first(s, ca_der->buffer, ca_der->length);
+    rc = wolfcert_scep_get_cert(&cli, WOLFCERT_ENCODING_DER, &caps,
+                                ca_der->buffer, ca_der->length,
+                                ca_der->buffer, ca_der->length,
+                                issued_der->buffer, issued_der->length,
+                                dk, ic.serial, (size_t)ic.serialSz, &r2);
+    wolfcert_server_set_issue_first(s, NULL, 0);
+    REQUIRE(rc == WOLFCERT_OK);
+    REQUIRE(r2.status == WOLFCERT_SCEP_STATUS_SUCCESS);
+    REQUIRE(test_der_cert_is(&r2.cert, 0, ca_der->buffer, ca_der->length));
+    REQUIRE(test_der_cert_is(&r2.cert, 1, issued_der->buffer,
+                             issued_der->length));
+    wolfcert_scep_result_free(&r2);
+    wolfcert_scep_server_set_getcert_fault(s, 1, 0);
+    rc = wolfcert_scep_get_cert(&cli, WOLFCERT_ENCODING_DER, &caps,
+                                ca_der->buffer, ca_der->length,
+                                ca_der->buffer, ca_der->length,
+                                issued_der->buffer, issued_der->length,
+                                dk, ic.serial, (size_t)ic.serialSz, &r2);
+    wolfcert_scep_server_set_getcert_fault(s, 0, 0);
+    REQUIRE(rc == WOLFCERT_ERR_PROTOCOL);
+    REQUIRE(r2.cert.data == NULL);
+
     /* Step 3: a serial the CA never issued -> FAILURE / badCertId. */
     uint8_t bogus[8];
     memset(bogus, 0x7E, sizeof(bogus));
     WolfCertScepResult r3 = { 0 };
-    rc = wolfcert_scep_get_cert(&cli, &caps,
+    rc = wolfcert_scep_get_cert(&cli, WOLFCERT_ENCODING_PEM, &caps,
                                 ca_der->buffer, ca_der->length,
                                 ca_der->buffer, ca_der->length,
                                 issued_der->buffer, issued_der->length,
@@ -148,12 +174,12 @@ static int get_cert_path(WolfCertServer* s)
 
     /* Step 4: argument checks. */
     WolfCertScepResult r4 = { 0 };
-    REQUIRE(wolfcert_scep_get_cert(&cli, &caps,
+    REQUIRE(wolfcert_scep_get_cert(&cli, WOLFCERT_ENCODING_PEM, &caps,
                                    ca_der->buffer, ca_der->length,
                                    ca_der->buffer, ca_der->length,
                                    NULL, 0, dk, ic.serial, (size_t)ic.serialSz,
                                    &r4) == WOLFCERT_ERR_BAD_ARG);
-    REQUIRE(wolfcert_scep_get_cert(&cli, &caps,
+    REQUIRE(wolfcert_scep_get_cert(&cli, WOLFCERT_ENCODING_PEM, &caps,
                                    ca_der->buffer, ca_der->length,
                                    ca_der->buffer, ca_der->length,
                                    issued_der->buffer, issued_der->length,
@@ -167,7 +193,7 @@ static int get_cert_path(WolfCertServer* s)
     REQUIRE(wolfcert_csr_build(other, &other_meta, &other_csr) == WOLFCERT_OK);
 
     WolfCertScepResult ro = { 0 };
-    REQUIRE(wolfcert_scep_pkcs_req(&cli, &caps,
+    REQUIRE(wolfcert_scep_pkcs_req(&cli, WOLFCERT_ENCODING_PEM, &caps,
                                    ca_der->buffer, ca_der->length,
                                    ca_der->buffer, ca_der->length,
                                    other, other_csr.data, other_csr.len,
@@ -175,7 +201,7 @@ static int get_cert_path(WolfCertServer* s)
     REQUIRE(ro.status == WOLFCERT_SCEP_STATUS_SUCCESS);
 
     DerBuffer* other_der = NULL;
-    REQUIRE(wc_PemToDer(ro.cert_pem.data, (long)ro.cert_pem.len, CERT_TYPE,
+    REQUIRE(wc_PemToDer(ro.cert.data, (long)ro.cert.len, CERT_TYPE,
                         &other_der, NULL, NULL, NULL) == 0);
     DecodedCert oc;
     wc_InitDecodedCert(&oc, other_der->buffer, other_der->length, NULL);
@@ -183,7 +209,7 @@ static int get_cert_path(WolfCertServer* s)
 
     /* dk/issued_der sign; oc's serial is what we ask for. */
     WolfCertScepResult rx = { 0 };
-    REQUIRE(wolfcert_scep_get_cert(&cli, &caps,
+    REQUIRE(wolfcert_scep_get_cert(&cli, WOLFCERT_ENCODING_PEM, &caps,
                                    ca_der->buffer, ca_der->length,
                                    ca_der->buffer, ca_der->length,
                                    issued_der->buffer, issued_der->length,
@@ -191,7 +217,7 @@ static int get_cert_path(WolfCertServer* s)
                                    &rx) == WOLFCERT_OK);
     REQUIRE(rx.status == WOLFCERT_SCEP_STATUS_SUCCESS);
     DerBuffer* rx_der = NULL;
-    REQUIRE(wc_PemToDer(rx.cert_pem.data, (long)rx.cert_pem.len, CERT_TYPE,
+    REQUIRE(wc_PemToDer(rx.cert.data, (long)rx.cert.len, CERT_TYPE,
                         &rx_der, NULL, NULL, NULL) == 0);
     REQUIRE(rx_der->length == other_der->length);
     REQUIRE(memcmp(rx_der->buffer, other_der->buffer, rx_der->length) == 0);
@@ -212,14 +238,14 @@ static int get_cert_path(WolfCertServer* s)
     size_t  last_serial_len = 0;
     for (int i = 0; i < 17; i++) {
         WolfCertScepResult rn = { 0 };
-        REQUIRE(wolfcert_scep_pkcs_req(&cli, &caps,
+        REQUIRE(wolfcert_scep_pkcs_req(&cli, WOLFCERT_ENCODING_PEM, &caps,
                                        ca_der->buffer, ca_der->length,
                                        ca_der->buffer, ca_der->length,
                                        dk, csr.data, csr.len, &rn) == WOLFCERT_OK);
         REQUIRE(rn.status == WOLFCERT_SCEP_STATUS_SUCCESS);
 
         DerBuffer* nd = NULL;
-        REQUIRE(wc_PemToDer(rn.cert_pem.data, (long)rn.cert_pem.len, CERT_TYPE,
+        REQUIRE(wc_PemToDer(rn.cert.data, (long)rn.cert.len, CERT_TYPE,
                             &nd, NULL, NULL, NULL) == 0);
         DecodedCert nc;
         wc_InitDecodedCert(&nc, nd->buffer, nd->length, NULL);
@@ -242,7 +268,7 @@ static int get_cert_path(WolfCertServer* s)
 
     /* GetCert for the loop's first serial gets FAILURE/badCertId. */
     WolfCertScepResult r5 = { 0 };
-    REQUIRE(wolfcert_scep_get_cert(&cli, &caps,
+    REQUIRE(wolfcert_scep_get_cert(&cli, WOLFCERT_ENCODING_PEM, &caps,
                                    ca_der->buffer, ca_der->length,
                                    ca_der->buffer, ca_der->length,
                                    issued_der->buffer, issued_der->length,
@@ -254,26 +280,26 @@ static int get_cert_path(WolfCertServer* s)
 
     /* The newest is still held. */
     WolfCertScepResult r6 = { 0 };
-    REQUIRE(wolfcert_scep_get_cert(&cli, &caps,
+    REQUIRE(wolfcert_scep_get_cert(&cli, WOLFCERT_ENCODING_PEM, &caps,
                                    ca_der->buffer, ca_der->length,
                                    ca_der->buffer, ca_der->length,
                                    issued_der->buffer, issued_der->length,
                                    dk, last_serial, last_serial_len,
                                    &r6) == WOLFCERT_OK);
     REQUIRE(r6.status == WOLFCERT_SCEP_STATUS_SUCCESS);
-    REQUIRE(r6.cert_pem.data != NULL);
+    REQUIRE(r6.cert.data != NULL);
     wolfcert_scep_result_free(&r6);
 
     /* Step 7: a reply carrying a different certificate is refused. */
     wolfcert_scep_server_set_getcert_fault(s, 1, 0);
     WolfCertScepResult r7 = { 0 };
-    rc = wolfcert_scep_get_cert(&cli, &caps,
+    rc = wolfcert_scep_get_cert(&cli, WOLFCERT_ENCODING_PEM, &caps,
                                 ca_der->buffer, ca_der->length,
                                 ca_der->buffer, ca_der->length,
                                 issued_der->buffer, issued_der->length,
                                 dk, last_serial, last_serial_len, &r7);
     REQUIRE(rc == WOLFCERT_ERR_PROTOCOL);
-    REQUIRE(r7.cert_pem.data == NULL);
+    REQUIRE(r7.cert.data == NULL);
     REQUIRE(r7.status != WOLFCERT_SCEP_STATUS_SUCCESS);
     wolfcert_scep_result_free(&r7);
     wolfcert_scep_server_set_getcert_fault(s, 0, 0);
@@ -281,7 +307,7 @@ static int get_cert_path(WolfCertServer* s)
     /* Step 8: a GetCert with no signer certificate gets badRequest. */
     wolfcert_scep_server_set_getcert_fault(s, 0, 1);
     WolfCertScepResult r8 = { 0 };
-    rc = wolfcert_scep_get_cert(&cli, &caps,
+    rc = wolfcert_scep_get_cert(&cli, WOLFCERT_ENCODING_PEM, &caps,
                                 ca_der->buffer, ca_der->length,
                                 ca_der->buffer, ca_der->length,
                                 issued_der->buffer, issued_der->length,
@@ -289,7 +315,7 @@ static int get_cert_path(WolfCertServer* s)
     REQUIRE(rc == WOLFCERT_OK);
     REQUIRE(r8.status == WOLFCERT_SCEP_STATUS_FAILURE);
     REQUIRE(r8.fail_info == 2);
-    REQUIRE(r8.cert_pem.data == NULL);
+    REQUIRE(r8.cert.data == NULL);
     wolfcert_scep_result_free(&r8);
     wolfcert_scep_server_set_getcert_fault(s, 0, 0);
 
@@ -333,21 +359,21 @@ static int disabled_path(WolfCertServer* s)
     REQUIRE(wolfcert_csr_build(dk, &meta, &csr) == WOLFCERT_OK);
 
     WolfCertScepResult r1 = { 0 };
-    REQUIRE(wolfcert_scep_pkcs_req(&cli, &caps,
+    REQUIRE(wolfcert_scep_pkcs_req(&cli, WOLFCERT_ENCODING_PEM, &caps,
                                    ca_der->buffer, ca_der->length,
                                    ca_der->buffer, ca_der->length,
                                    dk, csr.data, csr.len, &r1) == WOLFCERT_OK);
     REQUIRE(r1.status == WOLFCERT_SCEP_STATUS_SUCCESS);
 
     DerBuffer* issued_der = NULL;
-    REQUIRE(wc_PemToDer(r1.cert_pem.data, (long)r1.cert_pem.len, CERT_TYPE,
+    REQUIRE(wc_PemToDer(r1.cert.data, (long)r1.cert.len, CERT_TYPE,
                         &issued_der, NULL, NULL, NULL) == 0);
     DecodedCert ic;
     wc_InitDecodedCert(&ic, issued_der->buffer, issued_der->length, NULL);
     REQUIRE(wc_ParseCert(&ic, CERT_TYPE, NO_VERIFY, NULL) == 0);
 
     WolfCertScepResult r2 = { 0 };
-    REQUIRE(wolfcert_scep_get_cert(&cli, &caps,
+    REQUIRE(wolfcert_scep_get_cert(&cli, WOLFCERT_ENCODING_PEM, &caps,
                                    ca_der->buffer, ca_der->length,
                                    ca_der->buffer, ca_der->length,
                                    issued_der->buffer, issued_der->length,

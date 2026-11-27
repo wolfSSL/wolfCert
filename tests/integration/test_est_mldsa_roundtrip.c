@@ -74,13 +74,14 @@ static int enroll_mldsa(const WolfCertServerCfg* client_cfg, WolfCertKeyType kt,
     REQUIRE(wolfcert_csr_build(dk, &meta, &csr) == WOLFCERT_OK);
 
     WolfCertEstResult issued = { 0 };
-    REQUIRE(wolfcert_est_simple_enroll(client_cfg, csr.data, csr.len, &issued)
+    REQUIRE(wolfcert_est_simple_enroll(client_cfg, WOLFCERT_ENCODING_PEM,
+                                       csr.data, csr.len, &issued)
             == WOLFCERT_OK);
-    REQUIRE(issued.cert_pem.len > 0);
-    size_t pem_len = issued.cert_pem.len;
+    REQUIRE(issued.cert.len > 0);
+    size_t pem_len = issued.cert.len;
 
     DerBuffer* issued_der = NULL;
-    REQUIRE(wc_PemToDer(issued.cert_pem.data, (long)issued.cert_pem.len,
+    REQUIRE(wc_PemToDer(issued.cert.data, (long)issued.cert.len,
                         CERT_TYPE, &issued_der, NULL, NULL, NULL) == 0);
     WOLFSSL_CERT_MANAGER* cm = wolfSSL_CertManagerNew();
     REQUIRE(cm != NULL);

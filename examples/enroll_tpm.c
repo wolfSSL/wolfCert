@@ -280,7 +280,8 @@ static int cmd_enroll(Tpm* t, const WolfCertServerCfg* srv, char** argv)
 
     int rc = wolfcert_client_new(&client);
     if (rc == WOLFCERT_OK)
-        rc = wolfcert_client_enroll(client, srv, &kcfg, &meta, &key, &cert);
+        rc = wolfcert_client_enroll(client, srv, WOLFCERT_ENCODING_PEM,
+                                    &kcfg, &meta, &key, &cert);
     if (rc != WOLFCERT_OK) {
         report("enroll", rc);
     }
@@ -350,7 +351,8 @@ static int cmd_reenroll(Tpm* t, const WolfCertServerCfg* srv, int argc,
     if (rc == WOLFCERT_OK)
         rc = wolfcert_client_new(&client);
     if (rc == WOLFCERT_OK)
-        rc = wolfcert_client_reenroll(client, srv, cert, cert_len, cur_key,
+        rc = wolfcert_client_reenroll(client, srv, WOLFCERT_ENCODING_PEM,
+                                      cert, cert_len, cur_key,
                                       rekey ? &new_cfg : NULL, &meta,
                                       &new_key, &renewed);
     if (rc != WOLFCERT_OK) {

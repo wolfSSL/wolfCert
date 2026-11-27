@@ -198,21 +198,24 @@ static int test_client_reenroll_keeps_identity(const uint8_t* tls_cert,
 
     memset(&meta, 0, sizeof(meta));
     meta.subject_dn = "CN=impostor";
-    REQUIRE(wolfcert_client_reenroll(NULL, &cli, cur_cert, cur_cert_len,
+    REQUIRE(wolfcert_client_reenroll(NULL, &cli, WOLFCERT_ENCODING_PEM,
+                                     cur_cert, cur_cert_len,
                                      cur_key, NULL, &meta, &out_key, &issued)
             == WOLFCERT_ERR_BAD_ARG);
 
     memset(&meta, 0, sizeof(meta));
     meta.san_dns     = impostor_dns;
     meta.san_dns_len = 1;
-    REQUIRE(wolfcert_client_reenroll(NULL, &cli, cur_cert, cur_cert_len,
+    REQUIRE(wolfcert_client_reenroll(NULL, &cli, WOLFCERT_ENCODING_PEM,
+                                     cur_cert, cur_cert_len,
                                      cur_key, NULL, &meta, &out_key, &issued)
             == WOLFCERT_ERR_BAD_ARG);
 
     /* Refused before key generation, which would fail UNSUPPORTED here. */
     memset(&meta, 0, sizeof(meta));
     meta.subject_dn = "CN=impostor";
-    REQUIRE(wolfcert_client_reenroll(NULL, &cli, cur_cert, cur_cert_len,
+    REQUIRE(wolfcert_client_reenroll(NULL, &cli, WOLFCERT_ENCODING_PEM,
+                                     cur_cert, cur_cert_len,
                                      cur_key, &no_kcfg, &meta, &out_key,
                                      &issued) == WOLFCERT_ERR_BAD_ARG);
 
@@ -221,7 +224,8 @@ static int test_client_reenroll_keeps_identity(const uint8_t* tls_cert,
     memset(&meta, 0, sizeof(meta));
     meta.customize     = impostor_customize;
     meta.customize_ctx = &called;
-    REQUIRE(wolfcert_client_reenroll(NULL, &cli, cur_cert, cur_cert_len,
+    REQUIRE(wolfcert_client_reenroll(NULL, &cli, WOLFCERT_ENCODING_PEM,
+                                     cur_cert, cur_cert_len,
                                      cur_key, NULL, &meta, &out_key, &issued)
             == WOLFCERT_OK);
     REQUIRE(called == 1);
@@ -230,7 +234,8 @@ static int test_client_reenroll_keeps_identity(const uint8_t* tls_cert,
     wolfcert_buffer_free(&issued);
 
     memset(&meta, 0, sizeof(meta));
-    REQUIRE(wolfcert_client_reenroll(NULL, &cli, cur_cert, cur_cert_len,
+    REQUIRE(wolfcert_client_reenroll(NULL, &cli, WOLFCERT_ENCODING_PEM,
+                                     cur_cert, cur_cert_len,
                                      cur_key, &kcfg, &meta, &out_key, &issued)
             == WOLFCERT_OK);
     REQUIRE(out_key != NULL);
@@ -390,13 +395,14 @@ int main(void)
     REQUIRE(wolfcert_csr_build(dk, &meta, &csr) == WOLFCERT_OK);
 
     WolfCertEstResult issued = { 0 };
-    int rc = wolfcert_est_simple_enroll(&cli, csr.data, csr.len, &issued);
+    int rc = wolfcert_est_simple_enroll(&cli, WOLFCERT_ENCODING_PEM,
+                                        csr.data, csr.len, &issued);
     if (rc != WOLFCERT_OK)
         fprintf(stderr, "enroll rc=%d (%s)\n", rc, wolfcert_strerror(rc));
     REQUIRE(rc == WOLFCERT_OK);
-    REQUIRE(memmem(issued.cert_pem.data, issued.cert_pem.len,
+    REQUIRE(memmem(issued.cert.data, issued.cert.len,
                    "BEGIN CERTIFICATE", 17) != NULL);
-    REQUIRE(check_subject_cn(&issued.cert_pem, "tls-est-client") == 0);
+    REQUIRE(check_subject_cn(&issued.cert, "tls-est-client") == 0);
 
     /* The same trust anchor in DER form. */
     DerBuffer* ta_der = NULL;

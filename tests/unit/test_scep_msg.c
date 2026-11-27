@@ -786,8 +786,8 @@ static int check_result_defined(const char* what, int rc, const WolfCertScepResu
         fprintf(stderr, "FAIL %s: expected BAD_ARG, got %d\n", what, rc);
         return 1;
     }
-    if (r->status != WOLFCERT_SCEP_STATUS_UNSET || r->cert_pem.data != NULL ||
-            r->cert_pem.len != 0 || r->transaction_id != NULL ||
+    if (r->status != WOLFCERT_SCEP_STATUS_UNSET || r->cert.data != NULL ||
+            r->cert.len != 0 || r->transaction_id != NULL ||
             r->transaction_id_len != 0 || r->fail_info != -1 || r->heap != NULL) {
         fprintf(stderr, "FAIL %s: result left indeterminate\n", what);
         return 1;
@@ -861,8 +861,9 @@ static int oom_disarm(void)
 }
 
 /* Failing each allocation in turn must give WOLFCERT_ERR_MEMORY or a match. */
-static int pem_has_cert_reports_oom(const char* pem, size_t pem_len,
-                                    const DecodedCert* lc)
+static int certs_have_cert_reports_oom(const void* certs, size_t certs_len,
+                                       WolfCertEncoding enc,
+                                       const DecodedCert* lc)
 {
     int fails;
     int failed;
@@ -870,14 +871,15 @@ static int pem_has_cert_reports_oom(const char* pem, size_t pem_len,
 
     for (fails = 0; rc != 1; fails++) {
         REQUIRE(oom_arm(fails) == 0);
-        rc = wolfcert_scep_pem_has_cert((const uint8_t*)pem, pem_len,
-                                        lc->issuerRaw,
-                                        (size_t)lc->issuerRawLen, lc->serial,
-                                        (size_t)lc->serialSz, NULL);
+        rc = wolfcert_scep_certs_have_cert((const uint8_t*)certs, certs_len,
+                                           enc, lc->issuerRaw,
+                                           (size_t)lc->issuerRawLen,
+                                           lc->serial, (size_t)lc->serialSz,
+                                           NULL);
         REQUIRE((failed = oom_disarm()) >= 0);
         if (rc != 1 && (rc != WOLFCERT_ERR_MEMORY || !failed)) {
-            fprintf(stderr, "FAIL pem_has_cert with allocation %d failing: "
-                    "%d\n", fails, rc);
+            fprintf(stderr, "FAIL certs_have_cert (enc %d) with allocation "
+                    "%d failing: %d\n", (int)enc, fails, rc);
             return 1;
         }
     }
@@ -908,8 +910,8 @@ static int rep_signer_reports_oom(const uint8_t* signer, size_t signer_len,
 }
 #endif
 
-/* A leaf's issuer and serial give 1 against its PEM, also behind a junk
- * entry; a wrong serial or issuer, or a NULL or truncated input, give 0. */
+/* A leaf's issuer and serial give 1 against its PEM, behind a junk entry or
+ * in DER; a wrong serial or issuer, or a NULL or truncated input, give 0. */
 static int test_pem_has_cert(void)
 {
     uint8_t* ca_der     = NULL;
@@ -941,7 +943,8 @@ static int test_pem_has_cert(void)
                                        lc.issuerRaw, (size_t)lc.issuerRawLen,
                                        lc.serial, (size_t)lc.serialSz, NULL) == 1);
 #ifdef TEST_ALLOC_FAILURES
-    REQUIRE(pem_has_cert_reports_oom(pem, (size_t)n, &lc) == 0);
+    REQUIRE(certs_have_cert_reports_oom(pem, (size_t)n, WOLFCERT_ENCODING_PEM,
+                                        &lc) == 0);
 #endif
 
     /* Behind an unparseable entry it must still be found. */
@@ -973,6 +976,34 @@ static int test_pem_has_cert(void)
                                            bad_issuer, (size_t)lc.issuerRawLen,
                                            lc.serial, (size_t)lc.serialSz,
                                            NULL) == 0);
+    }
+
+    /* Concatenated DER: found as the second cert, not for a wrong serial. */
+    {
+        static uint8_t ders[8192];
+        uint8_t bad_serial[32];
+
+        REQUIRE(ca_len + leaf_len <= sizeof(ders));
+        memcpy(ders, ca_der, ca_len);
+        memcpy(ders + ca_len, leaf_der, leaf_len);
+        REQUIRE(wolfcert_scep_certs_have_cert(ders, ca_len + leaf_len,
+                                              WOLFCERT_ENCODING_DER,
+                                              lc.issuerRaw,
+                                              (size_t)lc.issuerRawLen,
+                                              lc.serial, (size_t)lc.serialSz,
+                                              NULL) == 1);
+#ifdef TEST_ALLOC_FAILURES
+        REQUIRE(certs_have_cert_reports_oom(ders, ca_len + leaf_len,
+                                            WOLFCERT_ENCODING_DER, &lc) == 0);
+#endif
+        memcpy(bad_serial, lc.serial, (size_t)lc.serialSz);
+        bad_serial[lc.serialSz - 1] ^= 0xFF;
+        REQUIRE(wolfcert_scep_certs_have_cert(ders, ca_len + leaf_len,
+                                              WOLFCERT_ENCODING_DER,
+                                              lc.issuerRaw,
+                                              (size_t)lc.issuerRawLen,
+                                              bad_serial, (size_t)lc.serialSz,
+                                              NULL) == 0);
     }
 
     /* Degenerate inputs are refused without forming a pointer past the end. */
@@ -1018,56 +1049,66 @@ static int test_zero_length_args_rejected(void)
     } while (0)
 
     REJECTS("pkcs_req ra_cert_len",
-        wolfcert_scep_pkcs_req(&srv, &caps, blob, 0,
+        wolfcert_scep_pkcs_req(&srv, WOLFCERT_ENCODING_PEM, &caps, blob, 0,
                                blob, sizeof(blob), key, blob, sizeof(blob), &r));
     REJECTS("pkcs_req ca_bundle_len",
-        wolfcert_scep_pkcs_req(&srv, &caps, blob, sizeof(blob),
+        wolfcert_scep_pkcs_req(&srv, WOLFCERT_ENCODING_PEM,
+                               &caps, blob, sizeof(blob),
                                blob, 0, key, blob, sizeof(blob), &r));
     REJECTS("pkcs_req csr_der_len",
-        wolfcert_scep_pkcs_req(&srv, &caps, blob, sizeof(blob),
+        wolfcert_scep_pkcs_req(&srv, WOLFCERT_ENCODING_PEM,
+                               &caps, blob, sizeof(blob),
                                blob, sizeof(blob), key, blob, 0, &r));
 
     REJECTS("renewal_req ra_cert_len",
-        wolfcert_scep_renewal_req(&srv, &caps, blob, 0,
+        wolfcert_scep_renewal_req(&srv, WOLFCERT_ENCODING_PEM, &caps, blob, 0,
                                   blob, sizeof(blob), blob, sizeof(blob),
                                   key, blob, sizeof(blob), &r));
     REJECTS("renewal_req ca_bundle_len",
-        wolfcert_scep_renewal_req(&srv, &caps, blob, sizeof(blob),
+        wolfcert_scep_renewal_req(&srv, WOLFCERT_ENCODING_PEM,
+                                  &caps, blob, sizeof(blob),
                                   blob, 0, blob, sizeof(blob),
                                   key, blob, sizeof(blob), &r));
     REJECTS("renewal_req current_cert_len",
-        wolfcert_scep_renewal_req(&srv, &caps, blob, sizeof(blob),
+        wolfcert_scep_renewal_req(&srv, WOLFCERT_ENCODING_PEM,
+                                  &caps, blob, sizeof(blob),
                                   blob, sizeof(blob), blob, 0,
                                   key, blob, sizeof(blob), &r));
     REJECTS("renewal_req csr_der_len",
-        wolfcert_scep_renewal_req(&srv, &caps, blob, sizeof(blob),
+        wolfcert_scep_renewal_req(&srv, WOLFCERT_ENCODING_PEM,
+                                  &caps, blob, sizeof(blob),
                                   blob, sizeof(blob), blob, sizeof(blob),
                                   key, blob, 0, &r));
 
     REJECTS("get_cert_initial ra_cert_len",
-        wolfcert_scep_get_cert_initial(&srv, &caps, blob, 0,
+        wolfcert_scep_get_cert_initial(&srv, WOLFCERT_ENCODING_PEM,
+                                       &caps, blob, 0,
                                        blob, sizeof(blob), blob, sizeof(blob),
                                        key, blob, sizeof(blob),
                                        txid, sizeof(txid), &r));
     REJECTS("get_cert_initial ca_bundle_len",
-        wolfcert_scep_get_cert_initial(&srv, &caps, blob, sizeof(blob),
+        wolfcert_scep_get_cert_initial(&srv, WOLFCERT_ENCODING_PEM,
+                                       &caps, blob, sizeof(blob),
                                        blob, 0, blob, sizeof(blob),
                                        key, blob, sizeof(blob),
                                        txid, sizeof(txid), &r));
     REJECTS("get_cert_initial csr_der_len",
-        wolfcert_scep_get_cert_initial(&srv, &caps, blob, sizeof(blob),
+        wolfcert_scep_get_cert_initial(&srv, WOLFCERT_ENCODING_PEM,
+                                       &caps, blob, sizeof(blob),
                                        blob, sizeof(blob), blob, sizeof(blob),
                                        key, blob, 0,
                                        txid, sizeof(txid), &r));
     /* signer_cert stays optional, but a non-NULL one must carry bytes. */
     REJECTS("get_cert_initial signer_cert_len",
-        wolfcert_scep_get_cert_initial(&srv, &caps, blob, sizeof(blob),
+        wolfcert_scep_get_cert_initial(&srv, WOLFCERT_ENCODING_PEM,
+                                       &caps, blob, sizeof(blob),
                                        blob, sizeof(blob), blob, 0,
                                        key, blob, sizeof(blob),
                                        txid, sizeof(txid), &r));
     /* A transactionID outside PrintableString is refused before the dial. */
     REJECTS("get_cert_initial transaction_id",
-        wolfcert_scep_get_cert_initial(&srv, &caps, blob, sizeof(blob),
+        wolfcert_scep_get_cert_initial(&srv, WOLFCERT_ENCODING_PEM,
+                                       &caps, blob, sizeof(blob),
                                        blob, sizeof(blob), NULL, 0,
                                        key, blob, sizeof(blob),
                                        blob, sizeof(blob), &r));
@@ -1100,53 +1141,64 @@ static int test_result_defined_on_early_return(void)
 
     /* One-shot entry points with a NULL srv. */
     POISON_AND_CALL("pkcs_req",
-        wolfcert_scep_pkcs_req(NULL, &caps, blob, sizeof(blob),
+        wolfcert_scep_pkcs_req(NULL, WOLFCERT_ENCODING_PEM,
+                               &caps, blob, sizeof(blob),
                                blob, sizeof(blob), key, blob, sizeof(blob), &r));
     POISON_AND_CALL("renewal_req",
-        wolfcert_scep_renewal_req(NULL, &caps, blob, sizeof(blob),
+        wolfcert_scep_renewal_req(NULL, WOLFCERT_ENCODING_PEM,
+                                  &caps, blob, sizeof(blob),
                                   blob, sizeof(blob), blob, sizeof(blob),
                                   key, blob, sizeof(blob), &r));
     POISON_AND_CALL("get_cert_initial",
-        wolfcert_scep_get_cert_initial(NULL, &caps, blob, sizeof(blob),
+        wolfcert_scep_get_cert_initial(NULL, WOLFCERT_ENCODING_PEM,
+                                       &caps, blob, sizeof(blob),
                                        blob, sizeof(blob), blob, sizeof(blob),
                                        key, blob, sizeof(blob),
                                        blob, sizeof(blob), &r));
     POISON_AND_CALL("get_cert",
-        wolfcert_scep_get_cert(NULL, &caps, blob, sizeof(blob),
+        wolfcert_scep_get_cert(NULL, WOLFCERT_ENCODING_PEM,
+                               &caps, blob, sizeof(blob),
                                blob, sizeof(blob), blob, sizeof(blob),
                                key, blob, sizeof(blob), &r));
 
     /* Session entry points with a NULL session. */
     POISON_AND_CALL("session_pkcs_req",
-        wolfcert_scep_session_pkcs_req(NULL, &caps, blob, sizeof(blob),
+        wolfcert_scep_session_pkcs_req(NULL, WOLFCERT_ENCODING_PEM,
+                                       &caps, blob, sizeof(blob),
                                        blob, sizeof(blob), key,
                                        blob, sizeof(blob), &r));
     POISON_AND_CALL("session_pkcs_req_nb",
-        wolfcert_scep_session_pkcs_req_nb(NULL, &caps, blob, sizeof(blob),
+        wolfcert_scep_session_pkcs_req_nb(NULL, WOLFCERT_ENCODING_PEM,
+                                          &caps, blob, sizeof(blob),
                                           blob, sizeof(blob), key,
                                           blob, sizeof(blob), &r));
     POISON_AND_CALL("session_renewal_req",
-        wolfcert_scep_session_renewal_req(NULL, &caps, blob, sizeof(blob),
+        wolfcert_scep_session_renewal_req(NULL, WOLFCERT_ENCODING_PEM,
+                                          &caps, blob, sizeof(blob),
                                           blob, sizeof(blob), blob, sizeof(blob),
                                           key, blob, sizeof(blob), &r));
     POISON_AND_CALL("session_renewal_req_nb",
-        wolfcert_scep_session_renewal_req_nb(NULL, &caps, blob, sizeof(blob),
+        wolfcert_scep_session_renewal_req_nb(NULL, WOLFCERT_ENCODING_PEM,
+                                             &caps, blob, sizeof(blob),
                                              blob, sizeof(blob), blob, sizeof(blob),
                                              key, blob, sizeof(blob), &r));
     POISON_AND_CALL("session_get_cert_initial",
-        wolfcert_scep_session_get_cert_initial(NULL, &caps, blob, sizeof(blob),
+        wolfcert_scep_session_get_cert_initial(NULL, WOLFCERT_ENCODING_PEM,
+                                               &caps, blob, sizeof(blob),
                                                blob, sizeof(blob), blob, sizeof(blob),
                                                key, blob, sizeof(blob),
                                                blob, sizeof(blob), &r));
     POISON_AND_CALL("session_get_cert_initial_nb",
-        wolfcert_scep_session_get_cert_initial_nb(NULL, &caps, blob, sizeof(blob),
+        wolfcert_scep_session_get_cert_initial_nb(NULL, WOLFCERT_ENCODING_PEM,
+                                                  &caps, blob, sizeof(blob),
                                                   blob, sizeof(blob), blob, sizeof(blob),
                                                   key, blob, sizeof(blob),
                                                   blob, sizeof(blob), &r));
 #undef POISON_AND_CALL
 
     /* A NULL result is still rejected without a dereference. */
-    REQUIRE(wolfcert_scep_get_cert(NULL, &caps, blob, sizeof(blob),
+    REQUIRE(wolfcert_scep_get_cert(NULL, WOLFCERT_ENCODING_PEM,
+                                   &caps, blob, sizeof(blob),
                                    blob, sizeof(blob), blob, sizeof(blob),
                                    key, blob, sizeof(blob),
                                    NULL) == WOLFCERT_ERR_BAD_ARG);
@@ -2036,7 +2088,8 @@ static int test_scep_builds_before_dial(void)
     REQUIRE(wolfcert_key_from_pem(client_key_der_2048,
                                   sizeof(client_key_der_2048), NULL, &key)
             == WOLFCERT_OK);
-    rc = wolfcert_scep_pkcs_req(&srv, NULL, blob, sizeof(blob),
+    rc = wolfcert_scep_pkcs_req(&srv, WOLFCERT_ENCODING_PEM,
+                                NULL, blob, sizeof(blob),
                                 blob, sizeof(blob), key, blob, sizeof(blob), &r);
     wolfcert_key_free(key);
     REQUIRE(rc != WOLFCERT_OK && rc != WOLFCERT_ERR_IO);

@@ -88,7 +88,7 @@ void wolfcert_scep_result_free(WolfCertScepResult* r)
     if (r == NULL)
         return;
 
-    wolfcert_buffer_free(&r->cert_pem);
+    wolfcert_buffer_free(&r->cert);
     WOLFCERT_XFREE(r->transaction_id, r->heap);
 
     r->transaction_id     = NULL;
@@ -413,6 +413,34 @@ static int scep_build_txid(const ScepTxidSel* sel,
     return WOLFCERT_OK;
 }
 
+/* 1 when der is a cert with this issuer and serial, 0 if not, or an error. */
+static int cert_has_issuer_serial(DecodedCert* dc, const uint8_t* der,
+                                  size_t der_len,
+                                  const uint8_t* issuer, size_t issuer_len,
+                                  const uint8_t* serial, size_t serial_len,
+                                  void* heap)
+{
+    int match = 0;
+    int rc;
+
+    wc_InitDecodedCert(dc, der, (word32)der_len, heap);
+    rc = wc_ParseCert(dc, CERT_TYPE, NO_VERIFY, NULL);
+    if (rc == MEMORY_E) {
+        match = WOLFCERT_ERR(WOLFCERT_ERR_MEMORY, "scep",
+            "GetCert: out of memory parsing a certificate");
+    }
+    else if (rc == 0) {
+        match = dc->serialSz > 0 &&
+                (size_t)dc->serialSz == serial_len &&
+                memcmp(dc->serial, serial, serial_len) == 0 &&
+                dc->issuerRaw != NULL && dc->issuerRawLen > 0 &&
+                (size_t)dc->issuerRawLen == issuer_len &&
+                memcmp(dc->issuerRaw, issuer, issuer_len) == 0;
+    }
+    wc_FreeDecodedCert(dc);
+    return match;
+}
+
 WOLFCERT_TEST_VIS int wolfcert_scep_pem_has_cert(const uint8_t* pem, size_t pem_len,
                                      const uint8_t* issuer, size_t issuer_len,
                                      const uint8_t* serial, size_t serial_len,
@@ -454,26 +482,45 @@ WOLFCERT_TEST_VIS int wolfcert_scep_pem_has_cert(const uint8_t* pem, size_t pem_
                 "GetCert: out of memory decoding a certificate");
         }
         else if (rc == WOLFCERT_OK) {
-            wc_InitDecodedCert(dc, der.data, (word32)der.len, heap);
-            rc = wc_ParseCert(dc, CERT_TYPE, NO_VERIFY, NULL);
-            if (rc == MEMORY_E) {
-                match = WOLFCERT_ERR(WOLFCERT_ERR_MEMORY, "scep",
-                    "GetCert: out of memory parsing a certificate");
-            }
-            else if (rc == 0) {
-                match = dc->serialSz > 0 &&
-                        (size_t)dc->serialSz == serial_len &&
-                        memcmp(dc->serial, serial, serial_len) == 0 &&
-                        dc->issuerRaw != NULL && dc->issuerRawLen > 0 &&
-                        (size_t)dc->issuerRawLen == issuer_len &&
-                        memcmp(dc->issuerRaw, issuer, issuer_len) == 0;
-            }
-            wc_FreeDecodedCert(dc);
+            match = cert_has_issuer_serial(dc, der.data, der.len, issuer,
+                                           issuer_len, serial, serial_len,
+                                           heap);
         }
 
         wolfcert_buffer_free(&der);
         p += blen;
     }
+
+    WOLFCERT_XFREE(dc, heap);
+    return match;
+}
+
+WOLFCERT_TEST_VIS int wolfcert_scep_certs_have_cert(const uint8_t* certs,
+    size_t certs_len, WolfCertEncoding enc,
+    const uint8_t* issuer, size_t issuer_len,
+    const uint8_t* serial, size_t serial_len, void* heap)
+{
+    DecodedCert* dc;
+    const uint8_t* item = NULL;
+    size_t item_len = 0;
+    size_t off = 0;
+    int match = 0;
+
+    if (enc != WOLFCERT_ENCODING_DER)
+        return wolfcert_scep_pem_has_cert(certs, certs_len, issuer, issuer_len,
+                                          serial, serial_len, heap);
+    if (certs == NULL || issuer == NULL || serial == NULL)
+        return 0;
+
+    dc = (DecodedCert*)WOLFCERT_XMALLOC(sizeof(*dc), heap);
+    if (dc == NULL)
+        return WOLFCERT_ERR(WOLFCERT_ERR_MEMORY, "scep",
+            "GetCert: cannot allocate a DecodedCert");
+
+    while (match == 0 && wolfcert_der_chain_next(certs, certs_len, &off, &item,
+                                                 &item_len) == 1)
+        match = cert_has_issuer_serial(dc, item, item_len, issuer, issuer_len,
+                                       serial, serial_len, heap);
 
     WOLFCERT_XFREE(dc, heap);
     return match;
@@ -651,15 +698,11 @@ static int scep_call_check(const ScepCall* c)
             ok = c->caps_out != NULL;
             break;
         case SCEP_OP_GET_CA_CERT:
-            ok = c->buf_out != NULL &&
-                 (c->enc == WOLFCERT_ENCODING_PEM ||
-                  c->enc == WOLFCERT_ENCODING_DER);
+            ok = c->buf_out != NULL;
             break;
         case SCEP_OP_GET_NEXT_CA_CERT:
             ok = c->buf_out != NULL && c->ca_bundle != NULL &&
-                 c->ca_bundle_len > 0 &&
-                 (c->enc == WOLFCERT_ENCODING_PEM ||
-                  c->enc == WOLFCERT_ENCODING_DER);
+                 c->ca_bundle_len > 0;
             break;
         case SCEP_OP_PKCS_REQ:
             ok = c->csr != NULL && c->csr_len > 0;
@@ -688,6 +731,9 @@ static int scep_call_check(const ScepCall* c)
              c->ca_bundle != NULL && c->ca_bundle_len > 0 && c->key != NULL;
     if (!ok)
         return WOLFCERT_ERR_BAD_ARG;
+    if (c->op != SCEP_OP_GET_CA_CAPS && !wolfcert_enc_ok(c->enc))
+        return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "scep", "bad encoding %d",
+                            (int)c->enc);
 
     if (pki && c->key->type != WOLFCERT_KEY_RSA)
         return WOLFCERT_ERR(WOLFCERT_ERR_UNSUPPORTED, "scep",
@@ -1149,12 +1195,15 @@ static int scep_finish(const WolfCertScepSession* s, WolfCertScepResult* out)
                 rc = wolfcert_cert_der_hash(s->in_signer, s->in_signer_len,
                                             signer_hash, heap);
             if (rc == WOLFCERT_OK && s->in_op != SCEP_OP_GET_CERT)
-                rc = wolfcert_pkcs7_issued_to_pem(inner.data, inner.len,
-                                                  s->in_key_hash, signer_hash,
-                                                  &out->cert_pem, heap);
+                rc = wolfcert_pkcs7_issued_certs(inner.data, inner.len,
+                                                 s->in_key_hash, signer_hash,
+                                                 s->in_enc, &out->cert, heap);
+            else if (rc == WOLFCERT_OK && s->in_enc == WOLFCERT_ENCODING_DER)
+                rc = wolfcert_pkcs7_certs_to_der(inner.data, inner.len,
+                                                 &out->cert, heap);
             else if (rc == WOLFCERT_OK)
                 rc = wolfcert_pkcs7_certs_to_pem(inner.data, inner.len,
-                                                 &out->cert_pem, heap);
+                                                 &out->cert, heap);
             if (rc == WOLFCERT_OK)
                 out->status = WOLFCERT_SCEP_STATUS_SUCCESS;
         }
@@ -1197,13 +1246,18 @@ static int scep_session_begin_pki_op(WolfCertScepSession* s, const ScepCall* c,
         s->in_signer = s->in_signer_copy;
     }
     else if (rc == WOLFCERT_OK) {
-        if (nb) {
-            s->in_signer_copy = dup_buf(c->cert, c->cert_len, heap);
+        size_t len = wolfcert_der_seq_len(c->cert, c->cert_len);
+
+        if (len == 0)
+            rc = WOLFCERT_ERR(WOLFCERT_ERR_PARSE, "scep",
+                "signer cert is not a complete DER certificate");
+        else if (nb) {
+            s->in_signer_copy = dup_buf(c->cert, len, heap);
             if (s->in_signer_copy == NULL)
                 rc = WOLFCERT_ERR_MEMORY;
         }
         s->in_signer     = nb ? s->in_signer_copy : c->cert;
-        s->in_signer_len = c->cert_len;
+        s->in_signer_len = len;
     }
 
     if (rc == WOLFCERT_OK) {
@@ -1305,15 +1359,15 @@ static int scep_check_get_cert(const WolfCertScepSession* s,
                                                    &issuer, &issuer_len,
                                                    &serial, &serial_len);
     if (rc == WOLFCERT_OK)
-        has = wolfcert_scep_pem_has_cert(out->cert_pem.data, out->cert_pem.len,
-                                         issuer, issuer_len, serial, serial_len,
-                                         s->heap);
+        has = wolfcert_scep_certs_have_cert(out->cert.data, out->cert.len,
+                                            s->in_enc, issuer, issuer_len,
+                                            serial, serial_len, s->heap);
     else
         has = rc;
     if (has == 1)
         return WOLFCERT_OK;
 
-    wolfcert_buffer_free(&out->cert_pem);
+    wolfcert_buffer_free(&out->cert);
     out->status = WOLFCERT_SCEP_STATUS_UNSET;
     return (has < 0) ? has : WOLFCERT_ERR(WOLFCERT_ERR_PROTOCOL, "scep",
         "GetCert returned no certificate with the requested issuer and serial");
@@ -1479,6 +1533,7 @@ int wolfcert_scep_session_get_next_ca_cert_nb(WolfCertScepSession* s,
 }
 
 int wolfcert_scep_session_pkcs_req(WolfCertScepSession* s,
+                                   WolfCertEncoding enc,
                                    const WolfCertScepCaps* caps,
                                    const uint8_t* ra_cert, size_t ra_cert_len,
                                    const uint8_t* ca_bundle, size_t ca_bundle_len,
@@ -1486,7 +1541,7 @@ int wolfcert_scep_session_pkcs_req(WolfCertScepSession* s,
                                    const uint8_t* csr_der, size_t csr_der_len,
                                    WolfCertScepResult* out)
 {
-    ScepCall c = { .op = SCEP_OP_PKCS_REQ, .caps = caps,
+    ScepCall c = { .op = SCEP_OP_PKCS_REQ, .enc = enc, .caps = caps,
                    .ra_cert = ra_cert, .ra_cert_len = ra_cert_len,
                    .ca_bundle = ca_bundle, .ca_bundle_len = ca_bundle_len,
                    .key = new_key, .csr = csr_der, .csr_len = csr_der_len,
@@ -1496,6 +1551,7 @@ int wolfcert_scep_session_pkcs_req(WolfCertScepSession* s,
 }
 
 int wolfcert_scep_session_pkcs_req_nb(WolfCertScepSession* s,
+                                      WolfCertEncoding enc,
                                       const WolfCertScepCaps* caps,
                                       const uint8_t* ra_cert, size_t ra_cert_len,
                                       const uint8_t* ca_bundle, size_t ca_bundle_len,
@@ -1503,7 +1559,7 @@ int wolfcert_scep_session_pkcs_req_nb(WolfCertScepSession* s,
                                       const uint8_t* csr_der, size_t csr_der_len,
                                       WolfCertScepResult* out)
 {
-    ScepCall c = { .op = SCEP_OP_PKCS_REQ, .caps = caps,
+    ScepCall c = { .op = SCEP_OP_PKCS_REQ, .enc = enc, .caps = caps,
                    .ra_cert = ra_cert, .ra_cert_len = ra_cert_len,
                    .ca_bundle = ca_bundle, .ca_bundle_len = ca_bundle_len,
                    .key = new_key, .csr = csr_der, .csr_len = csr_der_len,
@@ -1513,6 +1569,7 @@ int wolfcert_scep_session_pkcs_req_nb(WolfCertScepSession* s,
 }
 
 int wolfcert_scep_session_renewal_req(WolfCertScepSession* s,
+                                      WolfCertEncoding enc,
                                       const WolfCertScepCaps* caps,
                                       const uint8_t* ra_cert, size_t ra_cert_len,
                                       const uint8_t* ca_bundle, size_t ca_bundle_len,
@@ -1521,7 +1578,7 @@ int wolfcert_scep_session_renewal_req(WolfCertScepSession* s,
                                       const uint8_t* csr_der, size_t csr_der_len,
                                       WolfCertScepResult* out)
 {
-    ScepCall c = { .op = SCEP_OP_RENEWAL, .caps = caps,
+    ScepCall c = { .op = SCEP_OP_RENEWAL, .enc = enc, .caps = caps,
                    .ra_cert = ra_cert, .ra_cert_len = ra_cert_len,
                    .ca_bundle = ca_bundle, .ca_bundle_len = ca_bundle_len,
                    .cert = current_cert, .cert_len = current_cert_len,
@@ -1532,6 +1589,7 @@ int wolfcert_scep_session_renewal_req(WolfCertScepSession* s,
 }
 
 int wolfcert_scep_session_renewal_req_nb(WolfCertScepSession* s,
+                                         WolfCertEncoding enc,
                                          const WolfCertScepCaps* caps,
                                          const uint8_t* ra_cert, size_t ra_cert_len,
                                          const uint8_t* ca_bundle, size_t ca_bundle_len,
@@ -1540,7 +1598,7 @@ int wolfcert_scep_session_renewal_req_nb(WolfCertScepSession* s,
                                          const uint8_t* csr_der, size_t csr_der_len,
                                          WolfCertScepResult* out)
 {
-    ScepCall c = { .op = SCEP_OP_RENEWAL, .caps = caps,
+    ScepCall c = { .op = SCEP_OP_RENEWAL, .enc = enc, .caps = caps,
                    .ra_cert = ra_cert, .ra_cert_len = ra_cert_len,
                    .ca_bundle = ca_bundle, .ca_bundle_len = ca_bundle_len,
                    .cert = current_cert, .cert_len = current_cert_len,
@@ -1551,6 +1609,7 @@ int wolfcert_scep_session_renewal_req_nb(WolfCertScepSession* s,
 }
 
 int wolfcert_scep_session_get_cert_initial(WolfCertScepSession* s,
+                                           WolfCertEncoding enc,
                                            const WolfCertScepCaps* caps,
                                            const uint8_t* ra_cert, size_t ra_cert_len,
                                            const uint8_t* ca_bundle, size_t ca_bundle_len,
@@ -1560,7 +1619,7 @@ int wolfcert_scep_session_get_cert_initial(WolfCertScepSession* s,
                                            const uint8_t* transaction_id, size_t transaction_id_len,
                                            WolfCertScepResult* out)
 {
-    ScepCall c = { .op = SCEP_OP_GET_CERT_INITIAL, .caps = caps,
+    ScepCall c = { .op = SCEP_OP_GET_CERT_INITIAL, .enc = enc, .caps = caps,
                    .ra_cert = ra_cert, .ra_cert_len = ra_cert_len,
                    .ca_bundle = ca_bundle, .ca_bundle_len = ca_bundle_len,
                    .cert = signer_cert, .cert_len = signer_cert_len,
@@ -1572,6 +1631,7 @@ int wolfcert_scep_session_get_cert_initial(WolfCertScepSession* s,
 }
 
 int wolfcert_scep_session_get_cert_initial_nb(WolfCertScepSession* s,
+                                              WolfCertEncoding enc,
                                               const WolfCertScepCaps* caps,
                                               const uint8_t* ra_cert, size_t ra_cert_len,
                                               const uint8_t* ca_bundle, size_t ca_bundle_len,
@@ -1581,7 +1641,7 @@ int wolfcert_scep_session_get_cert_initial_nb(WolfCertScepSession* s,
                                               const uint8_t* transaction_id, size_t transaction_id_len,
                                               WolfCertScepResult* out)
 {
-    ScepCall c = { .op = SCEP_OP_GET_CERT_INITIAL, .caps = caps,
+    ScepCall c = { .op = SCEP_OP_GET_CERT_INITIAL, .enc = enc, .caps = caps,
                    .ra_cert = ra_cert, .ra_cert_len = ra_cert_len,
                    .ca_bundle = ca_bundle, .ca_bundle_len = ca_bundle_len,
                    .cert = signer_cert, .cert_len = signer_cert_len,
@@ -1593,6 +1653,7 @@ int wolfcert_scep_session_get_cert_initial_nb(WolfCertScepSession* s,
 }
 
 int wolfcert_scep_session_get_cert(WolfCertScepSession* s,
+                                   WolfCertEncoding enc,
                                    const WolfCertScepCaps* caps,
                                    const uint8_t* ra_cert, size_t ra_cert_len,
                                    const uint8_t* ca_bundle, size_t ca_bundle_len,
@@ -1601,7 +1662,7 @@ int wolfcert_scep_session_get_cert(WolfCertScepSession* s,
                                    const uint8_t* serial, size_t serial_len,
                                    WolfCertScepResult* out)
 {
-    ScepCall c = { .op = SCEP_OP_GET_CERT, .caps = caps,
+    ScepCall c = { .op = SCEP_OP_GET_CERT, .enc = enc, .caps = caps,
                    .ra_cert = ra_cert, .ra_cert_len = ra_cert_len,
                    .ca_bundle = ca_bundle, .ca_bundle_len = ca_bundle_len,
                    .cert = signer_cert, .cert_len = signer_cert_len,
@@ -1612,6 +1673,7 @@ int wolfcert_scep_session_get_cert(WolfCertScepSession* s,
 }
 
 int wolfcert_scep_session_get_cert_nb(WolfCertScepSession* s,
+                                      WolfCertEncoding enc,
                                       const WolfCertScepCaps* caps,
                                       const uint8_t* ra_cert, size_t ra_cert_len,
                                       const uint8_t* ca_bundle, size_t ca_bundle_len,
@@ -1620,7 +1682,7 @@ int wolfcert_scep_session_get_cert_nb(WolfCertScepSession* s,
                                       const uint8_t* serial, size_t serial_len,
                                       WolfCertScepResult* out)
 {
-    ScepCall c = { .op = SCEP_OP_GET_CERT, .caps = caps,
+    ScepCall c = { .op = SCEP_OP_GET_CERT, .enc = enc, .caps = caps,
                    .ra_cert = ra_cert, .ra_cert_len = ra_cert_len,
                    .ca_bundle = ca_bundle, .ca_bundle_len = ca_bundle_len,
                    .cert = signer_cert, .cert_len = signer_cert_len,
@@ -1684,6 +1746,7 @@ int wolfcert_scep_get_next_ca_cert(const WolfCertServerCfg* srv,
 }
 
 int wolfcert_scep_pkcs_req(const WolfCertServerCfg* srv,
+                           WolfCertEncoding enc,
                            const WolfCertScepCaps*  caps,
                            const uint8_t* ra_cert, size_t ra_cert_len,
                            const uint8_t* ca_bundle, size_t ca_bundle_len,
@@ -1691,7 +1754,7 @@ int wolfcert_scep_pkcs_req(const WolfCertServerCfg* srv,
                            const uint8_t* csr_der, size_t csr_der_len,
                            WolfCertScepResult*      out)
 {
-    ScepCall c = { .op = SCEP_OP_PKCS_REQ, .caps = caps,
+    ScepCall c = { .op = SCEP_OP_PKCS_REQ, .enc = enc, .caps = caps,
                    .ra_cert = ra_cert, .ra_cert_len = ra_cert_len,
                    .ca_bundle = ca_bundle, .ca_bundle_len = ca_bundle_len,
                    .key = new_key, .csr = csr_der, .csr_len = csr_der_len,
@@ -1701,6 +1764,7 @@ int wolfcert_scep_pkcs_req(const WolfCertServerCfg* srv,
 }
 
 int wolfcert_scep_renewal_req(const WolfCertServerCfg* srv,
+                              WolfCertEncoding enc,
                               const WolfCertScepCaps*  caps,
                               const uint8_t* ra_cert, size_t ra_cert_len,
                               const uint8_t* ca_bundle, size_t ca_bundle_len,
@@ -1709,7 +1773,7 @@ int wolfcert_scep_renewal_req(const WolfCertServerCfg* srv,
                               const uint8_t* csr_der, size_t csr_der_len,
                               WolfCertScepResult* out)
 {
-    ScepCall c = { .op = SCEP_OP_RENEWAL, .caps = caps,
+    ScepCall c = { .op = SCEP_OP_RENEWAL, .enc = enc, .caps = caps,
                    .ra_cert = ra_cert, .ra_cert_len = ra_cert_len,
                    .ca_bundle = ca_bundle, .ca_bundle_len = ca_bundle_len,
                    .cert = current_cert, .cert_len = current_cert_len,
@@ -1720,6 +1784,7 @@ int wolfcert_scep_renewal_req(const WolfCertServerCfg* srv,
 }
 
 int wolfcert_scep_get_cert_initial(const WolfCertServerCfg* srv,
+                                   WolfCertEncoding enc,
                                    const WolfCertScepCaps*  caps,
                                    const uint8_t* ra_cert, size_t ra_cert_len,
                                    const uint8_t* ca_bundle, size_t ca_bundle_len,
@@ -1730,7 +1795,7 @@ int wolfcert_scep_get_cert_initial(const WolfCertServerCfg* srv,
                                    size_t transaction_id_len,
                                    WolfCertScepResult* out)
 {
-    ScepCall c = { .op = SCEP_OP_GET_CERT_INITIAL, .caps = caps,
+    ScepCall c = { .op = SCEP_OP_GET_CERT_INITIAL, .enc = enc, .caps = caps,
                    .ra_cert = ra_cert, .ra_cert_len = ra_cert_len,
                    .ca_bundle = ca_bundle, .ca_bundle_len = ca_bundle_len,
                    .cert = signer_cert, .cert_len = signer_cert_len,
@@ -1742,6 +1807,7 @@ int wolfcert_scep_get_cert_initial(const WolfCertServerCfg* srv,
 }
 
 int wolfcert_scep_get_cert(const WolfCertServerCfg* srv,
+                           WolfCertEncoding enc,
                            const WolfCertScepCaps* caps,
                            const uint8_t* ra_cert, size_t ra_cert_len,
                            const uint8_t* ca_bundle, size_t ca_bundle_len,
@@ -1750,7 +1816,7 @@ int wolfcert_scep_get_cert(const WolfCertServerCfg* srv,
                            const uint8_t* serial, size_t serial_len,
                            WolfCertScepResult* out)
 {
-    ScepCall c = { .op = SCEP_OP_GET_CERT, .caps = caps,
+    ScepCall c = { .op = SCEP_OP_GET_CERT, .enc = enc, .caps = caps,
                    .ra_cert = ra_cert, .ra_cert_len = ra_cert_len,
                    .ca_bundle = ca_bundle, .ca_bundle_len = ca_bundle_len,
                    .cert = signer_cert, .cert_len = signer_cert_len,

@@ -83,7 +83,8 @@ int main(int argc, char** argv)
 
     WolfCertServerCfg srv = { .protocol = WOLFCERT_PROTO_EST, .server_url = argv[1] };
     WolfCertEstResult res = { 0 };
-    int rc = wolfcert_est_simple_enroll(&srv, csr.data, csr.len, &res);
+    int rc = wolfcert_est_simple_enroll(&srv, WOLFCERT_ENCODING_PEM,
+                                        csr.data, csr.len, &res);
     if (rc != WOLFCERT_OK) {
         fprintf(stderr, "enroll failed: %s\n", wolfcert_strerror(rc));
         return 2;
@@ -93,7 +94,7 @@ int main(int argc, char** argv)
                 res.retry_after_sec);
         return 2;
     }
-    fwrite(res.cert_pem.data, 1, res.cert_pem.len, stdout);
+    fwrite(res.cert.data, 1, res.cert.len, stdout);
 
     wolfcert_buffer_free(&csr);
     wolfcert_est_result_free(&res);

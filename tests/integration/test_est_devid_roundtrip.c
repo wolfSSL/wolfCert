@@ -31,6 +31,7 @@
 #include <wolfcert/scep.h>
 #endif
 #include <wolfcert/server.h>
+#include "internal.h"
 
 #include <wolfssl/wolfcrypt/asn_public.h>
 #include <wolfssl/wolfcrypt/cryptocb.h>
@@ -544,20 +545,25 @@ static int run_key_type(const char* url, WolfCertKeyType type, int param,
 
         for (int call = 0; call < 4; call++) {
             if (call == 0)
-                src = wolfcert_scep_pkcs_req(&scep, NULL, dummy,
+                src = wolfcert_scep_pkcs_req(&scep, WOLFCERT_ENCODING_PEM,
+                        NULL, dummy,
                         sizeof(dummy), dummy, sizeof(dummy), key, csr.data,
                         csr.len, &res);
             else if (call == 1)
-                src = wolfcert_scep_renewal_req(&scep, NULL, dummy,
+                src = wolfcert_scep_renewal_req(&scep, WOLFCERT_ENCODING_PEM,
+                        NULL, dummy,
                         sizeof(dummy), dummy, sizeof(dummy), dummy,
                         sizeof(dummy), key, csr.data, csr.len, &res);
             else if (call == 2)
-                src = wolfcert_scep_get_cert_initial(&scep, NULL, dummy,
+                src = wolfcert_scep_get_cert_initial(&scep,
+                                                     WOLFCERT_ENCODING_PEM,
+                                                     NULL, dummy,
                         sizeof(dummy), dummy, sizeof(dummy), dummy,
                         sizeof(dummy), key, csr.data, csr.len, txid,
                         sizeof(txid), &res);
             else
-                src = wolfcert_scep_get_cert(&scep, NULL, dummy,
+                src = wolfcert_scep_get_cert(&scep, WOLFCERT_ENCODING_PEM,
+                        NULL, dummy,
                         sizeof(dummy), dummy, sizeof(dummy), dummy,
                         sizeof(dummy), key, dummy, sizeof(dummy), &res);
             if (src != WOLFCERT_ERR_UNSUPPORTED)
@@ -583,15 +589,19 @@ static int run_key_type(const char* url, WolfCertKeyType type, int param,
         REQUIRE(wolfcert_scep_session_open(&scep_sess, &ss) == WOLFCERT_OK);
         for (int call = 0; call < 3; call++) {
             if (call == 0)
-                src = wolfcert_scep_session_pkcs_req(ss, &caps, dummy,
+                src = wolfcert_scep_session_pkcs_req(ss, WOLFCERT_ENCODING_PEM,
+                        &caps, dummy,
                         sizeof(dummy), dummy, sizeof(dummy), key, csr.data,
                         csr.len, &res);
             else if (call == 1)
-                src = wolfcert_scep_session_renewal_req(ss, &caps, dummy,
+                src = wolfcert_scep_session_renewal_req(ss,
+                                                        WOLFCERT_ENCODING_PEM,
+                                                        &caps, dummy,
                         sizeof(dummy), dummy, sizeof(dummy), dummy,
                         sizeof(dummy), key, csr.data, csr.len, &res);
             else
-                src = wolfcert_scep_session_get_cert_initial(ss, &caps,
+                src = wolfcert_scep_session_get_cert_initial(ss,
+                        WOLFCERT_ENCODING_PEM, &caps,
                         dummy, sizeof(dummy), dummy, sizeof(dummy), dummy,
                         sizeof(dummy), key, csr.data, csr.len, txid,
                         sizeof(txid), &res);
@@ -606,7 +616,8 @@ static int run_key_type(const char* url, WolfCertKeyType type, int param,
         close(hole);
     }
 #endif
-    rc = wolfcert_est_simple_enroll(&cli, csr.data, csr.len, &issued);
+    rc = wolfcert_est_simple_enroll(&cli, WOLFCERT_ENCODING_PEM,
+                                    csr.data, csr.len, &issued);
     wolfcert_buffer_free(&csr);
     if (rc != WOLFCERT_OK)
         fprintf(stderr, "enroll rc=%d (%s)\n", rc,
@@ -615,15 +626,15 @@ static int run_key_type(const char* url, WolfCertKeyType type, int param,
 
     /* Reload by id from the issued certificate as PEM, ahead of another
      * certificate, and as DER padded like a fixed-size flash slot. */
-    REQUIRE(wolfcert_key_from_id(&kcfg, issued.cert_pem.data,
-                                 issued.cert_pem.len, &reloaded) ==
+    REQUIRE(wolfcert_key_from_id(&kcfg, issued.cert.data,
+                                 issued.cert.len, &reloaded) ==
             WOLFCERT_OK);
     REQUIRE(wolfcert_key_type(reloaded) == type);
     REQUIRE(wolfcert_key_to_pem(reloaded, &out) == WOLFCERT_ERR_UNSUPPORTED);
     {
         static uint8_t buf[16384];
-        int der_len = wc_CertPemToDer(issued.cert_pem.data,
-                                      (int)issued.cert_pem.len, buf,
+        int der_len = wc_CertPemToDer(issued.cert.data,
+                                      (int)issued.cert.len, buf,
                                       sizeof(buf), CERT_TYPE);
         WolfCertKey* other = NULL;
 
@@ -635,11 +646,11 @@ static int run_key_type(const char* url, WolfCertKeyType type, int param,
         wolfcert_key_free(other);
         other = NULL;
 
-        REQUIRE(issued.cert_pem.len + tls_cert_len <= sizeof(buf));
-        memcpy(buf, issued.cert_pem.data, issued.cert_pem.len);
-        memcpy(buf + issued.cert_pem.len, tls_cert, tls_cert_len);
+        REQUIRE(issued.cert.len + tls_cert_len <= sizeof(buf));
+        memcpy(buf, issued.cert.data, issued.cert.len);
+        memcpy(buf + issued.cert.len, tls_cert, tls_cert_len);
         REQUIRE(wolfcert_key_from_id(&kcfg, buf,
-                                     issued.cert_pem.len + tls_cert_len,
+                                     issued.cert.len + tls_cert_len,
                                      &other) == WOLFCERT_OK);
         REQUIRE(wolfcert_key_type(other) == type);
         wolfcert_key_free(other);
@@ -648,15 +659,15 @@ static int run_key_type(const char* url, WolfCertKeyType type, int param,
         WolfCertKeyCfg wrong = kcfg;
         if (type == WOLFCERT_KEY_ECC || type == WOLFCERT_KEY_RSA) {
             wrong.param = type == WOLFCERT_KEY_RSA ? 3072 : 384;
-            REQUIRE(wolfcert_key_from_id(&wrong, issued.cert_pem.data,
-                                         issued.cert_pem.len, &other) ==
+            REQUIRE(wolfcert_key_from_id(&wrong, issued.cert.data,
+                                         issued.cert.len, &other) ==
                     WOLFCERT_ERR_BAD_ARG);
         }
 #if defined(WOLFCERT_HAVE_MLDSA) && !defined(WOLFSSL_NO_ML_DSA_65)
         if (type == WOLFCERT_KEY_MLDSA44) {
             wrong.type = WOLFCERT_KEY_MLDSA65;
-            REQUIRE(wolfcert_key_from_id(&wrong, issued.cert_pem.data,
-                                         issued.cert_pem.len, &other) !=
+            REQUIRE(wolfcert_key_from_id(&wrong, issued.cert.data,
+                                         issued.cert.len, &other) !=
                     WOLFCERT_OK);
         }
 #endif
@@ -680,8 +691,9 @@ static int run_key_type(const char* url, WolfCertKeyType type, int param,
 
     REQUIRE(wolfcert_client_new(&client) == WOLFCERT_OK);
     ops = mock_private_ops;
-    rc = wolfcert_client_reenroll(client, &cli, issued.cert_pem.data,
-                                  issued.cert_pem.len, reloaded, NULL,
+    rc = wolfcert_client_reenroll(client, &cli, WOLFCERT_ENCODING_PEM,
+                                  issued.cert.data,
+                                  issued.cert.len, reloaded, NULL,
                                   &renew_meta, &unused, &renewed);
     wolfcert_client_free(client);
     REQUIRE(unused == NULL);
@@ -693,14 +705,15 @@ static int run_key_type(const char* url, WolfCertKeyType type, int param,
 #endif
 
     /* The store key as the mTLS identity, one-shot and in a session. */
-    cli.client_cert     = issued.cert_pem.data;
-    cli.client_cert_len = issued.cert_pem.len;
+    cli.client_cert     = issued.cert.data;
+    cli.client_cert_len = issued.cert.len;
     cli.client_key      = NULL;
     cli.client_key_len  = 0;
     cli.client_key_obj  = reloaded;
     REQUIRE(wolfcert_csr_build(reloaded, &meta, &csr) == WOLFCERT_OK);
     ops = mock_private_ops;
-    rc = wolfcert_est_simple_enroll(&cli, csr.data, csr.len, &second);
+    rc = wolfcert_est_simple_enroll(&cli, WOLFCERT_ENCODING_PEM,
+                                    csr.data, csr.len, &second);
     wolfcert_buffer_free(&csr);
     if (rc != want)
         fprintf(stderr, "id enroll rc=%d (%s)\n", rc,
@@ -716,7 +729,8 @@ static int run_key_type(const char* url, WolfCertKeyType type, int param,
         REQUIRE(wolfcert_csr_build(reloaded, &meta, &csr) == WOLFCERT_OK);
         ops = mock_private_ops;
         REQUIRE(wolfcert_est_session_open(&cli, &sess) == WOLFCERT_OK);
-        rc = wolfcert_est_session_simple_enroll(sess, csr.data, csr.len,
+        rc = wolfcert_est_session_simple_enroll(sess, WOLFCERT_ENCODING_PEM,
+                                                csr.data, csr.len,
                                                 &third);
         wolfcert_est_session_close(sess);
         wolfcert_buffer_free(&csr);
@@ -764,18 +778,21 @@ static int test_client_key_obj(const char* url,
 
     REQUIRE(wolfcert_key_generate(&kcfg, &key) == WOLFCERT_OK);
     REQUIRE(wolfcert_csr_build(key, &meta, &csr) == WOLFCERT_OK);
-    REQUIRE(wolfcert_est_simple_enroll(&cli, csr.data, csr.len, &cert) ==
+    REQUIRE(wolfcert_est_simple_enroll(&cli, WOLFCERT_ENCODING_PEM,
+                                       csr.data, csr.len, &cert) ==
             WOLFCERT_OK);
 
     cli.client_key_obj = key;
-    REQUIRE(wolfcert_est_simple_enroll(&cli, csr.data, csr.len, &again) ==
+    REQUIRE(wolfcert_est_simple_enroll(&cli, WOLFCERT_ENCODING_PEM,
+                                       csr.data, csr.len, &again) ==
             WOLFCERT_ERR_BAD_ARG);
-    cli.client_cert     = cert.cert_pem.data;
-    cli.client_cert_len = cert.cert_pem.len;
+    cli.client_cert     = cert.cert.data;
+    cli.client_cert_len = cert.cert.len;
     cli.client_key      = NULL;
     cli.client_key_len  = 0;
     requests = mock_sign_requests;
-    REQUIRE(wolfcert_est_simple_enroll(&cli, csr.data, csr.len, &again) ==
+    REQUIRE(wolfcert_est_simple_enroll(&cli, WOLFCERT_ENCODING_PEM,
+                                       csr.data, csr.len, &again) ==
             WOLFCERT_OK);
     REQUIRE(mock_sign_requests == requests);
     wolfcert_est_result_free(&again);
@@ -800,12 +817,14 @@ static int test_client_key_obj(const char* url,
     kcfg.dev_id = MOCK_DEVID;
     REQUIRE(wolfcert_key_generate(&kcfg, &key) == WOLFCERT_OK);
     REQUIRE(wolfcert_csr_build(key, &meta, &csr) == WOLFCERT_OK);
-    REQUIRE(wolfcert_est_simple_enroll(&cli, csr.data, csr.len, &cert) ==
+    REQUIRE(wolfcert_est_simple_enroll(&cli, WOLFCERT_ENCODING_PEM,
+                                       csr.data, csr.len, &cert) ==
             WOLFCERT_OK);
     REQUIRE(wolfcert_client_new(&client) == WOLFCERT_OK);
     requests = mock_sign_requests;
-    int rc = wolfcert_client_reenroll(client, &cli, cert.cert_pem.data,
-                                      cert.cert_pem.len, key, NULL,
+    int rc = wolfcert_client_reenroll(client, &cli, WOLFCERT_ENCODING_PEM,
+                                      cert.cert.data,
+                                      cert.cert.len, key, NULL,
                                       &renew_meta, &unused, &renewed);
     wolfcert_client_free(client);
     if (rc != WOLFCERT_OK)
@@ -863,7 +882,8 @@ static int test_default_dev_id(const char* url,
 
     REQUIRE(wolfcert_set_default_dev_id(INVALID_DEVID) == WOLFCERT_OK);
     accel_calls = 0;
-    REQUIRE(wolfcert_est_simple_enroll(&cli, csr.data, csr.len, &cert) ==
+    REQUIRE(wolfcert_est_simple_enroll(&cli, WOLFCERT_ENCODING_PEM,
+                                       csr.data, csr.len, &cert) ==
             WOLFCERT_OK);
     wolfcert_est_result_free(&cert);
     REQUIRE(accel_calls == 0);
@@ -871,7 +891,8 @@ static int test_default_dev_id(const char* url,
     REQUIRE(wolfcert_set_default_dev_id(ACCEL_DEVID) == WOLFCERT_OK);
     REQUIRE(wolfcert_default_dev_id() == ACCEL_DEVID);
     accel_signs = 0;
-    REQUIRE(wolfcert_est_simple_enroll(&cli, csr.data, csr.len, &cert) ==
+    REQUIRE(wolfcert_est_simple_enroll(&cli, WOLFCERT_ENCODING_PEM,
+                                       csr.data, csr.len, &cert) ==
             WOLFCERT_OK);
     wolfcert_est_result_free(&cert);
     REQUIRE(accel_calls > 0);
@@ -887,7 +908,8 @@ static int test_default_dev_id(const char* url,
     REQUIRE(wolfcert_key_dev_id(key) == INVALID_DEVID);
     REQUIRE(wolfcert_csr_build(key, &meta, &csr) == WOLFCERT_OK);
     REQUIRE(accel_signs == 0);
-    REQUIRE(wolfcert_est_simple_enroll(&cli, csr.data, csr.len, &soft) ==
+    REQUIRE(wolfcert_est_simple_enroll(&cli, WOLFCERT_ENCODING_PEM,
+                                       csr.data, csr.len, &soft) ==
             WOLFCERT_OK);
     wolfcert_buffer_free(&csr);
     soft_key = key;
@@ -922,18 +944,20 @@ static int test_default_dev_id(const char* url,
     kcfg.key_id_len = sizeof(id) - 1;
     REQUIRE(wolfcert_key_generate(&kcfg, &key) == WOLFCERT_OK);
     REQUIRE(wolfcert_csr_build(key, &meta, &csr) == WOLFCERT_OK);
-    REQUIRE(wolfcert_est_simple_enroll(&cli, csr.data, csr.len, &issued) ==
+    REQUIRE(wolfcert_est_simple_enroll(&cli, WOLFCERT_ENCODING_PEM,
+                                       csr.data, csr.len, &issued) ==
             WOLFCERT_OK);
 
-    cli.client_cert     = issued.cert_pem.data;
-    cli.client_cert_len = issued.cert_pem.len;
+    cli.client_cert     = issued.cert.data;
+    cli.client_cert_len = issued.cert.len;
     cli.client_key      = NULL;
     cli.client_key_len  = 0;
     cli.client_key_obj  = key;
     accel_calls = 0;
     accel_signs = 0;
     ops = mock_private_ops;
-    REQUIRE(wolfcert_est_simple_enroll(&cli, csr.data, csr.len, &cert) ==
+    REQUIRE(wolfcert_est_simple_enroll(&cli, WOLFCERT_ENCODING_PEM,
+                                       csr.data, csr.len, &cert) ==
             WOLFCERT_OK);
     REQUIRE(accel_calls > 0);
     REQUIRE(accel_signs == 0);
@@ -941,11 +965,12 @@ static int test_default_dev_id(const char* url,
     wolfcert_est_result_free(&cert);
 
     /* A software key handle signs its handshake on the default device. */
-    cli.client_cert     = soft.cert_pem.data;
-    cli.client_cert_len = soft.cert_pem.len;
+    cli.client_cert     = soft.cert.data;
+    cli.client_cert_len = soft.cert.len;
     cli.client_key_obj  = soft_key;
     accel_signs = 0;
-    REQUIRE(wolfcert_est_simple_enroll(&cli, csr.data, csr.len, &cert) ==
+    REQUIRE(wolfcert_est_simple_enroll(&cli, WOLFCERT_ENCODING_PEM,
+                                       csr.data, csr.len, &cert) ==
             WOLFCERT_OK);
     REQUIRE(accel_signs > 0);
 
@@ -955,6 +980,87 @@ static int test_default_dev_id(const char* url,
     wolfcert_est_result_free(&issued);
     wolfcert_buffer_free(&csr);
     wolfcert_key_free(soft_key);
+    wolfcert_key_free(key);
+    mock_reset();
+    return 0;
+}
+
+/* DER client enroll and renewal from that DER put the new cert first; an
+ * unknown encoding is refused before a key_id key is made. */
+static int test_client_der(WolfCertServer* srv, const char* url,
+                           const uint8_t* tls_cert, size_t tls_cert_len,
+                           const uint8_t* boot_cert, size_t boot_cert_len,
+                           const uint8_t* boot_key, size_t boot_key_len,
+                           const WolfCertBuffer* ca_der)
+{
+    static const uint8_t id[] = "wolfcert/der-key";
+    const WolfCertCertMeta meta = { .subject_dn = "CN=devid-der" };
+    const WolfCertCertMeta no_meta = { 0 };
+    WolfCertKeyCfg scfg = { .type = TEST_ENROLL_KEY_TYPE,
+                            .param = TEST_ENROLL_KEY_PARAM,
+                            .dev_id = INVALID_DEVID };
+    WolfCertKeyCfg kcfg = { .type = TEST_ENROLL_KEY_TYPE,
+                            .param = TEST_ENROLL_KEY_PARAM,
+                            .dev_id = MOCK_DEVID,
+                            .key_id = id, .key_id_len = sizeof(id) - 1 };
+    WolfCertServerCfg cli = {
+        .protocol          = WOLFCERT_PROTO_EST,
+        .server_url        = url,
+        .trust_anchors     = tls_cert,
+        .trust_anchors_len = tls_cert_len,
+        .verify_server     = 1,
+        .client_cert       = boot_cert,
+        .client_cert_len   = boot_cert_len,
+        .client_key        = boot_key,
+        .client_key_len    = boot_key_len,
+    };
+    WolfCertKey* key = NULL;
+    WolfCertKey* none = NULL;
+    WolfCertBuffer cert = { 0 };
+    int gens;
+    int rc;
+
+    wolfcert_server_set_issue_first(srv, ca_der->data, ca_der->len);
+    rc = wolfcert_client_enroll(NULL, &cli, WOLFCERT_ENCODING_DER, &scfg,
+                                &meta, &key, &cert);
+    wolfcert_server_set_issue_first(srv, NULL, 0);
+    REQUIRE(rc == WOLFCERT_OK);
+    REQUIRE(!test_der_cert_is(&cert, 0, ca_der->data, ca_der->len));
+    REQUIRE(test_der_cert_is(&cert, 1, ca_der->data, ca_der->len));
+#ifdef KEEP_PEER_CERT
+    WolfCertBuffer renewed = { 0 };
+    WolfCertKey* unused = NULL;
+    size_t off = 0;
+    size_t len = 0;
+
+    REQUIRE(test_der_cert_at(&cert, 0, &off, &len));
+    wolfcert_server_set_issue_first(srv, cert.data + off, len);
+    rc = wolfcert_client_reenroll(NULL, &cli, WOLFCERT_ENCODING_DER,
+                                  cert.data, cert.len, key, NULL, &no_meta,
+                                  &unused, &renewed);
+    wolfcert_server_set_issue_first(srv, NULL, 0);
+    REQUIRE(rc == WOLFCERT_OK);
+    REQUIRE(unused == NULL);
+    REQUIRE(!test_der_cert_is(&renewed, 0, cert.data + off, len));
+    REQUIRE(test_der_cert_is(&renewed, 1, cert.data + off, len));
+    wolfcert_buffer_free(&renewed);
+#endif
+
+    mock_reset();
+    gens = mock_keygens;
+    none = key;
+    REQUIRE(wolfcert_client_enroll(NULL, &cli, (WolfCertEncoding)7, &kcfg,
+                                   &meta, &none, &cert) ==
+            WOLFCERT_ERR_BAD_ARG);
+    REQUIRE(none == NULL);
+    REQUIRE(strstr(wolfcert_last_error_message(), "bad encoding") != NULL);
+    none = key;
+    REQUIRE(wolfcert_client_reenroll(NULL, &cli, (WolfCertEncoding)7,
+                                     cert.data, cert.len, key, &kcfg,
+                                     &no_meta, &none, &cert) ==
+            WOLFCERT_ERR_BAD_ARG);
+    REQUIRE(none == NULL && mock_keygens == gens);
+    wolfcert_buffer_free(&cert);
     wolfcert_key_free(key);
     mock_reset();
     return 0;
@@ -989,7 +1095,8 @@ static int test_failure_keeps_key(const char* url, const uint8_t* tls_cert,
     size_t got_len = 0;
 
     mock_reset();
-    REQUIRE(wolfcert_client_enroll(NULL, &cli, &kcfg, &meta, &key, &cert) !=
+    REQUIRE(wolfcert_client_enroll(NULL, &cli, WOLFCERT_ENCODING_PEM,
+                                   &kcfg, &meta, &key, &cert) !=
             WOLFCERT_OK);
     REQUIRE(key != NULL);
     REQUIRE(wolfcert_key_id(key, &got_id, &got_len) == WOLFCERT_OK);
@@ -999,30 +1106,35 @@ static int test_failure_keeps_key(const char* url, const uint8_t* tls_cert,
 
     mock_reset();
     REQUIRE(wolfcert_key_generate(&scfg, &cur) == WOLFCERT_OK);
-    REQUIRE(wolfcert_client_reenroll(NULL, &cli, junk, sizeof(junk), cur,
+    REQUIRE(wolfcert_client_reenroll(NULL, &cli, WOLFCERT_ENCODING_PEM,
+                                     junk, sizeof(junk), cur,
                                      &kcfg, &renew, &key, &cert) ==
             WOLFCERT_ERR_PARSE);
     REQUIRE(key != NULL);
     wolfcert_key_free(key);
     key = NULL;
 
-    REQUIRE(wolfcert_client_enroll(NULL, &cli, &scfg, &meta, &key, &cert) !=
+    REQUIRE(wolfcert_client_enroll(NULL, &cli, WOLFCERT_ENCODING_PEM,
+                                   &scfg, &meta, &key, &cert) !=
             WOLFCERT_OK);
     REQUIRE(key == NULL);
 
     /* An early failure also leaves out_key defined. */
     key = cur;
     scfg.param = 123;
-    REQUIRE(wolfcert_client_enroll(NULL, &cli, &scfg, &meta, &key, &cert) !=
+    REQUIRE(wolfcert_client_enroll(NULL, &cli, WOLFCERT_ENCODING_PEM,
+                                   &scfg, &meta, &key, &cert) !=
             WOLFCERT_OK);
     REQUIRE(key == NULL);
     key = cur;
-    REQUIRE(wolfcert_client_reenroll(NULL, &cli, junk, sizeof(junk), cur,
+    REQUIRE(wolfcert_client_reenroll(NULL, &cli, WOLFCERT_ENCODING_PEM,
+                                     junk, sizeof(junk), cur,
                                      NULL, &meta, &key, &cert) ==
             WOLFCERT_ERR_BAD_ARG);
     REQUIRE(key == NULL);
     scfg.param = TEST_ENROLL_KEY_PARAM;
-    REQUIRE(wolfcert_client_reenroll(NULL, &cli, junk, sizeof(junk), cur,
+    REQUIRE(wolfcert_client_reenroll(NULL, &cli, WOLFCERT_ENCODING_PEM,
+                                     junk, sizeof(junk), cur,
                                      &scfg, &renew, &key, &cert) ==
             WOLFCERT_ERR_PARSE);
     REQUIRE(key == NULL);
@@ -1031,9 +1143,11 @@ static int test_failure_keeps_key(const char* url, const uint8_t* tls_cert,
     /* A protocol the client calls cannot enroll creates no key. */
     cli.protocol = WOLFCERT_PROTO_SCEP;
     int gens = mock_keygens;
-    REQUIRE(wolfcert_client_enroll(NULL, &cli, &kcfg, &meta, &key, &cert) ==
+    REQUIRE(wolfcert_client_enroll(NULL, &cli, WOLFCERT_ENCODING_PEM,
+                                   &kcfg, &meta, &key, &cert) ==
             WOLFCERT_ERR_UNSUPPORTED);
-    REQUIRE(wolfcert_client_reenroll(NULL, &cli, junk, sizeof(junk), cur,
+    REQUIRE(wolfcert_client_reenroll(NULL, &cli, WOLFCERT_ENCODING_PEM,
+                                     junk, sizeof(junk), cur,
                                      &kcfg, &renew, &key, &cert) ==
             WOLFCERT_ERR_UNSUPPORTED);
     REQUIRE(key == NULL);
@@ -1148,6 +1262,9 @@ int main(void)
     REQUIRE(test_default_dev_id(url, tls_cert, tls_cert_len, boot_cert,
                                 boot_cert_len, boot_key, boot_key_len) == 0);
     REQUIRE(test_failure_keeps_key(url, tls_cert, tls_cert_len) == 0);
+    REQUIRE(test_client_der(srv, url, tls_cert, tls_cert_len, boot_cert,
+                            boot_cert_len, boot_key, boot_key_len, &ca_der)
+            == 0);
 
     wolfcert_server_stop(srv);
     pthread_join(tid, NULL);

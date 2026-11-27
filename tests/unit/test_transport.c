@@ -22,6 +22,7 @@
 #include <wolfcert/wolfcert.h>
 #include <wolfcert/http.h>
 #include "../test_static_mem.h"
+#include "../test_oom.h"
 #include "internal.h"
 #include "../http_test_util.h"
 
@@ -1269,35 +1270,7 @@ static int test_no_builtin_transport(void)
 }
 #endif
 
-#if defined(USE_WOLFSSL_MEMORY) && !defined(WOLFSSL_STATIC_MEMORY) && \
-    !defined(WOLFSSL_DEBUG_MEMORY)
-#define TEST_ALLOC_FAILURES
-
-static int g_allocs_left = -1;
-static int g_alloc_failed;
-
-/* Fails only the allocation g_allocs_left counts down to. */
-static int alloc_fails(void)
-{
-    if (g_allocs_left < 0)
-        return 0;
-    if (g_allocs_left-- == 0) {
-        g_alloc_failed = 1;
-        return 1;
-    }
-    return 0;
-}
-
-static void* failing_malloc(size_t sz)
-{
-    return alloc_fails() ? NULL : malloc(sz);
-}
-
-static void* failing_realloc(void* ptr, size_t sz)
-{
-    return alloc_fails() ? NULL : realloc(ptr, sz);
-}
-
+#ifdef TEST_OOM
 /* Each failed allocation gives ERR_MEMORY. */
 static int test_header_oom(void)
 {
@@ -1305,29 +1278,20 @@ static int test_header_oom(void)
         "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n"
         "Retry-After: 120\r\nContent-Length: 2\r\n\r\nokEXTRA";
     WolfCertHttpResponse resp = { 0 };
-    wolfSSL_Malloc_cb  saved_malloc;
-    wolfSSL_Free_cb    saved_free;
-    wolfSSL_Realloc_cb saved_realloc;
+    int failed;
     int fails;
     int rc;
 
-    REQUIRE(wolfSSL_GetAllocators(&saved_malloc, &saved_free,
-                                  &saved_realloc) == 0);
-    REQUIRE(wolfSSL_SetAllocators(failing_malloc, free,
-                                  failing_realloc) == 0);
     for (fails = 0; ; fails++) {
         Peer p = { 0 };
 
-        g_allocs_left = fails;
-        g_alloc_failed = 0;
+        test_oom_arm(fails);
         rc = fetch(&p, resp_hdrs, sizeof(resp_hdrs), &resp);
-        g_allocs_left = -1;
-        if (!g_alloc_failed || rc != WOLFCERT_ERR_MEMORY)
+        failed = test_oom_disarm();
+        if (!failed || rc != WOLFCERT_ERR_MEMORY)
             break;
     }
-    REQUIRE(wolfSSL_SetAllocators(saved_malloc, saved_free,
-                                  saved_realloc) == 0);
-    if (g_alloc_failed) {
+    if (failed) {
         fprintf(stderr, "FAIL fetch with allocation %d failing: %d\n",
                 fails, rc);
         return 1;
@@ -1347,6 +1311,7 @@ int main(void)
 {
     REQUIRE(test_static_mem_init() == 0);
     REQUIRE(wolfcert_init(test_heap_hint()) == WOLFCERT_OK);
+    REQUIRE(test_oom_init() == 0);
     if (test_roundtrip())
         return 1;
     if (test_byte_at_a_time())
@@ -1435,7 +1400,7 @@ int main(void)
         return 1;
     if (test_no_fd())
         return 1;
-#ifdef TEST_ALLOC_FAILURES
+#ifdef TEST_OOM
     if (test_header_oom())
         return 1;
 #endif

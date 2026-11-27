@@ -25,7 +25,7 @@ endif()
 
 add_executable(test_transport unit/test_transport.c)
 target_include_directories(test_transport PRIVATE ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(test_transport PRIVATE wolfcert)
+target_link_libraries(test_transport PRIVATE wolfcert Threads::Threads)
 add_test(NAME transport COMMAND test_transport)
 # A lost never-0 guard spins the read-until-close loop, so bound the run.
 set_tests_properties(transport PROPERTIES TIMEOUT 30)
@@ -137,7 +137,7 @@ endif()
 if(WOLFCERT_ENABLE_SCEP)
     add_executable(test_scep_msg unit/test_scep_msg.c)
     target_include_directories(test_scep_msg PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(test_scep_msg PRIVATE wolfcert)
+    target_link_libraries(test_scep_msg PRIVATE wolfcert Threads::Threads)
     add_test(NAME scep_msg COMMAND test_scep_msg)
 endif()
 

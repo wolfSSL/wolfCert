@@ -40,6 +40,7 @@
 #include "tls_test_util.h"
 #include "../http_test_util.h"
 #include "../test_certs.h"
+#include "../test_oom.h"
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -1071,45 +1072,8 @@ static int test_get_ca_cert_crit_ext(void)
 }
 #endif
 
-#if defined(WOLFCERT_HAVE_ECC) && defined(USE_WOLFSSL_MEMORY) && \
-    !defined(WOLFSSL_STATIC_MEMORY) && !defined(WOLFSSL_DEBUG_MEMORY) && \
-    !defined(OPENSSL_EXTRA) && !defined(OPENSSL_EXTRA_X509_SMALL)
-#define TEST_ALLOC_FAILURES
-#endif
-
-#ifdef TEST_ALLOC_FAILURES
-static wolfSSL_Malloc_cb  g_saved_malloc;
-static wolfSSL_Free_cb    g_saved_free;
-static wolfSSL_Realloc_cb g_saved_realloc;
-static int g_allocs_left = -1;
-static int g_alloc_failed;
-
-static void* failing_malloc(size_t sz)
-{
-    if (g_allocs_left == 0) {
-        g_alloc_failed = 1;
-        return NULL;
-    }
-    if (g_allocs_left > 0)
-        g_allocs_left--;
-    return malloc(sz);
-}
-
-static void failing_free(void* ptr)
-{
-    free(ptr);
-}
-
-static void* failing_realloc(void* ptr, size_t sz)
-{
-    if (g_allocs_left == 0) {
-        g_alloc_failed = 1;
-        return NULL;
-    }
-    if (g_allocs_left > 0)
-        g_allocs_left--;
-    return realloc(ptr, sz);
-}
+#if defined(WOLFCERT_HAVE_ECC) && defined(TEST_OOM_CERT_NAME)
+#define TEST_GET_CA_CERT_OOM
 
 /* The canned reply, plus the read end of a pipe whose close ends the wait for
  * a client that never connected. */
@@ -1151,9 +1115,8 @@ static int same_ca(const WolfCertBuffer* ca, WolfCertEncoding enc)
     return same;
 }
 
-/* GetCACert of crit_ext_cert with n allocations allowed; *failed is set
- * when one was refused, and an OK reply that is not crit_ext_cert gives
- * GENERIC. */
+/* GetCACert of crit_ext_cert with allocation n refused, *failed set if it
+ * was; an OK reply that is not crit_ext_cert gives GENERIC. */
 static int fetch_ca_oom(WolfCertEncoding enc, int n, int* failed)
 {
     struct sweep_ctx sc = { .cc = { .listen_fd = -1, .body = crit_ext_cert,
@@ -1172,17 +1135,9 @@ static int fetch_ca_oom(WolfCertEncoding enc, int n, int* failed)
                          sizeof(url)) == 0);
     cli.server_url = url;
 
-    REQUIRE(wolfSSL_GetAllocators(&g_saved_malloc, &g_saved_free,
-                                  &g_saved_realloc) == 0);
-    g_allocs_left = n;
-    g_alloc_failed = 0;
-    REQUIRE(wolfSSL_SetAllocators(failing_malloc, failing_free,
-                                  failing_realloc) == 0);
+    test_oom_arm(n);
     rc = wolfcert_scep_get_ca_cert(&cli, enc, &ca);
-    g_allocs_left = -1;
-    REQUIRE(wolfSSL_SetAllocators(g_saved_malloc, g_saved_free,
-                                  g_saved_realloc) == 0);
-    *failed = g_alloc_failed;
+    *failed = test_oom_disarm();
 
     close(stop[1]);
     pthread_join(tid, NULL);
@@ -2341,6 +2296,7 @@ static int test_bundle_fault_ecc_ca(void)
 int main(void)
 {
     REQUIRE(wolfcert_init(NULL) == WOLFCERT_OK);
+    REQUIRE(test_oom_init() == 0);
 
     if (test_caps_token_matching())
         return 1;
@@ -2352,7 +2308,7 @@ int main(void)
     if (test_get_ca_cert_crit_ext())
         return 1;
 #endif
-#ifdef TEST_ALLOC_FAILURES
+#ifdef TEST_GET_CA_CERT_OOM
     if (test_get_ca_cert_oom())
         return 1;
 #endif

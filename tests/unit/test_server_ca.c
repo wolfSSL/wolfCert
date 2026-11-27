@@ -23,6 +23,7 @@
 #include <wolfcert/server.h>
 #include "internal.h"
 #include "../test_static_mem.h"
+#include "../test_oom.h"
 #include "../integration/tls_test_util.h"
 
 #include <wolfssl/wolfcrypt/asn.h>
@@ -253,27 +254,7 @@ static int test_get_ca_args(void)
     return 0;
 }
 
-#if defined(USE_WOLFSSL_MEMORY) && !defined(WOLFSSL_STATIC_MEMORY) && \
-    !defined(WOLFSSL_DEBUG_MEMORY)
-/* Index of the one allocation fail_one_malloc() refuses; -1 refuses none. */
-static int g_fail_at = -1;
-static int g_allocs;
-
-static void* fail_one_malloc(size_t sz)
-{
-    return g_allocs++ == g_fail_at ? NULL : malloc(sz);
-}
-
-static void fail_one_free(void* ptr)
-{
-    free(ptr);
-}
-
-static void* fail_one_realloc(void* ptr, size_t sz)
-{
-    return g_allocs++ == g_fail_at ? NULL : realloc(ptr, sz);
-}
-
+#ifdef TEST_OOM
 /* A start that survives any single failed allocation keeps every credential. */
 static int test_start_oom_keeps_credentials(void)
 {
@@ -281,9 +262,7 @@ static int test_start_oom_keeps_credentials(void)
     WolfCertBuffer key  = { 0 };
     WolfCertServerCfgSrv cfg;
     WolfCertServer* srv = NULL;
-    wolfSSL_Malloc_cb  mf;
-    wolfSSL_Free_cb    ff;
-    wolfSSL_Realloc_cb rf;
+    int failed;
     int fail_at;
     int rc;
 
@@ -294,17 +273,14 @@ static int test_start_oom_keeps_credentials(void)
     cfg.http_basic_pass    = "secret";
     cfg.challenge_password = "otp";
 
-    REQUIRE(wolfSSL_GetAllocators(&mf, &ff, &rf) == 0);
     for (fail_at = 0; ; fail_at++) {
         srv = NULL;
-        g_fail_at = fail_at;
-        g_allocs = 0;
         wolfcert_clear_error();
-        REQUIRE(wolfSSL_SetAllocators(fail_one_malloc, fail_one_free,
-                                      fail_one_realloc) == 0);
+        test_oom_arm(fail_at);
         rc = wolfcert_server_start(&cfg, &srv);
-        REQUIRE(wolfSSL_SetAllocators(mf, ff, rf) == 0);
+        failed = test_oom_disarm();
         if (rc != WOLFCERT_OK) {
+            REQUIRE(failed);
             REQUIRE(srv == NULL);
             REQUIRE(strstr(wolfcert_last_error_message(), "does not match")
                     == NULL);
@@ -317,10 +293,9 @@ static int test_start_oom_keeps_credentials(void)
         REQUIRE(srv->cfg_challenge != NULL &&
                 strcmp(srv->cfg_challenge, "otp") == 0);
         wolfcert_server_free(srv);
-        if (g_allocs <= fail_at)
+        if (!failed)
             break;
     }
-    g_fail_at = -1;
     REQUIRE(fail_at > 4);
 
     wolfcert_buffer_free(&cert);
@@ -1035,6 +1010,7 @@ int main(void)
 {
     REQUIRE(test_static_mem_init() == 0);
     REQUIRE(wolfcert_init(test_heap_hint()) == WOLFCERT_OK);
+    REQUIRE(test_oom_init() == 0);
 
     REQUIRE(gen_server_identity(&srv_cert_pem, &srv_cert_pem_len,
                                 &srv_key_pem, &srv_key_pem_len) == 0);
@@ -1047,8 +1023,7 @@ int main(void)
         return 1;
     if (test_get_ca_args())
         return 1;
-#if defined(USE_WOLFSSL_MEMORY) && !defined(WOLFSSL_STATIC_MEMORY) && \
-    !defined(WOLFSSL_DEBUG_MEMORY)
+#ifdef TEST_OOM
     if (test_start_oom_keeps_credentials())
         return 1;
 #endif

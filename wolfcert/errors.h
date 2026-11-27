@@ -50,7 +50,23 @@ enum {
     WOLFCERT_ERR_WANT_READ   = -14,
     WOLFCERT_ERR_WANT_WRITE  = -15,
 
-    WOLFCERT_ERR_CONN_CLOSED = -16
+    WOLFCERT_ERR_CONN_CLOSED = -16,
+
+    /* The server refused the client certificate with an alert about it, such
+     * as unknown_ca or certificate_expired, after a TLS 1.3 handshake. The
+     * alert is authenticated only with verify_server, which EST and HTTPS SCEP
+     * require. It is reported when wolfSSL reads the alert before a write to
+     * the closed connection fails; otherwise the request gets WOLFCERT_ERR_TLS
+     * or WOLFCERT_ERR_IO. Any other alert, including a TLS 1.2 one that may be
+     * forged, gives WOLFCERT_ERR_TLS with the alert named in the error
+     * message. */
+    WOLFCERT_ERR_TLS_PEER_REJECTED = -17,
+    /* The server certificate failed verification against trust_anchors, for
+     * example an unknown issuer, outside its validity period, a name mismatch,
+     * a key usage, path length or critical extension violation, or a key below
+     * wolfSSL's minimum size. Session open returns it when a trust anchor is
+     * not valid at the device time. */
+    WOLFCERT_ERR_TLS_UNTRUSTED     = -18
 };
 
 /* Returns a human-readable description of a wolfCert error code. */

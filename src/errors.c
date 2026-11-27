@@ -56,6 +56,10 @@ const char* wolfcert_strerror(int err)
             return "would block (want write)";
         case WOLFCERT_ERR_CONN_CLOSED:
             return "connection closed by peer";
+        case WOLFCERT_ERR_TLS_PEER_REJECTED:
+            return "TLS client certificate rejected by peer";
+        case WOLFCERT_ERR_TLS_UNTRUSTED:
+            return "TLS server certificate or trust anchor not trusted";
         default:
             return "unknown error";
     }

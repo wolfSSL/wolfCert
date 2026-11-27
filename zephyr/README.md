@@ -215,7 +215,7 @@ needs changing. `prj.conf` leaves these to the board:
 | Symptom | Cause |
 |---|---|
 | `peer ip address mismatch` or `peer subject name mismatch` | The server certificate's SAN does not name the host in the URL; issue one with `gen-server-cert.sh` |
-| `enroll failed: TLS error ()`, or `ASN date error, current date is before start of validity` | The device clock is before a certificate's start date; the clock is the build time, so rebuild with `-p` |
+| `not valid at the device time`, or `ASN date error, current date is before start of validity` | The device clock is before a certificate's start date (the clock is the build time, so rebuild with `-p`), or the CA certificate in `CONFIG_WOLFCERT_SAMPLE_CA_CERT` has expired |
 | `ASN no signer error to confirm failure` | `CONFIG_WOLFCERT_SAMPLE_CA_CERT` is not the CA that issued the server's certificate; see [step 2](#2-configure-the-sample) |
 | `enroll failed` once `CONFIG_NET_CONFIG_INIT_TIMEOUT` expires after the banner | No address: check the cable, and that DHCP answers on that network |
 | `wolfSSL is missing HAVE_PKCS7` at build time | No wolfSSL settings file; see [Configuration](#configuration) |

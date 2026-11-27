@@ -81,6 +81,19 @@ int main(void)
         wolfcert_cleanup();
         return 1;
     }
+    for (int err = WOLFCERT_ERR_GENERIC; err >= WOLFCERT_ERR_TLS_UNTRUSTED;
+         err--) {
+        if (strcmp(wolfcert_strerror(err), "unknown error") == 0) {
+            fprintf(stderr, "no wolfcert_strerror text for %d\n", err);
+            wolfcert_cleanup();
+            return 1;
+        }
+    }
+    if (strcmp(wolfcert_strerror(WOLFCERT_ERR_TLS_UNTRUSTED - 1),
+               "unknown error") != 0) {
+        wolfcert_cleanup();
+        return 1;
+    }
 #ifdef TEST_ERR_PER_THREAD
     if (error_state_is_per_thread() != 0) {
         wolfcert_cleanup();

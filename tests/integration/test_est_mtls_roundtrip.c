@@ -53,6 +53,16 @@
 static void* server_thread(void* arg) { wolfcert_server_run((WolfCertServer*)arg); return NULL; }
 
 #ifdef KEEP_PEER_CERT
+/* The server closes after its alert, so a write can fail before it is read. */
+static int is_refusal(int rc)
+{
+#ifdef WOLFSSL_TLS13
+    if (rc == WOLFCERT_ERR_TLS_PEER_REJECTED || rc == WOLFCERT_ERR_IO)
+        return 1;
+#endif
+    return rc == WOLFCERT_ERR_TLS;
+}
+
 /* Wait on the session fd in the direction a WANT_* return asked for. */
 static int wait_io(WolfCertEstSession* s, int rc)
 {
@@ -101,7 +111,7 @@ static int test_reenroll_ignores_cfg_identity(const char* url,
     /* The server refuses the stale identity on its own */
     rc = wolfcert_est_get_cacerts(&cli, WOLFCERT_ENCODING_PEM, &ca_pem);
     wolfcert_buffer_free(&ca_pem);
-    REQUIRE(rc != WOLFCERT_OK);
+    REQUIRE(is_refusal(rc));
 
     REQUIRE(wolfcert_key_from_pem(cli_key, cli_key_len, NULL, &cur_key) == WOLFCERT_OK);
     REQUIRE(wolfcert_key_generate(&kcfg, &dk) == WOLFCERT_OK);
@@ -674,8 +684,7 @@ static int test_reenroll_trust_issued(const uint8_t* tls_cert, size_t tls_cert_l
     rc = wolfcert_est_simple_reenroll(&cli, cli_cert, cli_cert_len, foreign,
                                       csr.data, csr.len, &refused);
     /* The handshake refuses it, so no HTTP answer comes. */
-    REQUIRE(rc != WOLFCERT_OK && rc != WOLFCERT_ERR_HTTP &&
-            rc != WOLFCERT_ERR_AUTH);
+    REQUIRE(is_refusal(rc));
     REQUIRE(refused.cert_pem.data == NULL);
 
     /* Without a client certificate there is nothing to renew. */

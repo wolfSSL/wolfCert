@@ -366,6 +366,15 @@ static int test_der_is_cert(void)
     return 0;
 }
 
+/* An INTEGER after an empty SEQUENCE is not a DER key. */
+static int test_key_is_der(void)
+{
+    static const uint8_t key_after[] = { 0x30, 0x00, 0x02, 0x01, 0x00 };
+
+    REQUIRE(wolfcert_key_is_der(key_after, sizeof(key_after)) == 0);
+    return 0;
+}
+
 int main(void)
 {
     REQUIRE(test_static_mem_init() == 0);
@@ -391,6 +400,8 @@ int main(void)
     if (test_der_chain_next())
         return 1;
     if (test_der_is_cert())
+        return 1;
+    if (test_key_is_der())
         return 1;
     wolfcert_cleanup();
     printf("OK\n");

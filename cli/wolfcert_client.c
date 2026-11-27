@@ -671,47 +671,6 @@ static int is_blank(uint8_t c)
     return c == ' ' || c == '\t' || c == '\r' || c == '\n';
 }
 
-/* 1 if p starts SEQUENCE { SEQUENCE, SEQUENCE, BIT STRING }, a certificate. */
-static int der_cert_at(const uint8_t* p, size_t left)
-{
-    static const uint8_t tags[] = { 0x30, 0x30, 0x03 };
-    size_t total = der_cert_len(p, left);
-    word32 idx = 1;
-    int part;
-    size_t i;
-
-    if (total == 0 || GetLength(p, &idx, &part, (word32)total) < 0)
-        return 0;
-    for (i = 0; i < sizeof(tags); i++) {
-        if (idx >= total || p[idx] != tags[i])
-            return 0;
-        idx++;
-        if (GetLength(p, &idx, &part, (word32)total) < 0)
-            return 0;
-        idx += (word32)part;
-    }
-    return idx == total;
-}
-
-/* Offset of a certificate chain in buf: a DER certificate after leading
- * whitespace, else the first PEM header, else past the whitespace. */
-static size_t chain_start(const uint8_t* buf, size_t len)
-{
-    static const char hdr[] = "-----BEGIN";
-    size_t ws = 0;
-    size_t i;
-
-    while (ws < len && is_blank(buf[ws]))
-        ws++;
-    if (der_cert_at(buf + ws, len - ws))
-        return ws;
-    for (i = 0; i + sizeof(hdr) - 1 <= len; i++) {
-        if (memcmp(buf + i, hdr, sizeof(hdr) - 1) == 0)
-            return i;
-    }
-    return ws;
-}
-
 /* A certificate given as PEM or DER, as DER owned by the caller; 0 or -1.
  * DER must fill the file up to trailing whitespace, since 0x30 is ASCII 0. */
 static int cert_to_der(const uint8_t* buf, size_t len, DerBuffer** out)
@@ -1833,8 +1792,10 @@ static int cmd_reenroll(int argc, char** argv)
 
     if (ret == 0 && p == WOLFCERT_PROTO_EST) {
         meta.challenge_password = opts.challenge;
-        size_t at = chain_start(cert_pem, cert_len);
+        size_t at = 0;
 
+        while (at < cert_len && is_blank(cert_pem[at]))
+            at++;
         rc = wolfcert_client_reenroll(NULL, &srv, cert_pem + at, cert_len - at,
                                       current_key, NULL, &meta, &new_key,
                                       &issued);

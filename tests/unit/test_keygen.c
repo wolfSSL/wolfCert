@@ -25,6 +25,7 @@
 #include <wolfssl/wolfcrypt/error-crypt.h>
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #if defined(WOLFCERT_HAVE_ECC)
@@ -87,6 +88,35 @@ static int roundtrip(WolfCertKeyType type, int param)
 }
 
 #ifdef TEST_KEY_TYPE
+/* A PEM key behind a text line starting with '0' (0x30) loads. */
+static int pem_after_zero_line(void)
+{
+    static const char zero_line[] = "0 s:CN=device\n   i:CN=Root CA\n";
+    WolfCertKeyCfg cfg = { .type = TEST_KEY_TYPE, .param = TEST_KEY_PARAM,
+                           .dev_id = INVALID_DEVID };
+    WolfCertKey* k = NULL;
+    WolfCertKey* k2 = NULL;
+    WolfCertBuffer pem = { 0 };
+    uint8_t* buf;
+    size_t len;
+    int rc;
+
+    REQUIRE(wolfcert_key_generate(&cfg, &k) == WOLFCERT_OK);
+    REQUIRE(wolfcert_key_to_pem(k, &pem) == WOLFCERT_OK);
+    len = sizeof(zero_line) - 1 + pem.len;
+    buf = (uint8_t*)malloc(len);
+    REQUIRE(buf != NULL);
+    memcpy(buf, zero_line, sizeof(zero_line) - 1);
+    memcpy(buf + sizeof(zero_line) - 1, pem.data, pem.len);
+    rc = wolfcert_key_from_pem(buf, len, NULL, &k2);
+    free(buf);
+    wolfcert_buffer_free(&pem);
+    wolfcert_key_free(k);
+    wolfcert_key_free(k2);
+    REQUIRE(rc == WOLFCERT_OK);
+    return 0;
+}
+
 #define DECLINE_DEVID 0x6b69
 
 #ifdef WOLF_CRYPTO_CB
@@ -247,6 +277,7 @@ static int key_id_cases(void)
     cfg.key_id_len = sizeof(id);
     REQUIRE(wolfcert_key_from_id(&cfg, junk, sizeof(junk), &k) ==
             WOLFCERT_ERR_PARSE);
+    REQUIRE(strstr(wolfcert_last_error_message(), "not a certificate") != NULL);
 #ifdef WOLFCERT_HAVE_RSA
     /* Even with param 0, a reload refuses an RSA size keygen would not make. */
     {
@@ -447,6 +478,8 @@ int main(void)
 #endif
 
 #ifdef TEST_KEY_TYPE
+    if (pem_after_zero_line())
+        return 1;
     if (key_id_cases())
         return 1;
 #endif

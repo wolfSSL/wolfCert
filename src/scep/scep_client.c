@@ -508,7 +508,7 @@ static int scep_check_ca_cert(const uint8_t* der, size_t der_len, void* heap)
     int wrc = ASN_PARSE_E;
 
     /* wc_ParseCert accepts trailing data under WOLFSSL_NO_ASN_STRICT. */
-    if (wolfcert_buffer_is_der(der, der_len) &&
+    if (der != NULL && der_len > 0 && der[0] == 0x30 &&
             wolfcert_der_is_single(der, der_len)) {
         dc = (DecodedCert*)WOLFCERT_XMALLOC(sizeof(*dc), heap);
         if (dc == NULL)

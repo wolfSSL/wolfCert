@@ -416,8 +416,8 @@ int main(void)
     wolfcert_buffer_free(&ca_pem_der);
     wc_FreeDer(&ta_der);
 
-    /* The anchor as copied from openssl s_client -showcerts, " 0 s:" first. */
-    static const char chain_hdr[] = " 0 s:CN=127.0.0.1\n   i:CN=127.0.0.1\n";
+    /* An anchor behind an s_client line starting with '0' loads as PEM. */
+    static const char chain_hdr[] = "0 s:CN=127.0.0.1\n   i:CN=127.0.0.1\n";
     size_t ta_chain_len = sizeof(chain_hdr) - 1 + tls_cert_len;
     uint8_t* ta_chain = (uint8_t*)malloc(ta_chain_len);
     REQUIRE(ta_chain != NULL);

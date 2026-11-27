@@ -234,7 +234,8 @@ typedef struct {
     WolfCertProtocol protocol;
     const char*      server_url;     /* e.g. https://ca.example/.well-known/est */
     /* Optional bootstrap trust for TLS: one or more certificates, PEM or
-     * concatenated DER with only 0x00, 0xFF or whitespace between them. A
+     * concatenated DER with only 0x00, 0xFF or whitespace between them. It
+     * is DER when a certificate starts at the first byte, else PEM. A
      * DER certificate wolfSSL refuses is skipped, as in PEM. DER loading
      * stops at the first item that is not a certificate and ignores the
      * rest. WOLFCERT_ERR_TLS if no certificate loads. */
@@ -249,7 +250,7 @@ typedef struct {
      * out as trust_anchors except that filler between DER certificates fails
      * with WOLFCERT_ERR_TLS. An ML-DSA identity needs TLS 1.3: without it in
      * wolfSSL, https:// calls return WOLFCERT_ERR_UNSUPPORTED before
-     * connecting. */
+     * connecting. client_key is detected as in wolfcert_key_from_pem(). */
     const uint8_t*   client_cert;
     size_t           client_cert_len;
     const uint8_t*   client_key;

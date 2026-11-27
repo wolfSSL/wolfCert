@@ -365,11 +365,11 @@ static int test_der_anchors(const char* url)
     REQUIRE(cacerts(&cli) == WOLFCERT_ERR_TLS);
     REQUIRE(wolfcert_last_wolfssl_err() < 0);
 
-    /* A SEQUENCE that is not a certificate ends the bundle. */
+    /* A bundle led by a SEQUENCE that is not a certificate is read as PEM. */
     cli.trust_anchors_len = cat(ta, sizeof(ta), junk, sizeof(junk), g_int.der,
                                 (size_t)g_int.der_len, NULL, 0);
     REQUIRE(cacerts(&cli) == WOLFCERT_ERR_TLS);
-    REQUIRE(failed_with("no certificate"));
+    REQUIRE(failed_with("loading trust_anchors failed"));
 
     cli.trust_anchors_len = cat(ta, sizeof(ta), g_int.der,
                                 (size_t)g_int.der_len, g_csr,

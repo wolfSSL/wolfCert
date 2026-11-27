@@ -1105,12 +1105,6 @@ static int tls_setup_failure(int rc, const char* what)
                               "http", "%s failed: %d (%s)", what, rc, buf);
 }
 
-static int buf_filetype(const uint8_t* buf, size_t len)
-{
-    return wolfcert_buffer_is_der(buf, len) ? WOLFSSL_FILETYPE_ASN1
-                                            : WOLFSSL_FILETYPE_PEM;
-}
-
 static int is_date_err(int rc)
 {
     return rc == ASN_BEFORE_DATE_E || rc == ASN_AFTER_DATE_E;
@@ -1135,8 +1129,7 @@ static int load_der_anchors(WOLFSSL_CTX* ctx, const uint8_t* buf, size_t len)
     int dated = 0;
     int rc;
 
-    while ((rc = wolfcert_der_chain_next(buf, len, &off, &cert,
-                                         &cert_len)) == 1 &&
+    while (wolfcert_der_chain_next(buf, len, &off, &cert, &cert_len) == 1 &&
             wolfcert_der_is_cert(cert, cert_len)) {
         rc = wolfSSL_CTX_load_verify_buffer(ctx, cert, (long)cert_len,
                                             WOLFSSL_FILETYPE_ASN1);
@@ -1151,21 +1144,12 @@ static int load_der_anchors(WOLFSSL_CTX* ctx, const uint8_t* buf, size_t len)
             dated = rc;
     }
 
-    if (rc == WOLFCERT_ERR_BAD_ARG)
-        return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "http",
-                            "trust_anchors: too large");
-    if (cert == NULL)
-        return WOLFCERT_ERR(WOLFCERT_ERR_TLS, "http",
-                            "trust_anchors: malformed DER");
     if (loaded == 0 && dated != 0)
         return anchor_failure(dated);
-    if (loaded == 0 && refused < 0)
+    if (loaded == 0)
         return WOLFCERT_ERR_RC_WC(WOLFCERT_ERR_TLS, refused, "http",
                                   "trust_anchors: no certificate wolfSSL "
                                   "accepts");
-    if (loaded == 0)
-        return WOLFCERT_ERR(WOLFCERT_ERR_TLS, "http",
-                            "trust_anchors: no certificate");
     return WOLFCERT_OK;
 }
 
@@ -1174,27 +1158,22 @@ static int use_client_chain(WOLFSSL_CTX* ctx, const uint8_t* buf, size_t len)
     size_t off = 0;
     const uint8_t* cert = NULL;
     size_t cert_len = 0;
-    int format = buf_filetype(buf, len);
+    int format = wolfcert_cert_is_der(buf, len) ? WOLFSSL_FILETYPE_ASN1
+                                                : WOLFSSL_FILETYPE_PEM;
     int rc;
 
     if (format == WOLFSSL_FILETYPE_ASN1) {
         size_t end = 0;
 
-        while ((rc = wolfcert_der_chain_next(buf, len, &off, &cert,
-                                             &cert_len)) == 1 &&
-                (cert == buf || wolfcert_der_is_cert(cert, cert_len))) {
+        while (wolfcert_der_chain_next(buf, len, &off, &cert,
+                                       &cert_len) == 1 &&
+                wolfcert_der_is_cert(cert, cert_len)) {
             if (cert != buf + end)
                 return WOLFCERT_ERR(WOLFCERT_ERR_TLS, "http",
                                     "client_cert: filler between "
                                     "certificates at byte %zu", end);
             end = off;
         }
-        if (rc == WOLFCERT_ERR_BAD_ARG)
-            return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "http",
-                                "client_cert: too large");
-        if (end == 0)
-            return WOLFCERT_ERR(WOLFCERT_ERR_TLS, "http",
-                                "client_cert: malformed DER");
         len = end;
     }
 
@@ -1238,7 +1217,7 @@ static int check_client_alg(const WolfCertHttpSessionCfg* cfg, void* heap)
     if (der == NULL || len == 0 || (size_t)(word32)len != len ||
             (cfg->client_key == NULL && cfg->client_key_obj == NULL))
         return WOLFCERT_OK;
-    if (!wolfcert_buffer_is_der(der, len)) {
+    if (!wolfcert_cert_is_der(der, len)) {
         rc = wolfcert_pem_cert_to_der(der, len, &pem_der, heap);
         if (rc != WOLFCERT_OK)
             return rc == WOLFCERT_ERR_MEMORY ? rc : WOLFCERT_OK;
@@ -1308,7 +1287,8 @@ static int use_client_key(WOLFSSL_CTX* ctx, const TlsDials* d)
 
     rc = wolfSSL_CTX_use_PrivateKey_buffer(ctx, d->client_key,
             (long)d->client_key_len,
-            buf_filetype(d->client_key, d->client_key_len));
+            wolfcert_key_is_der(d->client_key, d->client_key_len)
+                ? WOLFSSL_FILETYPE_ASN1 : WOLFSSL_FILETYPE_PEM);
     if (rc != WOLFSSL_SUCCESS)
         return tls_setup_failure(rc, "loading the client key");
     return WOLFCERT_OK;
@@ -1353,8 +1333,8 @@ static int setup_tls_ex(WolfCertConn* c, const TlsDials* dials,
 #endif
 
     if (dials->trust_anchors != NULL && dials->trust_anchors_len > 0) {
-        if (wolfcert_buffer_is_der(dials->trust_anchors,
-                                   dials->trust_anchors_len))
+        if (wolfcert_cert_is_der(dials->trust_anchors,
+                                 dials->trust_anchors_len))
             rc = load_der_anchors(ctx, dials->trust_anchors,
                                   dials->trust_anchors_len);
         else {

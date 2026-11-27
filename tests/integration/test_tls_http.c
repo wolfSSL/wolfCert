@@ -26,6 +26,7 @@
 
 #include <wolfcert/wolfcert.h>
 #include "internal.h"
+#include "../test_oom.h"
 
 #include <wolfssl/ssl.h>
 #include <wolfssl/wolfcrypt/asn_public.h>
@@ -589,60 +590,7 @@ static int test_setup_failure_detail(struct srv_ctx* sc)
     return 0;
 }
 
-#if defined(USE_WOLFSSL_MEMORY) && !defined(WOLFSSL_STATIC_MEMORY) && \
-    !defined(WOLFSSL_DEBUG_MEMORY)
-#define TEST_ALLOC_FAILURES
-#endif
-
-#ifdef TEST_ALLOC_FAILURES
-/* Only the main thread's allocations count, so srv_thread never fails. */
-static pthread_t g_main_thread;
-/* Allocations left before failing_malloc() returns NULL; -1 never fails. */
-static int g_allocs_left = -1;
-static int g_alloc_failed;
-
-static int alloc_fails(void)
-{
-    if (!pthread_equal(pthread_self(), g_main_thread))
-        return 0;
-    if (g_allocs_left == 0) {
-        g_alloc_failed = 1;
-        return 1;
-    }
-    if (g_allocs_left > 0)
-        g_allocs_left--;
-    return 0;
-}
-
-static void* failing_malloc(size_t sz)
-{
-    return alloc_fails() ? NULL : malloc(sz);
-}
-
-static void failing_free(void* ptr)
-{
-    free(ptr);
-}
-
-static void* failing_realloc(void* ptr, size_t sz)
-{
-    return alloc_fails() ? NULL : realloc(ptr, sz);
-}
-
-/* Lets `n` main-thread allocations succeed and fails the rest. */
-static void oom_arm(int n)
-{
-    g_allocs_left = n;
-    g_alloc_failed = 0;
-}
-
-/* Stops failing; 1 when an allocation was failed, 0 if not. */
-static int oom_disarm(void)
-{
-    g_allocs_left = -1;
-    return g_alloc_failed;
-}
-
+#ifdef TEST_OOM
 /* Failing each allocation of a session's first request in turn: one of them
  * falls in the handshake and gives WOLFCERT_ERR_MEMORY with the wolfSSL code,
  * blocking (nb 0) or non-blocking. */
@@ -669,7 +617,7 @@ static int handshake_oom_case(struct srv_ctx* sc, int nb)
         REQUIRE(wolfcert_http_session_open(&cfg, &s) == WOLFCERT_OK);
 
         wolfcert_clear_error();
-        oom_arm(fails);
+        test_oom_arm(fails);
         do {
             rc = nb ? wolfcert_http_session_request_nb(s, &req, &resp)
                     : wolfcert_http_session_request(s, &req, &resp);
@@ -679,7 +627,7 @@ static int handshake_oom_case(struct srv_ctx* sc, int nb)
                 (void)poll(&pfd, 1, 2000);
             }
         } while (rc == WOLFCERT_ERR_WANT_READ || rc == WOLFCERT_ERR_WANT_WRITE);
-        failed = oom_disarm();
+        failed = test_oom_disarm();
 
         found = rc == WOLFCERT_ERR_MEMORY && wolfcert_last_wolfssl_err() != 0;
         wolfcert_http_response_free(&resp);
@@ -690,6 +638,33 @@ static int handshake_oom_case(struct srv_ctx* sc, int nb)
     REQUIRE(found);
     return 0;
 }
+
+#ifdef TEST_OOM_CERT_NAME
+/* Refused allocations a bare load of sc's anchor still reports as loaded, or
+ * -1 when no CTX can be made. */
+static int anchor_oom_drops(struct srv_ctx* sc)
+{
+    WOLFSSL_CTX* ctx;
+    int failed = 1;
+    int drops = 0;
+    int fails;
+    int rc;
+
+    for (fails = 0; failed == 1; fails++) {
+        ctx = wolfSSL_CTX_new(wolfTLS_client_method());
+        if (ctx == NULL)
+            return -1;
+        test_oom_arm(fails);
+        rc = wolfSSL_CTX_load_verify_buffer(ctx, sc->cert_pem,
+                (long)sc->cert_pem_len, WOLFSSL_FILETYPE_PEM);
+        failed = test_oom_disarm();
+        if (failed && rc == WOLFSSL_SUCCESS)
+            ++drops;
+        wolfSSL_CTX_free(ctx);
+    }
+    return drops;
+}
+#endif
 
 /* Failing each allocation of a session open in turn: the SNI one gives
  * WOLFCERT_ERR_MEMORY with MEMORY_E, the name check's with MEMORY_ERROR. */
@@ -708,6 +683,11 @@ static int name_check_oom_case(struct srv_ctx* sc)
     int ls;
     int fd;
     int rc;
+#ifdef TEST_OOM_CERT_NAME
+    int drops = anchor_oom_drops(sc);
+
+    REQUIRE(drops >= 0);
+#endif
 
     ls = black_hole_listener(&port);
     REQUIRE(ls >= 0);
@@ -719,12 +699,13 @@ static int name_check_oom_case(struct srv_ctx* sc)
 
     for (fails = 0; !found && failed == 1; fails++) {
         wolfcert_clear_error();
-        oom_arm(fails);
+        test_oom_arm(fails);
         rc = wolfcert_http_session_open(&cfg, &s);
-        failed = oom_disarm();
-#ifndef OPENSSL_EXTRA
-        /* OPENSSL_EXTRA reports some anchor-load OOM as a parse error. */
-        REQUIRE(!failed || rc == WOLFCERT_ERR_MEMORY);
+        failed = test_oom_disarm();
+#ifdef TEST_OOM_CERT_NAME
+        /* wolfSSL drops an OOM in the anchor's self-signature check. */
+        REQUIRE(!failed || rc == WOLFCERT_ERR_MEMORY ||
+                (rc == WOLFCERT_OK && drops-- > 0));
 #endif
         if (rc == WOLFCERT_ERR_MEMORY &&
                 wolfcert_last_wolfssl_err() == MEMORY_E &&
@@ -760,12 +741,7 @@ int main(void)
     struct srv_ctx dns = { 0 };
     struct srv_ctx lh = { 0 };
     int open_rc = -1;
-#ifdef TEST_ALLOC_FAILURES
-    /* Installed before any thread starts; they fail nothing until armed. */
-    g_main_thread = pthread_self();
-    REQUIRE(wolfSSL_SetAllocators(failing_malloc, failing_free,
-                                  failing_realloc) == 0);
-#endif
+    REQUIRE(test_oom_init() == 0);
     REQUIRE(gen_server_identity(&sc.cert_pem, &sc.cert_pem_len,
                                 &sc.key_pem, &sc.key_pem_len) == 0);
     REQUIRE(gen_server_identity(&other.cert_pem, &other.cert_pem_len,
@@ -838,7 +814,7 @@ int main(void)
     REQUIRE(test_refused_write(&sc) == 0);
     REQUIRE(test_setup_failure_detail(&sc) == 0);
 
-#ifdef TEST_ALLOC_FAILURES
+#ifdef TEST_OOM
     REQUIRE(handshake_oom_case(&sc, 0) == 0);
     REQUIRE(handshake_oom_case(&sc, 1) == 0);
     REQUIRE(name_check_oom_case(&sc) == 0);

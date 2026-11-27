@@ -137,7 +137,7 @@ test_csr_CPPFLAGS = $(AM_CPPFLAGS) -I$(top_srcdir)/src
 test_csr_LDADD      = libwolfcert.la $(WOLFSSL_LIBS)
 test_transport_SOURCES = tests/unit/test_transport.c
 test_transport_CPPFLAGS = $(AM_CPPFLAGS) -I$(top_srcdir)/src
-test_transport_LDADD   = libwolfcert.la $(WOLFSSL_LIBS)
+test_transport_LDADD   = libwolfcert.la $(WOLFSSL_LIBS) -lpthread
 
 test_net_SOURCES    = tests/unit/test_net.c
 test_net_CPPFLAGS   = $(AM_CPPFLAGS) -I$(top_srcdir)/src
@@ -202,7 +202,7 @@ if WOLFCERT_HAVE_SCEP
 check_PROGRAMS += test_scep_msg
 test_scep_msg_SOURCES  = tests/unit/test_scep_msg.c
 test_scep_msg_CPPFLAGS = $(AM_CPPFLAGS) -I$(top_srcdir)/src
-test_scep_msg_LDADD    = libwolfcert.la $(WOLFSSL_LIBS)
+test_scep_msg_LDADD    = libwolfcert.la $(WOLFSSL_LIBS) -lpthread
 if WOLFCERT_HAVE_SERVER
 check_PROGRAMS += test_scep_roundtrip test_scep_poll_roundtrip test_scep_async_roundtrip \
                  test_scep_get_cert
@@ -292,6 +292,7 @@ EXTRA_DIST = \
     tests/CMakeLists.txt \
     tests/test_certs.h \
     tests/test_static_mem.h \
+    tests/test_oom.h \
     tests/http_test_util.h \
     tests/integration/tls_test_util.h \
     tests/integration/est_client_cases.h \

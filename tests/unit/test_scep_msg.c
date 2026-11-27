@@ -26,6 +26,7 @@
 
 #include <wolfcert/wolfcert.h>
 #include "../test_static_mem.h"
+#include "../test_oom.h"
 #include "internal.h"
 
 #include <wolfssl/wolfcrypt/asn.h>
@@ -795,86 +796,22 @@ static int check_result_defined(const char* what, int rc, const WolfCertScepResu
     return 0;
 }
 
-/* OPENSSL_EXTRA's GetCertName reports a failed X509_NAME allocation as
- * ASN_PARSE_E, indistinguishable from a bad certificate. */
-#if defined(USE_WOLFSSL_MEMORY) && !defined(WOLFSSL_STATIC_MEMORY) && \
-    !defined(WOLFSSL_DEBUG_MEMORY) && !defined(OPENSSL_EXTRA) && \
-    !defined(OPENSSL_EXTRA_X509_SMALL)
-#define TEST_ALLOC_FAILURES
-#endif
-
-#ifdef TEST_ALLOC_FAILURES
-/* Allocations left before failing_malloc() returns NULL; -1 never fails. */
-static int g_allocs_left = -1;
-static int g_alloc_failed;
-static wolfSSL_Malloc_cb  g_saved_malloc;
-static wolfSSL_Free_cb    g_saved_free;
-static wolfSSL_Realloc_cb g_saved_realloc;
-
-static void* failing_malloc(size_t sz)
-{
-    if (g_allocs_left == 0) {
-        g_alloc_failed = 1;
-        return NULL;
-    }
-    if (g_allocs_left > 0)
-        g_allocs_left--;
-    return malloc(sz);
-}
-
-static void failing_free(void* ptr)
-{
-    free(ptr);
-}
-
-static void* failing_realloc(void* ptr, size_t sz)
-{
-    if (g_allocs_left == 0) {
-        g_alloc_failed = 1;
-        return NULL;
-    }
-    if (g_allocs_left > 0)
-        g_allocs_left--;
-    return realloc(ptr, sz);
-}
-
-/* Lets `n` wolfSSL allocations succeed and fails the rest. */
-static int oom_arm(int n)
-{
-    if (wolfSSL_GetAllocators(&g_saved_malloc, &g_saved_free,
-                              &g_saved_realloc) != 0)
-        return -1;
-    g_allocs_left = n;
-    g_alloc_failed = 0;
-    return wolfSSL_SetAllocators(failing_malloc, failing_free,
-                                 failing_realloc);
-}
-
-/* Restores the allocators; 1 when an allocation was failed, 0 if not, or -1. */
-static int oom_disarm(void)
-{
-    g_allocs_left = -1;
-    if (wolfSSL_SetAllocators(g_saved_malloc, g_saved_free,
-                              g_saved_realloc) != 0)
-        return -1;
-    return g_alloc_failed;
-}
-
+#ifdef TEST_OOM_CERT_NAME
 /* Failing each allocation in turn must give WOLFCERT_ERR_MEMORY or a match. */
 static int pem_has_cert_reports_oom(const char* pem, size_t pem_len,
                                     const DecodedCert* lc)
 {
     int fails;
-    int failed;
-    int rc = 0;
+    int failed = 1;
+    int rc;
 
-    for (fails = 0; rc != 1; fails++) {
-        REQUIRE(oom_arm(fails) == 0);
+    for (fails = 0; failed; fails++) {
+        test_oom_arm(fails);
         rc = wolfcert_scep_pem_has_cert((const uint8_t*)pem, pem_len,
                                         lc->issuerRaw,
                                         (size_t)lc->issuerRawLen, lc->serial,
                                         (size_t)lc->serialSz, NULL);
-        REQUIRE((failed = oom_disarm()) >= 0);
+        failed = test_oom_disarm();
         if (rc != 1 && (rc != WOLFCERT_ERR_MEMORY || !failed)) {
             fprintf(stderr, "FAIL pem_has_cert with allocation %d failing: "
                     "%d\n", fails, rc);
@@ -889,14 +826,14 @@ static int rep_signer_reports_oom(const uint8_t* signer, size_t signer_len,
                                   const uint8_t* bundle, size_t bundle_len)
 {
     int fails;
-    int failed;
-    int rc = WOLFCERT_ERR_MEMORY;
+    int failed = 1;
+    int rc;
 
-    for (fails = 0; rc != WOLFCERT_OK; fails++) {
-        REQUIRE(oom_arm(fails) == 0);
+    for (fails = 0; failed; fails++) {
+        test_oom_arm(fails);
         rc = wolfcert_scep_verify_rep_signer(signer, signer_len, bundle,
                                              bundle_len, NULL);
-        REQUIRE((failed = oom_disarm()) >= 0);
+        failed = test_oom_disarm();
         if (rc != WOLFCERT_OK && (rc != WOLFCERT_ERR_MEMORY || !failed)) {
             fprintf(stderr, "FAIL verify_rep_signer with allocation %d "
                     "failing: %d\n", fails, rc);
@@ -940,7 +877,7 @@ static int test_pem_has_cert(void)
     REQUIRE(wolfcert_scep_pem_has_cert((const uint8_t*)pem, (size_t)n,
                                        lc.issuerRaw, (size_t)lc.issuerRawLen,
                                        lc.serial, (size_t)lc.serialSz, NULL) == 1);
-#ifdef TEST_ALLOC_FAILURES
+#ifdef TEST_OOM_CERT_NAME
     REQUIRE(pem_has_cert_reports_oom(pem, (size_t)n, &lc) == 0);
 #endif
 
@@ -1756,7 +1693,7 @@ static int test_signer_matches_any_bundle_cert(void)
     REQUIRE(wolfcert_scep_verify_rep_signer(u_der, u_len,
                                             bundle, bundle_len, NULL)
             != WOLFCERT_OK);
-#ifdef TEST_ALLOC_FAILURES
+#ifdef TEST_OOM_CERT_NAME
     REQUIRE(rep_signer_reports_oom(b_der, b_len, bundle, bundle_len) == 0);
 #endif
 
@@ -2845,7 +2782,7 @@ static int test_text_attrib_truncated(void)
     return ret;
 }
 
-#ifdef TEST_ALLOC_FAILURES
+#ifdef TEST_OOM_CERT_NAME
 /* Failing each allocation in turn must give an error or a parse with every
  * attribute present. */
 static int test_parse_reports_oom(void)
@@ -2860,8 +2797,8 @@ static int test_parse_reports_oom(void)
     uint8_t* msg = NULL;
     size_t   msg_len = 0;
     int fails;
-    int failed;
-    int rc = WOLFCERT_ERR_MEMORY;
+    int failed = 1;
+    int rc;
     int ret = 0;
 
     attribs[0].oid     = scep_oid_msg_type;
@@ -2876,7 +2813,7 @@ static int test_parse_reports_oom(void)
     REQUIRE(make_signed_with_attribs(ca_der, ca_len, ca_key, ca_key_len,
                                      attribs, 2, &msg, &msg_len) == 0);
 
-    for (fails = 0; ret == 0 && rc != WOLFCERT_OK; fails++) {
+    for (fails = 0; ret == 0 && failed; fails++) {
         WolfCertBuffer env = { 0 };
         uint8_t* t = NULL;
         size_t   t_len = 0;
@@ -2885,11 +2822,11 @@ static int test_parse_reports_oom(void)
         char*    mt = NULL;
 
         wolfcert_clear_error();
-        REQUIRE(oom_arm(fails) == 0);
+        test_oom_arm(fails);
         rc = wolfcert_scep_parse_pki_message(msg, msg_len, &env, &t, &t_len,
                 NULL, NULL, NULL, NULL, &mt, NULL, &signer, &signer_len,
                 NULL, INVALID_DEVID, NULL);
-        REQUIRE((failed = oom_disarm()) >= 0);
+        failed = test_oom_disarm();
         /* wolfSSL's PKCS#7 verify can report a failed allocation as a parse
          * error, so only wolfCert's own allocations must give ERR_MEMORY. */
         if (rc == WOLFCERT_OK ?
@@ -2921,6 +2858,7 @@ int main(void)
 {
     REQUIRE(test_static_mem_init() == 0);
     REQUIRE(wolfcert_init(test_heap_hint()) == WOLFCERT_OK);
+    REQUIRE(test_oom_init() == 0);
     if (run_test(test_getca_url))
         return 1;
     if (run_test(test_scep_rejects_bad_encoding))
@@ -2971,7 +2909,7 @@ int main(void)
         return 1;
     if (run_test(test_multi_value_signed_attrib))
         return 1;
-#ifdef TEST_ALLOC_FAILURES
+#ifdef TEST_OOM_CERT_NAME
     if (run_test(test_parse_reports_oom))
         return 1;
 #endif

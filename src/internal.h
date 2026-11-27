@@ -378,8 +378,6 @@ int wolfcert_csr_meta_sets_identity(const WolfCertCertMeta* meta);
 WOLFCERT_TEST_VIS int wolfcert_find_san(const DecodedCert* dc,
                                         const byte** san, word32* san_len);
 
-WOLFCERT_TEST_VIS int wolfcert_buffer_is_der(const uint8_t* buf, size_t len);
-
 /* Reads the header of the element with tag at in[*idx] and moves *idx to its
  * content; -1 if it is missing, truncated or of indefinite length. */
 int wolfcert_der_next(const uint8_t* in, word32* idx, word32 end, byte tag,
@@ -397,6 +395,10 @@ WOLFCERT_TEST_VIS int wolfcert_der_chain_next(const uint8_t* buf, size_t len,
 
 /* 1 if item has a certificate's layout. */
 WOLFCERT_TEST_VIS int wolfcert_der_is_cert(const uint8_t* item, size_t len);
+/* 1 if buf starts with a DER certificate. */
+int wolfcert_cert_is_der(const uint8_t* buf, size_t len);
+/* 1 if buf opens with SEQUENCE { INTEGER. */
+WOLFCERT_TEST_VIS int wolfcert_key_is_der(const uint8_t* buf, size_t len);
 
 /* Private key DER of a software key; fails for a key with a key_id. The
  * caller zeroizes and frees *out_der. */

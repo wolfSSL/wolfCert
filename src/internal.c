@@ -531,11 +531,6 @@ WOLFCERT_TEST_VIS void wolfcert_hex_encode(const uint8_t* in, size_t in_len,
     }
 }
 
-WOLFCERT_TEST_VIS int wolfcert_buffer_is_der(const uint8_t* buf, size_t len)
-{
-    return (buf != NULL && len > 0 && buf[0] == 0x30) ? 1 : 0;
-}
-
 int wolfcert_der_next(const uint8_t* in, word32* idx, word32 end, byte tag,
                       int* len)
 {
@@ -640,6 +635,21 @@ WOLFCERT_TEST_VIS int wolfcert_der_is_cert(const uint8_t* item, size_t len)
            der_tbs_is_cert(item + tbs, idx - tbs) &&
            der_skip(item, &idx, (word32)len, 0x30, NULL) &&
            der_skip(item, &idx, (word32)len, 0x03, NULL) && idx == len;
+}
+
+int wolfcert_cert_is_der(const uint8_t* buf, size_t len)
+{
+    return wolfcert_der_is_cert(buf, wolfcert_der_seq_len(buf, len));
+}
+
+WOLFCERT_TEST_VIS int wolfcert_key_is_der(const uint8_t* buf, size_t len)
+{
+    word32 idx = 0;
+    int part = 0;
+
+    return buf != NULL && (size_t)(word32)len == len &&
+           wolfcert_der_next(buf, &idx, (word32)len, 0x30, &part) == 0 &&
+           wolfcert_der_next(buf, &idx, idx + (word32)part, 0x02, &part) == 0;
 }
 
 int wolfcert_pem_cert_to_der(const uint8_t* pem, size_t pem_len,

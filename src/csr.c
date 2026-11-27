@@ -304,7 +304,7 @@ static int copy_cert_identity(Cert* cert, const uint8_t* renew_cert,
     int rc = WOLFCERT_OK;
     int wrc;
 
-    if (!wolfcert_buffer_is_der(renew_cert, renew_cert_len)) {
+    if (!wolfcert_cert_is_der(renew_cert, renew_cert_len)) {
         rc = wolfcert_pem_cert_to_der(renew_cert, renew_cert_len, &pem_der,
                                       heap);
         if (rc == WOLFCERT_ERR_PARSE)

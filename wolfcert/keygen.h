@@ -44,7 +44,9 @@ WOLFCERT_API int wolfcert_key_from_id(const WolfCertKeyCfg* cfg,
                                       const uint8_t* cert, size_t cert_len,
                                       WolfCertKey** out_key);
 
-/* Load a software key from PEM or DER, auto-detected, into host memory. */
+/* Load a software key from PEM or DER into host memory. It is DER when it
+ * opens with SEQUENCE { INTEGER, as a PKCS#1, SEC1 or PKCS#8 private key
+ * does, else PEM. */
 WOLFCERT_API int wolfcert_key_from_pem(const uint8_t* data, size_t data_len,
                                        void* heap, WolfCertKey** out_key);
 

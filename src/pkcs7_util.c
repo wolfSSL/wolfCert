@@ -144,13 +144,8 @@ int wolfcert_cert_der_hash(const uint8_t* cert, size_t cert_len,
     if (cert == NULL || cert_len == 0)
         return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "pkcs7", "no certificate");
 
-    if (wolfcert_buffer_is_der(cert, cert_len)) {
-        size_t n = wolfcert_der_seq_len(cert, cert_len);
-        if (n == 0)
-            return WOLFCERT_ERR(WOLFCERT_ERR_PARSE, "pkcs7",
-                                "certificate is not a DER SEQUENCE");
-        return sha256(cert, n, hash, heap);
-    }
+    if (wolfcert_cert_is_der(cert, cert_len))
+        return sha256(cert, wolfcert_der_seq_len(cert, cert_len), hash, heap);
 
     rc = wolfcert_pem_cert_to_der(cert, cert_len, &der, heap);
     if (rc == WOLFCERT_OK)

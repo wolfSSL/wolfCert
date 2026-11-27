@@ -198,7 +198,7 @@ int wolfcert_key_from_pem(const uint8_t* data, size_t data_len,
     const uint8_t* der_bytes;
     word32         der_len;
 
-    if (wolfcert_buffer_is_der(data, data_len)) {
+    if (wolfcert_key_is_der(data, data_len)) {
         der_bytes = data;
         der_len   = (word32)data_len;
     }
@@ -266,8 +266,11 @@ static int cert_spki(const uint8_t* cert, size_t cert_len, void* heap,
     word32         spki_len = 0;
     int            rc = WOLFCERT_OK;
 
-    if (!wolfcert_buffer_is_der(cert, cert_len)) {
+    if (!wolfcert_cert_is_der(cert, cert_len)) {
         rc = wolfcert_pem_cert_to_der(cert, cert_len, &pem_der, heap);
+        if (rc == WOLFCERT_ERR_PARSE)
+            rc = WOLFCERT_ERR(rc, "keygen",
+                              "public key source is not a certificate");
         der = pem_der.data;
         der_len = pem_der.len;
     }

@@ -288,7 +288,7 @@ static int ca_copy(const uint8_t* in, size_t in_len, WolfCertBuffer* out,
 static int ca_cert_der(const uint8_t* in, size_t in_len, WolfCertBuffer* out,
                        void* heap)
 {
-    if (!wolfcert_buffer_is_der(in, in_len))
+    if (!wolfcert_cert_is_der(in, in_len))
         return wolfcert_pem_cert_to_der(in, in_len, out, heap);
 
     if (!wolfcert_der_is_single(in, in_len))
@@ -320,7 +320,7 @@ int wolfcert_ca_load(WolfCertCa* ca, const uint8_t* cert, size_t cert_len,
         rc = WOLFCERT_ERR(rc, "ca", "ca_cert is not a PEM or DER certificate");
 
     if (rc == WOLFCERT_OK) {
-        if (wolfcert_buffer_is_der(key, key_len) &&
+        if (wolfcert_key_is_der(key, key_len) &&
                 !wolfcert_der_is_single(key, key_len))
             rc = WOLFCERT_ERR_PARSE;
         else

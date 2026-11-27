@@ -108,7 +108,8 @@ typedef struct {
     int              scep_split_ra;
 
     /* CA to issue from: one certificate and its key, PEM or DER, copied at
-     * start. Both NULL generates a CA; one alone is WOLFCERT_ERR_BAD_ARG. */
+     * start; the key is detected as in wolfcert_key_from_pem(). Both NULL
+     * generates a CA; one alone is WOLFCERT_ERR_BAD_ARG. */
     const uint8_t*   ca_cert;
     size_t           ca_cert_len;
     const uint8_t*   ca_key;

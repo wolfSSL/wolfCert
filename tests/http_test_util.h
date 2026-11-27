@@ -27,7 +27,8 @@
 
 #include <string.h>
 
-/* cfg may be NULL; a NULL base_url takes the request URL. */
+/* cfg may be NULL; a NULL base_url takes the request URL, a 0 timeout_ms
+ * 30 s. */
 static inline int test_http_request(const WolfCertHttpSessionCfg* cfg,
                                     const WolfCertHttpRequest* req,
                                     WolfCertHttpResponse* resp)
@@ -46,6 +47,8 @@ static inline int test_http_request(const WolfCertHttpSessionCfg* cfg,
         memset(&c, 0, sizeof(c));
     if (c.base_url == NULL)
         c.base_url = req->url;
+    if (c.timeout_ms == 0)
+        c.timeout_ms = 30000;
 
     rc = wolfcert_http_session_open(&c, &s);
     if (rc == WOLFCERT_OK) {

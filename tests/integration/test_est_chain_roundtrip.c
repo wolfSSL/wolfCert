@@ -259,6 +259,7 @@ static int test_client_chain(const char* url)
         .client_cert_len   = (size_t)g_cli.pem_len,
         .client_key        = g_cli.key_pem,
         .client_key_len    = (size_t)g_cli.key_pem_len,
+        .timeout_ms        = 30000,
     };
 
     /* The server trusts only the root, so the leaf alone is refused. */
@@ -336,6 +337,7 @@ static int test_der_anchors(const char* url)
         .verify_server     = 1,
         .client_key        = g_cli.key_pem,
         .client_key_len    = (size_t)g_cli.key_pem_len,
+        .timeout_ms        = 30000,
     };
 
     cli.client_cert = chain;
@@ -398,6 +400,7 @@ static int reenroll_with(const char* url, const uint8_t* cur, size_t cur_len)
         .trust_anchors     = g_int.pem,
         .trust_anchors_len = (size_t)g_int.pem_len,
         .verify_server     = 1,
+        .timeout_ms        = 30000,
     };
     WolfCertCertMeta meta = { 0 };
     WolfCertKey* cur_key = NULL;
@@ -548,6 +551,7 @@ static int certs_sent(const uint8_t* client_cert, size_t client_cert_len)
         .verify_server     = 1,
         .client_key        = g_cli.key_pem,
         .client_key_len    = (size_t)g_cli.key_pem_len,
+        .timeout_ms        = 30000,
     };
 
     memset(&cs, 0, sizeof(cs));

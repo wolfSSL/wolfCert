@@ -60,6 +60,8 @@ const char* wolfcert_strerror(int err)
             return "TLS client certificate rejected by peer";
         case WOLFCERT_ERR_TLS_UNTRUSTED:
             return "TLS server certificate or trust anchor not trusted";
+        case WOLFCERT_ERR_TIMEOUT:
+            return "timed out";
         default:
             return "unknown error";
     }

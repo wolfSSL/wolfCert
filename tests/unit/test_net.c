@@ -26,8 +26,11 @@
 #include <wolfcert/wolfcert.h>
 #include <wolfcert/http.h>
 #include "internal.h"
+#include "../test_static_mem.h"
+#include "../net_test_util.h"
 
 #include <arpa/inet.h>
+#include <errno.h>
 #include <netinet/in.h>
 #include <signal.h>
 #include <stdint.h>
@@ -188,8 +191,124 @@ static int test_connect_eintr_keeps_deadline(int64_t baseline_ms)
     return 0;
 }
 
+/* An unresolvable host and a refused loopback connect fail with IO; the
+ * refusal sets errno ECONNREFUSED. */
+static int test_connect_errno(void)
+{
+    void* conn = NULL;
+    uint16_t port = 0;
+    int ls = black_hole_listener(&port);
+
+    REQUIRE(ls >= 0);
+    close(ls);
+
+    REQUIRE(wolfcert_posix_transport.connect(NULL, "", 443, 1000, &conn)
+            == WOLFCERT_ERR_IO);
+    REQUIRE(wolfcert_posix_connect("127.0.0.1", port, 1000, NULL) < 0);
+    REQUIRE(errno == ECONNREFUSED);
+    REQUIRE(wolfcert_posix_transport.connect(NULL, "127.0.0.1", port, 1000,
+                                             &conn) == WOLFCERT_ERR_IO);
+    return 0;
+}
+
+/* The built-in connect to 10.255.255.1 with 250 ms returns TIMEOUT. Needs a
+ * host where that address times out; baseline_ms is that timeout. */
+static int test_connect_times_out(int64_t baseline_ms)
+{
+    void* conn = NULL;
+
+    if (baseline_ms < 240)
+        return 0;
+    REQUIRE(wolfcert_posix_transport.connect(NULL, "10.255.255.1", 9, 250,
+                                             &conn) == WOLFCERT_ERR_TIMEOUT);
+    return 0;
+}
+
+/* A transport write to a peer that stops reading fails with TIMEOUT after
+ * timeout_ms. */
+static int test_write_times_out(void)
+{
+    static const uint8_t chunk[4096] = { 0 };
+    int64_t t0;
+    int64_t elapsed;
+    int sv[2];
+    int rc;
+
+    REQUIRE(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0);
+    rc = fcntl(sv[0], F_SETFL, fcntl(sv[0], F_GETFL, 0) | O_NONBLOCK);
+    while (rc == 0 && send(sv[0], chunk, sizeof(chunk), 0) > 0)
+        ;
+    if (rc != 0) {
+        close(sv[0]);
+        close(sv[1]);
+        return 1;
+    }
+
+    t0 = wolfcert_mono_ms();
+    rc = wolfcert_posix_transport.write(NULL, (void*)(intptr_t)sv[0], chunk,
+                                        sizeof(chunk), 300);
+    elapsed = wolfcert_mono_ms() - t0;
+    close(sv[0]);
+    close(sv[1]);
+
+    REQUIRE(rc == WOLFCERT_ERR_TIMEOUT);
+    REQUIRE(elapsed >= 250);
+    REQUIRE(elapsed < 3000);
+    return 0;
+}
+
+/* A blocking request to a peer that never answers fails with TIMEOUT after
+ * timeout_ms, over plain HTTP and in the TLS handshake, signals or not. */
+static int test_silent_peer_times_out(const char* scheme, int signals)
+{
+    WolfCertHttpRequest req = { .method = "GET" };
+    WolfCertHttpSessionCfg cfg = { 0 };
+    WolfCertHttpResponse resp = { 0 };
+    WolfCertHttpSession* s = NULL;
+    char url[64];
+    int64_t t0;
+    int64_t elapsed;
+    uint16_t port = 0;
+    int ls = black_hole_listener(&port);
+    int rc;
+
+    REQUIRE(ls >= 0);
+    snprintf(url, sizeof(url), "%s://127.0.0.1:%d/", scheme, port);
+    req.url        = url;
+    cfg.base_url   = url;
+    cfg.timeout_ms = 300;
+    rc = wolfcert_http_session_open(&cfg, &s);
+    if (rc != WOLFCERT_OK)
+        close(ls);
+    REQUIRE(rc == WOLFCERT_OK);
+
+    if (signals && alarms_start()) {
+        wolfcert_http_session_close(s);
+        close(ls);
+        return 1;
+    }
+    t0 = wolfcert_mono_ms();
+    rc = wolfcert_http_session_request(s, &req, &resp);
+    elapsed = wolfcert_mono_ms() - t0;
+    if (signals && alarms_stop()) {
+        wolfcert_http_session_close(s);
+        close(ls);
+        return 1;
+    }
+    wolfcert_http_response_free(&resp);
+    wolfcert_http_session_close(s);
+    close(ls);
+
+    REQUIRE(rc == WOLFCERT_ERR_TIMEOUT);
+    REQUIRE(elapsed >= 250);
+    REQUIRE(elapsed < 3000);
+    return 0;
+}
+
 int main(void)
 {
+    REQUIRE(test_static_mem_init() == 0);
+
     /* Connect with a 1000 ms timeout to a loopback listener succeeds. */
     int ls = socket(AF_INET, SOCK_STREAM, 0);
     REQUIRE(ls >= 0);
@@ -219,7 +338,18 @@ int main(void)
     REQUIRE(fd2 < 0);
     REQUIRE(elapsed < 3000);
 
-    if (test_connect_eintr_keeps_deadline(elapsed))
+    if (test_connect_eintr_keeps_deadline(elapsed) ||
+        test_connect_times_out(elapsed) || test_connect_errno())
+        return 1;
+
+    REQUIRE(wolfcert_init(test_heap_hint()) == WOLFCERT_OK);
+    if (test_silent_peer_times_out("http", 0) ||
+        test_silent_peer_times_out("https", 0) ||
+        test_silent_peer_times_out("http", 1))
+        return 1;
+    wolfcert_cleanup();
+
+    if (test_write_times_out())
         return 1;
 
     if (test_no_sigpipe_on_dead_peer())

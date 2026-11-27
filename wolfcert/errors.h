@@ -66,7 +66,11 @@ enum {
      * a key usage, path length or critical extension violation, or a key below
      * wolfSSL's minimum size. Session open returns it when a trust anchor is
      * not valid at the device time. */
-    WOLFCERT_ERR_TLS_UNTRUSTED     = -18
+    WOLFCERT_ERR_TLS_UNTRUSTED     = -18,
+
+    /* A transport wait outlasted its bound: timeout_ms of the config, or the
+     * transport's own. */
+    WOLFCERT_ERR_TIMEOUT           = -19
 };
 
 /* Returns a human-readable description of a wolfCert error code. */

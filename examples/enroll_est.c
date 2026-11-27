@@ -97,6 +97,7 @@ int main(int argc, char** argv)
         .trust_anchors     = trust,
         .trust_anchors_len = trust_len,
         .verify_server     = trust != NULL,
+        .timeout_ms        = 30000,
     };
     WolfCertEstResult res = { 0 };
     int rc = wolfcert_est_simple_enroll(&srv, csr.data, csr.len, &res);

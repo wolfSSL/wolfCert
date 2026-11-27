@@ -57,7 +57,11 @@ static int get_cert_path(WolfCertServer* s)
 {
     char url[128];
     snprintf(url, sizeof(url), "http://127.0.0.1:%u/scep", wolfcert_server_port(s));
-    WolfCertServerCfg cli = { .protocol = WOLFCERT_PROTO_SCEP, .server_url = url };
+    WolfCertServerCfg cli = {
+        .protocol = WOLFCERT_PROTO_SCEP,
+        .server_url = url,
+        .timeout_ms = 30000,
+    };
 
     WolfCertScepCaps caps = { 0 };
     REQUIRE(wolfcert_scep_get_ca_caps(&cli, &caps) == WOLFCERT_OK);
@@ -312,7 +316,11 @@ static int disabled_path(WolfCertServer* s)
 {
     char url[128];
     snprintf(url, sizeof(url), "http://127.0.0.1:%u/scep", wolfcert_server_port(s));
-    WolfCertServerCfg cli = { .protocol = WOLFCERT_PROTO_SCEP, .server_url = url };
+    WolfCertServerCfg cli = {
+        .protocol = WOLFCERT_PROTO_SCEP,
+        .server_url = url,
+        .timeout_ms = 30000,
+    };
 
     WolfCertScepCaps caps = { 0 };
     REQUIRE(wolfcert_scep_get_ca_caps(&cli, &caps) == WOLFCERT_OK);

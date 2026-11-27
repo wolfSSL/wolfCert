@@ -63,11 +63,45 @@ int64_t wolfcert_mono_ms(void)
     return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
+/* deadline 0 never waits, < 0 waits without a bound; else the
+ * wolfcert_mono_ms() time to give up at. */
+static int posix_wait(int fd, short events, int64_t deadline)
+{
+    struct pollfd pfd;
+    int64_t left;
+    int wait_ms;
+    int pr;
+
+    pfd.fd      = fd;
+    pfd.events  = events;
+    pfd.revents = 0;
+
+    for (;;) {
+        wait_ms = (deadline < 0) ? -1 : 0;
+        if (deadline > 0) {
+            left = deadline - wolfcert_mono_ms();
+            wait_ms = (left > 0) ? (int)left : 0;
+        }
+        pr = poll(&pfd, 1, wait_ms);
+        if (pr > 0)
+            return WOLFCERT_OK;
+        if (pr < 0 && errno != EINTR)
+            return WOLFCERT_ERR_IO;
+        if (pr == 0 || wait_ms == 0)
+            break;
+    }
+
+    if (deadline == 0)
+        return (events & POLLIN) ? WOLFCERT_ERR_WANT_READ
+                                 : WOLFCERT_ERR_WANT_WRITE;
+    return WOLFCERT_ERR_TIMEOUT;
+}
+
 /* timeout_ms <= 0 blocks. Returns 0 on success, -1 on error or timeout. */
 static int connect_timeout(int fd, const struct sockaddr* addr, socklen_t alen,
                            int timeout_ms)
 {
-    int64_t deadline = (timeout_ms > 0) ? wolfcert_mono_ms() + timeout_ms : 0;
+    int64_t deadline = (timeout_ms > 0) ? wolfcert_mono_ms() + timeout_ms : -1;
     int flags = fcntl(fd, F_GETFL, 0);
     int rc;
 
@@ -78,31 +112,22 @@ static int connect_timeout(int fd, const struct sockaddr* addr, socklen_t alen,
     rc = connect(fd, addr, alen);
     /* An interrupted connect() completes in the background (POSIX). */
     if (rc != 0 && (errno == EINPROGRESS || errno == EINTR)) {
-        struct pollfd pfd = { .fd = fd, .events = POLLOUT };
-        int pr;
+        int wr = posix_wait(fd, POLLOUT, deadline);
 
-        for (;;) {
-            int wait_ms = -1;
-            int last = 0;
-
-            if (timeout_ms > 0) {
-                int64_t left = deadline - wolfcert_mono_ms();
-                last    = (left <= 0);
-                wait_ms = last ? 0 : (int)left;
-            }
-            pr = poll(&pfd, 1, wait_ms);
-            if (pr >= 0 || errno != EINTR || last)
-                break;
-        }
-
-        if (pr <= 0) {
+        if (wr != WOLFCERT_OK) {
+            if (wr == WOLFCERT_ERR_TIMEOUT)
+                errno = ETIMEDOUT;
             rc = -1;
         }
         else {
             int err = 0;
             socklen_t elen = sizeof(err);
-            if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &elen) < 0 || err != 0)
+            if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &elen) < 0)
                 rc = -1;
+            else if (err != 0) {
+                errno = err;
+                rc = -1;
+            }
             else
                 rc = 0;
         }
@@ -120,8 +145,10 @@ static int connect_timeout(int fd, const struct sockaddr* addr, socklen_t alen,
 int wolfcert_posix_connect(const char* host, int port, int timeout_ms, void* ctx)
 {
     (void)ctx;
-    if (host == NULL)
+    if (host == NULL) {
+        errno = EINVAL;
         return -1;
+    }
 
     char port_s[16];
     snprintf(port_s, sizeof(port_s), "%d", port);
@@ -131,58 +158,45 @@ int wolfcert_posix_connect(const char* host, int port, int timeout_ms, void* ctx
     hints.ai_family   = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
 
-    if (getaddrinfo(host, port_s, &hints, &res) != 0)
+    if (getaddrinfo(host, port_s, &hints, &res) != 0) {
+        errno = EHOSTUNREACH;
         return -1;
+    }
 
     /* timeout_ms bounds the whole connect across all candidate addresses. */
     int64_t deadline = (timeout_ms > 0) ? wolfcert_mono_ms() + timeout_ms : 0;
 
     int fd = -1;
+    int err = 0;
     for (rp = res; rp != NULL; rp = rp->ai_next) {
         int attempt_ms = timeout_ms;
         if (timeout_ms > 0) {
             attempt_ms = (int)(deadline - wolfcert_mono_ms());
             if (attempt_ms <= 0) {
+                err = ETIMEDOUT;
                 break;
             }
         }
         fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
-        if (fd < 0)
+        if (fd < 0) {
+            err = errno;
             continue;
+        }
 
         wolfcert_sock_nosigpipe(fd);
 
         if (connect_timeout(fd, rp->ai_addr, rp->ai_addrlen, attempt_ms) == 0)
             break;
 
+        err = errno;
         close(fd);
         fd = -1;
     }
 
     freeaddrinfo(res);
+    if (fd < 0)
+        errno = err;
     return fd;
-}
-
-/* Returns `want` when fd is not ready and timeout_ms is 0. */
-static int posix_wait(int fd, short events, int timeout_ms, int want)
-{
-    struct pollfd pfd;
-    int pr;
-
-    pfd.fd      = fd;
-    pfd.events  = events;
-    pfd.revents = 0;
-
-    do {
-        pr = poll(&pfd, 1, timeout_ms);
-    } while (pr < 0 && errno == EINTR);
-
-    if (pr < 0)
-        return WOLFCERT_ERR_IO;
-    if (pr == 0)
-        return (timeout_ms == 0) ? want : WOLFCERT_ERR_IO;
-
-    return WOLFCERT_OK;
 }
 
 #if defined(EWOULDBLOCK) && EWOULDBLOCK != EAGAIN
@@ -210,9 +224,10 @@ static int posix_connect(void* ctx, const char* host, int port,
     if (host == NULL || conn == NULL)
         return WOLFCERT_ERR_BAD_ARG;
 
+    errno = 0;
     fd = wolfcert_posix_connect(host, port, timeout_ms, ctx);
     if (fd < 0)
-        return WOLFCERT_ERR_IO;
+        return (errno == ETIMEDOUT) ? WOLFCERT_ERR_TIMEOUT : WOLFCERT_ERR_IO;
 
     if (set_nonblock(fd) != WOLFCERT_OK) {
         (void)close(fd);
@@ -227,6 +242,7 @@ static int posix_read(void* ctx, void* conn, uint8_t* buf, size_t len,
                       int timeout_ms)
 {
     int fd = (int)(intptr_t)conn;
+    int64_t deadline = 0;
     ssize_t n;
     int rc;
 
@@ -236,9 +252,11 @@ static int posix_read(void* ctx, void* conn, uint8_t* buf, size_t len,
         return WOLFCERT_ERR_BAD_ARG;
     if (len > INT_MAX)
         len = INT_MAX;
+    if (timeout_ms > 0)
+        deadline = wolfcert_mono_ms() + timeout_ms;
 
     for (;;) {
-        rc = posix_wait(fd, POLLIN, timeout_ms, WOLFCERT_ERR_WANT_READ);
+        rc = posix_wait(fd, POLLIN, deadline);
         if (rc != WOLFCERT_OK)
             return rc;
 
@@ -251,10 +269,10 @@ static int posix_read(void* ctx, void* conn, uint8_t* buf, size_t len,
         if (n == 0)
             return WOLFCERT_ERR_CONN_CLOSED;
 
-        /* Readiness can be spurious; only an unbounded caller retries. */
+        /* Readiness can be spurious; only a waiting caller retries. */
         if (!WOLFCERT_WOULDBLOCK(errno))
             return WOLFCERT_ERR_IO;
-        if (timeout_ms >= 0)
+        if (timeout_ms == 0)
             return WOLFCERT_ERR_WANT_READ;
     }
 }
@@ -263,6 +281,7 @@ static int posix_write(void* ctx, void* conn, const uint8_t* buf, size_t len,
                        int timeout_ms)
 {
     int fd = (int)(intptr_t)conn;
+    int64_t deadline = 0;
     ssize_t n;
     int rc;
 
@@ -272,9 +291,11 @@ static int posix_write(void* ctx, void* conn, const uint8_t* buf, size_t len,
         return WOLFCERT_ERR_BAD_ARG;
     if (len > INT_MAX)
         len = INT_MAX;
+    if (timeout_ms > 0)
+        deadline = wolfcert_mono_ms() + timeout_ms;
 
     for (;;) {
-        rc = posix_wait(fd, POLLOUT, timeout_ms, WOLFCERT_ERR_WANT_WRITE);
+        rc = posix_wait(fd, POLLOUT, deadline);
         if (rc != WOLFCERT_OK)
             return rc;
 
@@ -289,7 +310,7 @@ static int posix_write(void* ctx, void* conn, const uint8_t* buf, size_t len,
 
         if (!WOLFCERT_WOULDBLOCK(errno))
             return WOLFCERT_ERR_IO;
-        if (timeout_ms >= 0)
+        if (timeout_ms == 0)
             return WOLFCERT_ERR_WANT_WRITE;
     }
 }

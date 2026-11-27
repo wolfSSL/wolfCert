@@ -259,7 +259,8 @@ int main(void)
                                                          .password = "hunter2" },
                                      .trust_anchors = tls_cert,
                                      .trust_anchors_len = tls_cert_len,
-                                     .verify_server = 1 };
+                                     .verify_server = 1,
+                                     .timeout_ms    = 30000 };
 
     WolfCertTransport counting_transport = {
         counting_connect, counting_read, counting_write, counting_disconnect,
@@ -381,7 +382,8 @@ int main(void)
                                .trust_anchors_len = tls_cert_len,
                                .verify_server = 1,
                                .proto_opts.est = { .username = "alice",
-                                                   .password = "hunter" } };
+                                                   .password = "hunter" },
+                                                   .timeout_ms = 30000 };
 
     WolfCertKeyCfg akcfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
                              .dev_id = INVALID_DEVID };

@@ -81,7 +81,7 @@ int main(void)
         wolfcert_cleanup();
         return 1;
     }
-    for (int err = WOLFCERT_ERR_GENERIC; err >= WOLFCERT_ERR_TLS_UNTRUSTED;
+    for (int err = WOLFCERT_ERR_GENERIC; err >= WOLFCERT_ERR_TIMEOUT;
          err--) {
         if (strcmp(wolfcert_strerror(err), "unknown error") == 0) {
             fprintf(stderr, "no wolfcert_strerror text for %d\n", err);
@@ -89,7 +89,7 @@ int main(void)
             return 1;
         }
     }
-    if (strcmp(wolfcert_strerror(WOLFCERT_ERR_TLS_UNTRUSTED - 1),
+    if (strcmp(wolfcert_strerror(WOLFCERT_ERR_TIMEOUT - 1),
                "unknown error") != 0) {
         wolfcert_cleanup();
         return 1;

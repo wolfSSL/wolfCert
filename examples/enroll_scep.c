@@ -80,7 +80,11 @@ int main(int argc, char** argv)
     if (wolfcert_init(NULL) != WOLFCERT_OK)
         return 1;
 
-    WolfCertServerCfg srv = { .protocol = WOLFCERT_PROTO_SCEP, .server_url = argv[1] };
+    WolfCertServerCfg srv = {
+        .protocol = WOLFCERT_PROTO_SCEP,
+        .server_url = argv[1],
+        .timeout_ms = 30000,
+    };
 
     /* 1) GetCACert, converted to DER for the SCEP envelope. */
     WolfCertBuffer ca_pem = { 0 };

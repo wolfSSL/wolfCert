@@ -345,9 +345,20 @@ typedef struct {
     WolfCertTransport t;
     void*        handle;
     WOLFSSL*     ssl;
-    int          io_timeout_ms;   /* 0 nonblocking, < 0 unbounded */
+    int          io_timeout_ms;   /* 0 nonblocking, else the bound per wait */
     unsigned int connected : 1;
+    unsigned int timed_out : 1;   /* a transport read or write timed out */
 } WolfCertConn;
+
+static int conn_timeout_err(const WolfCertConn* c)
+{
+    if (c->io_timeout_ms <= 0)
+        return WOLFCERT_ERR(WOLFCERT_ERR_TIMEOUT, "http",
+            "http: the transport timed out");
+
+    return WOLFCERT_ERR(WOLFCERT_ERR_TIMEOUT, "http",
+        "http: no progress from the peer within %d ms", c->io_timeout_ms);
+}
 
 /* Open a connection and take a copy of the transport that owns it. */
 static int dial(WolfCertConn* c, const char* host, int port, int timeout_ms,
@@ -377,9 +388,16 @@ static int dial(WolfCertConn* c, const char* host, int port, int timeout_ms,
     }
 
     rc = c->t.connect(c->t.ctx, host, port, timeout_ms, &c->handle);
+    if (rc == WOLFCERT_ERR_TIMEOUT)
+        return WOLFCERT_ERR(rc, "http", "http: connect to %s:%d timed out "
+                            "(timeout_ms %d)", host, port, timeout_ms);
+    if (rc == WOLFCERT_ERR_WANT_READ || rc == WOLFCERT_ERR_WANT_WRITE ||
+            rc > 0)
+        return WOLFCERT_ERR(WOLFCERT_ERR_IO, "http",
+            "transport connect returned %d; it must block and return 0 or "
+            "an error", rc);
     if (rc != WOLFCERT_OK)
-        return rc < 0 ? rc : WOLFCERT_ERR(WOLFCERT_ERR_IO, "http",
-            "transport connect returned %d, not 0 or a WOLFCERT_ERR_*", rc);
+        return rc;
 
     c->connected = 1;
     return WOLFCERT_OK;
@@ -412,6 +430,7 @@ struct WolfCertHttpSession {
     WolfCertUrl   base;
     size_t        max_body;
     void*         heap;
+    int           wait_ms;      /* io_timeout_ms of a blocking call */
     unsigned int  closed : 1;
     unsigned int  keep_alive : 1;
     unsigned int  sm_head_request : 1;
@@ -464,6 +483,9 @@ static int wolfcert_cbio_recv(WOLFSSL* ssl, char* buf, int sz, void* ctx)
             return WOLFSSL_CBIO_ERR_WANT_READ;
         case WOLFCERT_ERR_CONN_CLOSED:
             return WOLFSSL_CBIO_ERR_CONN_CLOSE;
+        case WOLFCERT_ERR_TIMEOUT:
+            c->timed_out = 1;
+            return WOLFSSL_CBIO_ERR_GENERAL;
         default:
             return WOLFSSL_CBIO_ERR_GENERAL;
     }
@@ -492,6 +514,9 @@ static int wolfcert_cbio_send(WOLFSSL* ssl, char* buf, int sz, void* ctx)
             return WOLFSSL_CBIO_ERR_WANT_WRITE;
         case WOLFCERT_ERR_CONN_CLOSED:
             return WOLFSSL_CBIO_ERR_CONN_CLOSE;
+        case WOLFCERT_ERR_TIMEOUT:
+            c->timed_out = 1;
+            return WOLFSSL_CBIO_ERR_GENERAL;
         default:
             return WOLFSSL_CBIO_ERR_GENERAL;
     }
@@ -1467,6 +1492,9 @@ int wolfcert_http_session_open(const WolfCertHttpSessionCfg* cfg,
 {
     if (cfg == NULL || cfg->base_url == NULL || out == NULL)
         return WOLFCERT_ERR_BAD_ARG;
+    if (cfg->timeout_ms <= 0)
+        return WOLFCERT_ERR(WOLFCERT_ERR_BAD_ARG, "http",
+                            "timeout_ms must be > 0, got %d", cfg->timeout_ms);
 
     int rc = check_client_key(cfg->client_cert, cfg->client_cert_len,
                               cfg->client_key, cfg->client_key_obj);
@@ -1503,7 +1531,8 @@ int wolfcert_http_session_open(const WolfCertHttpSessionCfg* cfg,
         return rc;
     }
 
-    rc = dial(&s->conn, s->base.host, s->base.port, cfg->timeout_ms,
+    s->wait_ms = cfg->timeout_ms;
+    rc = dial(&s->conn, s->base.host, s->base.port, s->wait_ms,
               &cfg->transport);
     if (rc != WOLFCERT_OK) {
         wolfcert_http_session_close(s);
@@ -1631,6 +1660,8 @@ static int nb_write(WolfCertConn* c, const uint8_t* buf, size_t len, size_t* off
                 return WOLFCERT_ERR_WANT_WRITE;
             if (e == WOLFSSL_ERROR_WANT_READ)
                 return WOLFCERT_ERR_WANT_READ;
+            if (c->timed_out && e == SOCKET_ERROR_E)
+                return conn_timeout_err(c);
 
             return tls_failure(c->ssl, w, WOLFCERT_ERR_IO, "wolfSSL_write", 1);
         }
@@ -1646,6 +1677,8 @@ static int nb_write(WolfCertConn* c, const uint8_t* buf, size_t len, size_t* off
 
         if (r == WOLFCERT_ERR_WANT_READ || r == WOLFCERT_ERR_WANT_WRITE)
             return r;
+        if (r == WOLFCERT_ERR_TIMEOUT)
+            return conn_timeout_err(c);
 
         return WOLFCERT_ERR_IO;
     }
@@ -1747,6 +1780,8 @@ static int nb_read_some(WolfCertHttpSession* s, size_t limit, int* ended)
             *ended = 1;
             return WOLFCERT_OK;
         }
+        if (s->conn.timed_out && e == SOCKET_ERROR_E)
+            return conn_timeout_err(&s->conn);
 
         return tls_failure(s->conn.ssl, r, WOLFCERT_ERR_IO, "wolfSSL_read", 1);
     }
@@ -1770,6 +1805,8 @@ static int nb_read_some(WolfCertHttpSession* s, size_t limit, int* ended)
 
     if (r == WOLFCERT_ERR_WANT_READ || r == WOLFCERT_ERR_WANT_WRITE)
         return r;
+    if (r == WOLFCERT_ERR_TIMEOUT)
+        return conn_timeout_err(&s->conn);
 
     return WOLFCERT_ERR_IO;
 }
@@ -1976,6 +2013,8 @@ static int sm_handshake(WolfCertHttpSession* s)
         return WOLFCERT_ERR_WANT_READ;
     if (e == WOLFSSL_ERROR_WANT_WRITE)
         return WOLFCERT_ERR_WANT_WRITE;
+    if (s->conn.timed_out && e == SOCKET_ERROR_E)
+        return conn_timeout_err(&s->conn);
 
     return tls_failure(s->conn.ssl, r, WOLFCERT_ERR_TLS,
                        "TLS handshake (wolfSSL_connect)", 0);
@@ -2279,7 +2318,7 @@ static int http_session_call(WolfCertHttpSession* s,
             "and the resp it was started with");
     }
 
-    s->conn.io_timeout_ms = nb ? 0 : -1;
+    s->conn.io_timeout_ms = nb ? 0 : s->wait_ms;
     if (s->sm_resp == NULL) {
         rc = sm_begin(s, req, resp);
         if (rc != WOLFCERT_OK)
@@ -2290,7 +2329,8 @@ static int http_session_call(WolfCertHttpSession* s,
     if (!nb &&
         (rc == WOLFCERT_ERR_WANT_READ || rc == WOLFCERT_ERR_WANT_WRITE)) {
         rc = sm_fail(s, WOLFCERT_ERR(WOLFCERT_ERR_IO, "http",
-            "transport returned WANT_READ/WANT_WRITE on a blocking call"));
+            "transport returned WANT_READ/WANT_WRITE on a blocking call; "
+            "timeout_ms > 0 asks it to wait"));
     }
 
     return rc;

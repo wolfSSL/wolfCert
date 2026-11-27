@@ -98,6 +98,7 @@ static int test_reenroll_ignores_cfg_identity(const char* url,
         .trust_anchors     = tls_cert,
         .trust_anchors_len = tls_cert_len,
         .verify_server     = 1,
+        .timeout_ms        = 30000,
     };
     int rc;
 
@@ -170,6 +171,7 @@ static int test_reenroll_rejects_identity_change(const char* url,
         .trust_anchors     = tls_cert,
         .trust_anchors_len = tls_cert_len,
         .verify_server     = 1,
+        .timeout_ms        = 30000,
     };
     WolfCertKey* cur_key = NULL;
     WolfCertKey* dk = NULL;
@@ -440,6 +442,7 @@ static int test_reenroll_server_issued(const uint8_t* tls_cert, size_t tls_cert_
         .client_cert_len   = cli_cert_len,
         .client_key        = cli_key,
         .client_key_len    = cli_key_len,
+        .timeout_ms        = 30000,
     };
 
     REQUIRE(wolfcert_key_generate(&kcfg, &k1) == WOLFCERT_OK);
@@ -564,6 +567,7 @@ static int test_reenroll_under_approval(const uint8_t* tls_cert, size_t tls_cert
         .trust_anchors     = tls_cert,
         .trust_anchors_len = tls_cert_len,
         .verify_server     = 1,
+        .timeout_ms        = 30000,
     };
 
     REQUIRE(wolfcert_key_from_pem(cli_key, cli_key_len, NULL, &cur_key) == WOLFCERT_OK);
@@ -660,6 +664,7 @@ static int test_reenroll_trust_issued(const uint8_t* tls_cert, size_t tls_cert_l
         .trust_anchors     = tls_cert,
         .trust_anchors_len = tls_cert_len,
         .verify_server     = 1,
+        .timeout_ms        = 30000,
     };
     REQUIRE(wolfcert_est_get_cacerts(&cli, WOLFCERT_ENCODING_PEM, &ca_pem) == WOLFCERT_OK);
 
@@ -846,6 +851,7 @@ static int test_trust_issued_with_client_ca(const uint8_t* tls_cert,
         .trust_anchors     = tls_cert,
         .trust_anchors_len = tls_cert_len,
         .verify_server     = 1,
+        .timeout_ms        = 30000,
     };
     REQUIRE(wolfcert_est_get_cacerts(&cli, WOLFCERT_ENCODING_PEM,
                                      &other_ca) == WOLFCERT_OK);
@@ -1004,6 +1010,7 @@ static int test_trust_issued_pinned_self_signed(const uint8_t* tls_cert,
         .client_cert_len   = cli_cert_len,
         .client_key        = cli_key,
         .client_key_len    = cli_key_len,
+        .timeout_ms        = 30000,
     };
     REQUIRE(wolfcert_key_generate(&kcfg, &k) == WOLFCERT_OK);
     REQUIRE(wolfcert_csr_build(k, &meta, &csr) == WOLFCERT_OK);
@@ -1036,6 +1043,7 @@ static int test_reenroll_needs_peer_cert(const char* url,
         .trust_anchors     = tls_cert,
         .trust_anchors_len = tls_cert_len,
         .verify_server     = 1,
+        .timeout_ms        = 30000,
     };
     WolfCertKey* cur_key = NULL;
     WolfCertKey* dk = NULL;
@@ -1123,6 +1131,7 @@ int main(void)
             .server_url        = url,
             .trust_anchors = tls_cert, .trust_anchors_len = tls_cert_len,
             .verify_server     = 1,
+            .timeout_ms        = 30000,
         };
         WolfCertBuffer ca_pem = { 0 };
         int rc = wolfcert_est_get_cacerts(&cli, WOLFCERT_ENCODING_PEM, &ca_pem);
@@ -1151,6 +1160,7 @@ int main(void)
             .client_cert_len   = cli_cert_len,
             .client_key        = cli_key,
             .client_key_len    = cli_key_len,
+            .timeout_ms        = 30000,
         };
 
         WolfCertBuffer ca_pem = { 0 };

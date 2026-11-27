@@ -30,8 +30,10 @@ extern "C" {
  * with the session's trust anchors. */
 
 /* Blocking getaddrinfo + socket + connect over POSIX/BSD sockets, returning
- * a connected fd or -1. Exported so a custom transport's connect can open its
- * TCP leg with it. */
+ * a connected fd or -1. A positive timeout_ms bounds the connect but not
+ * getaddrinfo(), with errno ETIMEDOUT once it runs out; 0 or less leaves the
+ * stack's own limit.
+ * Exported so a custom transport's connect can open its TCP leg with it. */
 #ifdef WOLFCERT_HAVE_BUILTIN_TRANSPORT
 WOLFCERT_API int wolfcert_posix_connect(const char* host, int port,
                                         int timeout_ms, void* ctx);
@@ -73,6 +75,7 @@ typedef struct {
     const uint8_t* trust_anchors;
     size_t         trust_anchors_len;
     int            verify_server;
+    /* As in WolfCertServerCfg. */
     int            timeout_ms;
     size_t         max_response_bytes;  /* 0 -> 64 KiB */
 

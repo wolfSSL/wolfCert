@@ -48,6 +48,8 @@
 #include <time.h>
 #include <unistd.h>
 
+#define CLIENT_TIMEOUT_MS 30000
+
 static uint8_t* read_whole(const char* path, size_t* out_len)
 {
     FILE* f = fopen(path, "rb");
@@ -1408,7 +1410,8 @@ static int cmd_getcacerts(int argc, char** argv)
         ret = 1;
 #endif
 
-    WolfCertServerCfg srv = { .protocol = p, .server_url = opts.url };
+    WolfCertServerCfg srv = { .protocol = p, .server_url = opts.url,
+                              .timeout_ms = CLIENT_TIMEOUT_MS };
 
     if (ret == 0) {
         fill_trust(&opts, &srv, &trust_hold);
@@ -1522,7 +1525,8 @@ static int cmd_enroll(int argc, char** argv)
 #endif
 
     /* --csrattrs-auto needs the server cfg before the key type is chosen. */
-    WolfCertServerCfg srv = { .protocol = p, .server_url = opts.url };
+    WolfCertServerCfg srv = { .protocol = p, .server_url = opts.url,
+                              .timeout_ms = CLIENT_TIMEOUT_MS };
     WolfCertCertMeta meta = { .subject_dn = opts.subject,
                               .san_dns = opts.san_dns, .san_dns_len = opts.san_dns_len,
                               .san_ip = opts.san_ip, .san_ip_len = opts.san_ip_len,
@@ -1819,7 +1823,8 @@ static int cmd_reenroll(int argc, char** argv)
         ret = 2;
     }
 
-    WolfCertServerCfg srv = { .protocol = p, .server_url = opts.url };
+    WolfCertServerCfg srv = { .protocol = p, .server_url = opts.url,
+                              .timeout_ms = CLIENT_TIMEOUT_MS };
 
     if (ret == 0) {
         fill_trust(&opts, &srv, &trust_hold);
@@ -2012,7 +2017,8 @@ static int cmd_getcert(int argc, char** argv)
         ret = 2;
     }
 
-    WolfCertServerCfg srv = { .protocol = p, .server_url = opts.url };
+    WolfCertServerCfg srv = { .protocol = p, .server_url = opts.url,
+                              .timeout_ms = CLIENT_TIMEOUT_MS };
 
     if (ret == 0) {
         fill_trust(&opts, &srv, &trust_hold);
@@ -2126,7 +2132,8 @@ static int cmd_getnextca(int argc, char** argv)
     if (ret == 0 && scep_pin_setup(&opts, p, &pin, 1) != 0)
         ret = 1;
 
-    WolfCertServerCfg srv = { .protocol = p, .server_url = opts.url };
+    WolfCertServerCfg srv = { .protocol = p, .server_url = opts.url,
+                              .timeout_ms = CLIENT_TIMEOUT_MS };
 
     if (ret == 0) {
         fill_trust(&opts, &srv, &trust_hold);

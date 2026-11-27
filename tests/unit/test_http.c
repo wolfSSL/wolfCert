@@ -361,6 +361,7 @@ static int test_session_retry_after_reset(void)
 
     WolfCertHttpSessionCfg cfg = {
         .base_url = base,
+        .timeout_ms = 30000,
     };
     WolfCertHttpSession* s = NULL;
     REQUIRE(wolfcert_http_session_open(&cfg, &s) == WOLFCERT_OK);
@@ -493,6 +494,7 @@ static int test_session_near_cap_response(void)
     WolfCertHttpSessionCfg cfg = {
         .base_url = base,
         .max_response_bytes = NEAR_CAP_MAX_BODY,
+        .timeout_ms         = 30000,
     };
     WolfCertHttpSession* s = NULL;
     REQUIRE(wolfcert_http_session_open(&cfg, &s) == WOLFCERT_OK);
@@ -570,6 +572,7 @@ static int test_session_eof_cap_response(void)
     WolfCertHttpSessionCfg cfg = {
         .base_url = base,
         .max_response_bytes = NEAR_CAP_MAX_BODY,
+        .timeout_ms         = 30000,
     };
     WolfCertHttpSession* s = NULL;
     REQUIRE(wolfcert_http_session_open(&cfg, &s) == WOLFCERT_OK);
@@ -681,7 +684,7 @@ static int ipv6_host_header(int use_session)
     WolfCertHttpResponse resp = { 0 };
 
     if (use_session) {
-        WolfCertHttpSessionCfg cfg = { .base_url = base };
+        WolfCertHttpSessionCfg cfg = { .base_url = base, .timeout_ms = 30000 };
         WolfCertHttpSession* s = NULL;
 
         REQUIRE(wolfcert_http_session_open(&cfg, &s) == WOLFCERT_OK);
@@ -999,7 +1002,7 @@ static int trailer_split_case(const char* seg1, const char* seg2)
     snprintf(base, sizeof(base), "http://127.0.0.1:%d", port);
     snprintf(url, sizeof(url), "http://127.0.0.1:%d/test", port);
 
-    WolfCertHttpSessionCfg cfg = { .base_url = base };
+    WolfCertHttpSessionCfg cfg = { .base_url = base, .timeout_ms = 30000 };
     REQUIRE(wolfcert_http_session_open(&cfg, &s) == WOLFCERT_OK);
 
     WolfCertHttpRequest req = { .method = "GET", .url = url };
@@ -1090,7 +1093,8 @@ static int oversize_chunk_case(const char* body)
 
     snprintf(url, sizeof(url), "http://127.0.0.1:%d/test", port);
     WolfCertHttpRequest req = { .method = "GET", .url = url };
-    WolfCertHttpSessionCfg cfg = { .max_response_bytes = 1024 };
+    WolfCertHttpSessionCfg cfg = { .max_response_bytes = 1024,
+                                   .timeout_ms = 30000 };
 
     REQUIRE(test_http_request(&cfg, &req, &resp) == WOLFCERT_ERR_PROTOCOL);
     REQUIRE(resp.body == NULL);
@@ -1213,6 +1217,7 @@ static int test_client_key_checks(void)
     WolfCertHttpSessionCfg scfg = {
         .base_url       = "https://127.0.0.1:1",
         .client_key_obj = &key,
+        .timeout_ms     = 30000,
     };
     WolfCertHttpSession* s = NULL;
 
@@ -1275,6 +1280,7 @@ static int test_client_alg_oom(void)
         .client_cert_len = sizeof_serv_ecc_der_256,
         .client_key      = ecc_key_der_256,
         .client_key_len  = sizeof_ecc_key_der_256,
+        .timeout_ms      = 30000,
     };
     WolfCertHttpSession* s = NULL;
     wolfSSL_Malloc_cb  saved_malloc;

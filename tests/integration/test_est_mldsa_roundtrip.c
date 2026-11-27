@@ -135,7 +135,8 @@ int main(void)
                                                          .password = "hunter2" },
                                      .trust_anchors = tls_cert,
                                      .trust_anchors_len = tls_cert_len,
-                                     .verify_server = 1 };
+                                     .verify_server = 1,
+                                     .timeout_ms    = 30000 };
 
     WolfCertBuffer ca_pem = { 0 };
     REQUIRE(wolfcert_est_get_cacerts(&client_cfg, WOLFCERT_ENCODING_PEM,

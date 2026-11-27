@@ -79,6 +79,7 @@ static void* est_setup(void)
         .trust_anchors     = ca_cert_pem,
         .trust_anchors_len = sizeof(ca_cert_pem),
         .verify_server     = 1,
+        .timeout_ms        = 30000,
     };
 
     addr4 = net_if_ipv4_get_global_addr(iface, NET_ADDR_PREFERRED);

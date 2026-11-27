@@ -416,6 +416,7 @@ int main(int argc, char** argv)
         .trust_anchors     = trust,
         .trust_anchors_len = trust_len,
         .verify_server     = 1,
+        .timeout_ms        = 30000,
     };
     Tpm tpm;
     int ret = 1;

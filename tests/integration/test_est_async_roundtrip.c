@@ -155,6 +155,7 @@ int main(void)
             .client_key        = cli_key,
             .client_key_len    = cli_key_len,
             .proto_opts.est    = { .allow_post_handshake_auth = 1 },
+            .timeout_ms        = 30000,
         };
         WolfCertEstSession* es = NULL;
         REQUIRE(wolfcert_est_session_open(&cli, &es) == WOLFCERT_OK);
@@ -207,6 +208,7 @@ int main(void)
         .trust_anchors     = tls_cert,
         .trust_anchors_len = tls_cert_len,
         .verify_server     = 1,
+        .timeout_ms        = 30000,
     };
     WolfCertEstSession* bes = NULL;
     REQUIRE(wolfcert_est_session_open(&bcli, &bes) == WOLFCERT_OK);

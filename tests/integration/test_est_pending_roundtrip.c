@@ -138,7 +138,8 @@ static int pending_path(WolfCertServer* s)
                               .server_url = url,
                               .trust_anchors = g_ca,
                               .trust_anchors_len = g_ca_len,
-                              .verify_server = 1 };
+                              .verify_server = 1,
+                              .timeout_ms    = 30000 };
 
     WolfCertBuffer ca_pem = { 0 };
     REQUIRE(wolfcert_est_get_cacerts(&cli, WOLFCERT_ENCODING_PEM,

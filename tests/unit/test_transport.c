@@ -49,11 +49,11 @@ typedef struct {
     int         open_rc;    /* peer stays connected, instead of closing */
     int         stall;      /* alternate every read with a WANT_READ */
     int         stall_now;
-    int         fail_connect;
-    int         fail_write;
-    int         bogus_connect_rc;  /* positive return, breaking the contract */
+    int         connect_rc;        /* nonzero: connect returns it */
     int         overcount;         /* report more bytes than written */
     int         read_timeout;      /* timeout_ms of the last read */
+    int         connect_timeout;   /* timeout_ms of the last connect */
+    int         write_rc;          /* nonzero: every write returns it */
 } Peer;
 
 static int p_connect(void* ctx, const char* host, int port, int timeout_ms,
@@ -61,11 +61,10 @@ static int p_connect(void* ctx, const char* host, int port, int timeout_ms,
 {
     Peer* p = (Peer*)ctx;
 
-    (void)host; (void)port; (void)timeout_ms;
-    if (p->fail_connect)
-        return WOLFCERT_ERR_IO;
-    if (p->bogus_connect_rc != 0)
-        return p->bogus_connect_rc;
+    (void)host; (void)port;
+    p->connect_timeout = timeout_ms;
+    if (p->connect_rc != 0)
+        return p->connect_rc;
     p->connects++;
     *conn = (void*)0;   /* a wolfIP descriptor can be 0 */
     return WOLFCERT_OK;
@@ -110,8 +109,8 @@ static int p_write(void* ctx, void* conn, const uint8_t* buf, size_t len,
     Peer* p = (Peer*)ctx;
 
     (void)conn; (void)buf; (void)timeout_ms;
-    if (p->fail_write)
-        return WOLFCERT_ERR_IO;
+    if (p->write_rc != 0)
+        return p->write_rc;
     return (int)len;
 }
 
@@ -430,12 +429,12 @@ static int test_error_paths(void)
     t.ctx = &p;
     cfg.transport = t;
 
-    p.fail_connect = 1;
+    p.connect_rc = WOLFCERT_ERR_IO;
     REQUIRE(test_http_request(&cfg, &req, &resp) != WOLFCERT_OK);
     REQUIRE(p.disconnects == 0);
 
-    p.fail_connect = 0;
-    p.fail_write = 1;
+    p.connect_rc = 0;
+    p.write_rc = WOLFCERT_ERR_IO;
     p.resp = RESP_CL;
     p.chunk = sizeof(RESP_CL);
     REQUIRE(test_http_request(&cfg, &req, &resp) != WOLFCERT_OK);
@@ -443,7 +442,8 @@ static int test_error_paths(void)
     return 0;
 }
 
-/* A positive connect return surfaces as a negative error. */
+/* A positive or WANT_READ connect return, which the contract rules out, fails
+ * with WOLFCERT_ERR_IO. */
 static int test_positive_connect_rc(void)
 {
     WolfCertTransport t = { p_connect, p_read, p_write, p_disconnect, NULL };
@@ -455,18 +455,22 @@ static int test_positive_connect_rc(void)
 
     t.ctx = &p;
     cfg.transport = t;
-    p.bogus_connect_rc = 1;
+    p.connect_rc = 1;
 
     rc = test_http_request(&cfg, &req, &resp);
-    REQUIRE(rc < 0);
+    REQUIRE(rc == WOLFCERT_ERR_IO);
     REQUIRE(p.disconnects == 0);
+
+    p.connect_rc = WOLFCERT_ERR_WANT_READ;
+    REQUIRE(test_http_request(&cfg, &req, &resp) == WOLFCERT_ERR_IO);
     return 0;
 }
 
 /* The vtable lives in this frame, so the session must keep its own copy. */
 static int open_scoped(Peer* p, WolfCertHttpSession** out)
 {
-    WolfCertHttpSessionCfg cfg = { .base_url = "http://peer.test/" };
+    WolfCertHttpSessionCfg cfg = { .base_url = "http://peer.test/",
+                                   .timeout_ms = 30000 };
     WolfCertTransport t = { p_connect, p_read, p_write, p_disconnect, p };
 
     cfg.transport = t;
@@ -510,7 +514,8 @@ static int test_transport_is_copied(void)
 /* Only an all-zero transport selects the built-in one. */
 static int test_partial_vtable_rejected(void)
 {
-    WolfCertHttpSessionCfg cfg = { .base_url = "http://peer.test/" };
+    WolfCertHttpSessionCfg cfg = { .base_url = "http://peer.test/",
+                                   .timeout_ms = 30000 };
     WolfCertHttpSession* s = NULL;
     WolfCertTransport t;
     Peer p = { 0 };
@@ -786,7 +791,8 @@ static int drive_nb(WolfCertHttpSession* s, const WolfCertHttpRequest* req,
 static int nb_fetch_m(Peer* p, const char* method, const char* bytes,
                       size_t chunk, WolfCertHttpResponse* out)
 {
-    WolfCertHttpSessionCfg cfg = { .base_url = "http://peer.test/" };
+    WolfCertHttpSessionCfg cfg = { .base_url = "http://peer.test/",
+                                   .timeout_ms = 30000 };
     WolfCertTransport t = { p_connect, p_read, p_write, p_disconnect, p };
     WolfCertHttpRequest req = { .method = method, .url = "http://peer.test/" };
     WolfCertHttpSession* s = NULL;
@@ -1084,7 +1090,8 @@ static int test_session_closes_on_bytes_past_body(void)
  * WANT_READ between: "hello world", then a shorter "abc". */
 static int test_nb_chunked_fragmented(void)
 {
-    WolfCertHttpSessionCfg cfg = { .base_url = "http://peer.test/" };
+    WolfCertHttpSessionCfg cfg = { .base_url = "http://peer.test/",
+                                   .timeout_ms = 30000 };
     WolfCertTransport t = { p_connect, p_read, p_write, p_disconnect, NULL };
     WolfCertHttpRequest req = { .method = "GET", .url = "http://peer.test/" };
     WolfCertHttpResponse resp = { 0 };
@@ -1115,12 +1122,12 @@ static int test_nb_chunked_fragmented(void)
     return 0;
 }
 
-/* An _nb GET waits on WANT_READ with a 0 timeout. A blocking call, or an _nb
- * call with another resp, gets BAD_ARG; the _nb GET then completes, and the
- * next GET on the session runs blocking with a -1 timeout. */
+/* An _nb GET in flight refuses a blocking call or another resp with BAD_ARG,
+ * then completes; the next GET runs blocking with the session's timeout_ms. */
 static int test_in_flight_request(void)
 {
-    WolfCertHttpSessionCfg cfg = { .base_url = "http://peer.test/" };
+    WolfCertHttpSessionCfg cfg = { .base_url = "http://peer.test/",
+                                   .timeout_ms = 30000 };
     WolfCertTransport t = { p_connect, p_read, p_write, p_disconnect, NULL };
     WolfCertHttpRequest req = { .method = "GET", .url = "http://peer.test/" };
     WolfCertHttpResponse resp = { 0 };
@@ -1155,7 +1162,7 @@ static int test_in_flight_request(void)
     p.resp = RESP_CL;
     p.off  = 0;
     REQUIRE(wolfcert_http_session_request(s, &req, &resp) == WOLFCERT_OK);
-    REQUIRE(p.read_timeout == -1);
+    REQUIRE(p.read_timeout == 30000);
     REQUIRE(resp.body_len == 5 && memcmp(resp.body, "hello", 5) == 0);
     wolfcert_http_response_free(&resp);
     wolfcert_http_session_close(s);
@@ -1207,6 +1214,90 @@ static int test_blocking_eof_body_closes(void)
     return 0;
 }
 
+/* timeout_ms 1234 reaches connect; 0 fails session open with BAD_ARG before
+ * any connect. */
+static int test_wait_timeouts(void)
+{
+    WolfCertHttpRequest req = { .method = "GET", .url = "http://peer.test/" };
+    WolfCertTransport t = { p_connect, p_read, p_write, p_disconnect, NULL };
+    WolfCertHttpSessionCfg cfg = { .base_url = "http://peer.test/",
+                                   .timeout_ms = 1234 };
+    WolfCertHttpResponse resp = { 0 };
+    WolfCertHttpSession* s = NULL;
+    Peer p = { 0 };
+
+    p.resp  = RESP_CL;
+    p.chunk = sizeof(RESP_CL);
+    t.ctx = &p;
+    cfg.transport = t;
+    REQUIRE(test_http_request(&cfg, &req, &resp) == WOLFCERT_OK);
+    REQUIRE(p.connect_timeout == 1234);
+    wolfcert_http_response_free(&resp);
+
+    cfg.timeout_ms = 0;
+    REQUIRE(wolfcert_http_session_open(&cfg, &s) == WOLFCERT_ERR_BAD_ARG);
+    REQUIRE(s == NULL && p.connects == 1);
+    return 0;
+}
+
+/* A transport TIMEOUT on connect fails session open, and on a read or a write
+ * fails the request and closes the session, each with WOLFCERT_ERR_TIMEOUT. */
+static int test_transport_timeout(void)
+{
+    WolfCertHttpSessionCfg cfg = { .base_url = "http://peer.test/",
+                                   .timeout_ms = 30000 };
+    WolfCertTransport t = { p_connect, p_read, p_write, p_disconnect, NULL };
+    WolfCertHttpRequest req = { .method = "GET", .url = "http://peer.test/" };
+    WolfCertHttpResponse resp = { 0 };
+    WolfCertHttpSession* s = NULL;
+    Peer p = { 0 };
+
+    t.ctx = &p;
+
+    p.connect_rc = WOLFCERT_ERR_TIMEOUT;
+    REQUIRE(open_scoped(&p, &s) == WOLFCERT_ERR_TIMEOUT);
+    REQUIRE(strstr(wolfcert_last_error_message(),
+                   "timed out (timeout_ms 30000)") != NULL);
+
+    memset(&p, 0, sizeof(p));
+    p.resp    = RESP_CUT_BODY;
+    p.chunk   = sizeof(RESP_CUT_BODY);
+    p.open_rc = WOLFCERT_ERR_TIMEOUT;
+    REQUIRE(open_scoped(&p, &s) == WOLFCERT_OK);
+    REQUIRE(wolfcert_http_session_request(s, &req, &resp)
+            == WOLFCERT_ERR_TIMEOUT);
+    REQUIRE(strstr(wolfcert_last_error_message(), "within 30000 ms") != NULL);
+    REQUIRE(wolfcert_http_session_request(s, &req, &resp)
+            == WOLFCERT_ERR_CONN_CLOSED);
+    wolfcert_http_session_close(s);
+
+    memset(&p, 0, sizeof(p));
+    p.resp     = RESP_CL;
+    p.chunk    = sizeof(RESP_CL);
+    p.write_rc = WOLFCERT_ERR_TIMEOUT;
+    REQUIRE(open_scoped(&p, &s) == WOLFCERT_OK);
+    REQUIRE(wolfcert_http_session_request(s, &req, &resp)
+            == WOLFCERT_ERR_TIMEOUT);
+    REQUIRE(wolfcert_http_session_request(s, &req, &resp)
+            == WOLFCERT_ERR_CONN_CLOSED);
+    wolfcert_http_session_close(s);
+    REQUIRE(p.disconnects == 1);
+
+    /* An _nb read the transport times out names the transport. */
+    memset(&p, 0, sizeof(p));
+    p.resp    = RESP_CUT_BODY;
+    p.chunk   = sizeof(RESP_CUT_BODY);
+    p.open_rc = WOLFCERT_ERR_TIMEOUT;
+    cfg.transport = t;
+    REQUIRE(wolfcert_http_session_open(&cfg, &s) == WOLFCERT_OK);
+    REQUIRE(wolfcert_http_session_request_nb(s, &req, &resp)
+            == WOLFCERT_ERR_TIMEOUT);
+    REQUIRE(strstr(wolfcert_last_error_message(), "transport timed out")
+            != NULL);
+    wolfcert_http_session_close(s);
+    return 0;
+}
+
 #ifdef WOLFCERT_HAVE_BUILTIN_TRANSPORT
 /* A zeroed transport reaches the built-in one and fails at connect. */
 static int test_zero_transport_takes_builtin(void)
@@ -1241,7 +1332,8 @@ static int test_incomplete_vtable(void)
 static int test_no_fd(void)
 {
     WolfCertTransport t = { p_connect, p_read, p_write, p_disconnect, NULL };
-    WolfCertHttpSessionCfg cfg = { .base_url = "http://peer.test/" };
+    WolfCertHttpSessionCfg cfg = { .base_url = "http://peer.test/",
+                                   .timeout_ms = 30000 };
     WolfCertHttpSession* s = NULL;
     Peer p = { 0 };
 
@@ -1260,7 +1352,8 @@ static int test_no_fd(void)
 #ifndef WOLFCERT_HAVE_BUILTIN_TRANSPORT
 static int test_no_builtin_transport(void)
 {
-    WolfCertHttpSessionCfg cfg = { .base_url = "http://peer.test/" };
+    WolfCertHttpSessionCfg cfg = { .base_url = "http://peer.test/",
+                                   .timeout_ms = 30000 };
     WolfCertHttpSession* s = NULL;
 
     REQUIRE(wolfcert_http_session_open(&cfg, &s) == WOLFCERT_ERR_BAD_ARG);
@@ -1422,6 +1515,10 @@ int main(void)
     if (test_blocking_want_read_is_io())
         return 1;
     if (test_blocking_eof_body_closes())
+        return 1;
+    if (test_wait_timeouts())
+        return 1;
+    if (test_transport_timeout())
         return 1;
     if (test_head_oversized_length_ok())
         return 1;

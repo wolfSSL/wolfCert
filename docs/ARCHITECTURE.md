@@ -417,7 +417,8 @@ post-handshake auth needs on one connection. Each one-shot `wolfcert_est_X` /
 
 ```c
 WolfCertServerCfg srv = { .protocol = WOLFCERT_PROTO_SCEP,
-                          .server_url = "http://ca.example/scep" };
+                          .server_url = "http://ca.example/scep",
+                          .timeout_ms = 30000 };
 WolfCertScepSession* s = NULL;
 WolfCertBuffer ca = { 0 };
 WolfCertScepCaps caps = { 0 };
@@ -482,7 +483,8 @@ Key points:
 - **DNS and the initial TCP connect stay synchronous.** Session open resolves
   and connects; the TLS handshake runs on the first request, so it is
   non-blocking under `_nb`. If you can't afford a blocking connect, resolve and
-  connect the socket yourself.
+  connect the socket yourself and pass a transport whose `connect` returns
+  that connected handle.
 - **The descriptor comes from the built-in transport.** `*_session_fd()`
   returns `-1` on a caller-supplied `WolfCertTransport`, which has no
   descriptor to hand out; drive the loop from whatever readiness signal your
@@ -571,21 +573,21 @@ The contract:
   header block, so no read follows it. Interim `1xx` responses are dropped,
   up to `WOLFCERT_HTTP_MAX_INTERIM` (8) before the final one; a ninth, or a
   `101`, fails the request with `WOLFCERT_ERR_PROTOCOL`.
-- **`connect`'s `timeout_ms` is the caller's**, passed through from
-  `WolfCertServerCfg.timeout_ms` / `WolfCertHttpSessionCfg.timeout_ms`. A value
-  above zero bounds the whole connect attempt. Zero or less imposes no limit of
-  wolfCert's, leaving the stack's own default.
-- **`read` / `write`'s `timeout_ms` carries the blocking mode**, and means
-  something different from `connect`'s. It takes two values and no others.
-  `0` asks the call never to block: return `WOLFCERT_ERR_WANT_READ` or
-  `WOLFCERT_ERR_WANT_WRITE` rather than wait. A negative value asks it to
-  block until bytes move. If your stack has its own receive or send timeout,
-  implement the negative case with a call that lets it apply, rather than an
-  unbounded wait around a non-blocking transfer: the second shape silently
-  discards whatever the application configured.
+- **`timeout_ms` bounds each wait of a blocking call.** wolfCert passes
+  `WolfCertServerCfg.timeout_ms` / `WolfCertHttpSessionCfg.timeout_ms` to the
+  connect and to every read and write of a blocking call, so a peer that
+  keeps sending a byte at a time is not cut off.
+- **`connect` blocks.** Its `timeout_ms` is always positive and bounds the
+  whole connect attempt; return `WOLFCERT_ERR_TIMEOUT` when it expires. It
+  never returns `WOLFCERT_ERR_WANT_READ` or `WOLFCERT_ERR_WANT_WRITE`.
+- **`read` / `write`'s `timeout_ms` also carries the blocking mode.** `0` asks
+  the call never to block: return `WOLFCERT_ERR_WANT_READ` or
+  `WOLFCERT_ERR_WANT_WRITE` rather than wait. A positive value bounds the
+  wait; return `WOLFCERT_ERR_TIMEOUT` when it expires with no bytes moved.
+  wolfCert never passes a negative value.
 - **The mode can change between requests on one connection.** wolfCert lets
   an application make blocking and `_nb` requests on one HTTP, EST or SCEP
-  session, one request at a time, so a transport can see `0` and a negative
+  session, one request at a time, so a transport can see `0` and a positive
   value on the same connection. Take special care to honour each call's value
   if your application needs this; otherwise keep a connection in one mode.
   Closing a session always writes the TLS `close_notify` with `0`.
@@ -652,6 +654,7 @@ WolfCertServerCfg srv = {
     .trust_anchors      = bootstrap_ca_pem,
     .trust_anchors_len  = bootstrap_ca_len,
     .verify_server      = 1,
+    .timeout_ms         = 30000,
     .client_cert        = factory_cert, .client_cert_len = factory_cert_len,
     .client_key         = factory_key,  .client_key_len  = factory_key_len,
     .max_response_bytes = 8 * 1024,   /* tighten for MCU */

@@ -176,6 +176,7 @@ static int test_client_reenroll_keeps_identity(const uint8_t* tls_cert,
         .trust_anchors     = tls_cert,
         .trust_anchors_len = tls_cert_len,
         .verify_server     = 1,
+        .timeout_ms        = 30000,
     };
 #ifdef KEEP_PEER_CERT
     WolfCertKeyCfg kcfg = { .type = TEST_ENROLL_KEY_TYPE,
@@ -374,6 +375,7 @@ int main(void)
         .trust_anchors     = tls_cert,
         .trust_anchors_len = tls_cert_len,
         .verify_server     = 1,
+        .timeout_ms        = 30000,
     };
 
     WolfCertBuffer ca_pem = { 0 };
@@ -408,6 +410,7 @@ int main(void)
         .trust_anchors     = ta_der->buffer,
         .trust_anchors_len = ta_der->length,
         .verify_server     = 1,
+        .timeout_ms        = 30000,
     };
     WolfCertBuffer ca_pem_der = { 0 };
     REQUIRE(wolfcert_est_get_cacerts(&cli_der, WOLFCERT_ENCODING_PEM,
@@ -429,6 +432,7 @@ int main(void)
         .trust_anchors     = ta_chain,
         .trust_anchors_len = ta_chain_len,
         .verify_server     = 1,
+        .timeout_ms        = 30000,
     };
     WolfCertBuffer ca_pem_chain = { 0 };
     REQUIRE(wolfcert_est_get_cacerts(&cli_chain, WOLFCERT_ENCODING_PEM,

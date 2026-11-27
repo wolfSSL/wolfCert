@@ -268,7 +268,11 @@ static int async_enroll_path(WolfCertServer* s)
     int ret = 1;
 
     snprintf(url, sizeof(url), "http://127.0.0.1:%u/scep", wolfcert_server_port(s));
-    cli = (WolfCertServerCfg){ .protocol = WOLFCERT_PROTO_SCEP, .server_url = url };
+    cli = (WolfCertServerCfg){
+        .protocol = WOLFCERT_PROTO_SCEP,
+        .server_url = url,
+        .timeout_ms = 30000,
+    };
 
     REQUIRE_CLEAN(bootstrap(&cli, "CN=async-scep-1", &caps, &ca_pem, &ca_der,
                             &dk, &csr) == 0);
@@ -355,7 +359,11 @@ static int async_poll_path(WolfCertServer* s)
     int ret = 1;
 
     snprintf(url, sizeof(url), "http://127.0.0.1:%u/scep", wolfcert_server_port(s));
-    cli = (WolfCertServerCfg){ .protocol = WOLFCERT_PROTO_SCEP, .server_url = url };
+    cli = (WolfCertServerCfg){
+        .protocol = WOLFCERT_PROTO_SCEP,
+        .server_url = url,
+        .timeout_ms = 30000,
+    };
 
     REQUIRE_CLEAN(bootstrap(&cli, "CN=async-scep-poll", &caps, &ca_pem, &ca_der,
                             &dk, &csr) == 0);
@@ -410,7 +418,11 @@ static int async_renewal_path(WolfCertServer* s)
     int ret = 1;
 
     snprintf(url, sizeof(url), "http://127.0.0.1:%u/scep", wolfcert_server_port(s));
-    cli = (WolfCertServerCfg){ .protocol = WOLFCERT_PROTO_SCEP, .server_url = url };
+    cli = (WolfCertServerCfg){
+        .protocol = WOLFCERT_PROTO_SCEP,
+        .server_url = url,
+        .timeout_ms = 30000,
+    };
 
     REQUIRE_CLEAN(bootstrap(&cli, "CN=async-scep-renew", &caps, &ca_pem, &ca_der,
                             &dk, &csr) == 0);
@@ -493,7 +505,8 @@ static int async_guard_path(WolfCertServer* s)
     snprintf(real_url, sizeof(real_url), "http://127.0.0.1:%u/scep",
              wolfcert_server_port(s));
     cli_real = (WolfCertServerCfg){ .protocol = WOLFCERT_PROTO_SCEP,
-                                    .server_url = real_url };
+                                    .server_url = real_url,
+                                    .timeout_ms = 30000 };
     REQUIRE_CLEAN(bootstrap(&cli_real, "CN=async-scep-guard", &caps, &ca_pem,
                             &ca_der, &dk, &csr) == 0);
 
@@ -501,7 +514,11 @@ static int async_guard_path(WolfCertServer* s)
     bh_fd = black_hole_listener(&bh_port);
     REQUIRE_CLEAN(bh_fd >= 0);
     snprintf(bh_url, sizeof(bh_url), "http://127.0.0.1:%u/scep", (unsigned)bh_port);
-    cli = (WolfCertServerCfg){ .protocol = WOLFCERT_PROTO_SCEP, .server_url = bh_url };
+    cli = (WolfCertServerCfg){
+        .protocol = WOLFCERT_PROTO_SCEP,
+        .server_url = bh_url,
+        .timeout_ms = 30000,
+    };
 
     REQUIRE_CLEAN(wolfcert_scep_session_open(&cli, &asess) == WOLFCERT_OK);
 
@@ -604,7 +621,11 @@ static int blocking_poll_path(WolfCertServer* s)
     int ret = 1;
 
     snprintf(url, sizeof(url), "http://127.0.0.1:%u/scep", wolfcert_server_port(s));
-    cli = (WolfCertServerCfg){ .protocol = WOLFCERT_PROTO_SCEP, .server_url = url };
+    cli = (WolfCertServerCfg){
+        .protocol = WOLFCERT_PROTO_SCEP,
+        .server_url = url,
+        .timeout_ms = 30000,
+    };
 
     REQUIRE_CLEAN(bootstrap(&cli, "CN=sync-scep-poll", &caps, &ca_pem, &ca_der,
                             &dk, &csr) == 0);
@@ -670,7 +691,11 @@ static int session_get_transport_path(WolfCertServer* s)
     int ret = 1;
 
     snprintf(url, sizeof(url), "http://127.0.0.1:%u/scep", wolfcert_server_port(s));
-    cli = (WolfCertServerCfg){ .protocol = WOLFCERT_PROTO_SCEP, .server_url = url };
+    cli = (WolfCertServerCfg){
+        .protocol = WOLFCERT_PROTO_SCEP,
+        .server_url = url,
+        .timeout_ms = 30000,
+    };
 
     REQUIRE_CLEAN(bootstrap(&cli, "CN=sync-scep-get", &caps, &ca_pem, &ca_der,
                             &dk, &csr) == 0);
@@ -704,7 +729,8 @@ static int tls_guard_path(void)
 {
     WolfCertServerCfg cli = { .protocol = WOLFCERT_PROTO_SCEP,
                               .server_url = "https://127.0.0.1:8443/scep",
-                              .verify_server = 0 };
+                              .verify_server = 0,
+                              .timeout_ms    = 30000 };
     WolfCertScepSession* sess = NULL;
 
     REQUIRE(wolfcert_scep_session_open(&cli, &sess) == WOLFCERT_ERR_TLS);
@@ -716,7 +742,11 @@ static int tls_guard_path(void)
 
     /* NULL srv / server_url are rejected by the open. */
     REQUIRE(wolfcert_scep_session_open(NULL, &sess) == WOLFCERT_ERR_BAD_ARG);
-    WolfCertServerCfg no_url = { .protocol = WOLFCERT_PROTO_SCEP, .server_url = NULL };
+    WolfCertServerCfg no_url = {
+        .protocol = WOLFCERT_PROTO_SCEP,
+        .server_url = NULL,
+        .timeout_ms = 30000,
+    };
     REQUIRE(wolfcert_scep_session_open(&no_url, &sess) == WOLFCERT_ERR_BAD_ARG);
     return 0;
 }
@@ -740,7 +770,11 @@ static int non_rsa_reject_path(WolfCertServer* s)
     int ret = 1;
 
     snprintf(url, sizeof(url), "http://127.0.0.1:%u/scep", wolfcert_server_port(s));
-    cli = (WolfCertServerCfg){ .protocol = WOLFCERT_PROTO_SCEP, .server_url = url };
+    cli = (WolfCertServerCfg){
+        .protocol = WOLFCERT_PROTO_SCEP,
+        .server_url = url,
+        .timeout_ms = 30000,
+    };
     REQUIRE_CLEAN(bootstrap(&cli, "CN=nonrsa", &caps, &ca_pem, &ca_der, &dk, &csr) == 0);
     REQUIRE_CLEAN(wolfcert_key_generate(&ecfg, &ek) == WOLFCERT_OK);
     REQUIRE_CLEAN(wolfcert_scep_session_open(&cli, &sess) == WOLFCERT_OK);
@@ -810,7 +844,11 @@ static int blocking_renewal_poll_path(WolfCertServer* s)
     int ret = 1;
 
     snprintf(url, sizeof(url), "http://127.0.0.1:%u/scep", wolfcert_server_port(s));
-    cli = (WolfCertServerCfg){ .protocol = WOLFCERT_PROTO_SCEP, .server_url = url };
+    cli = (WolfCertServerCfg){
+        .protocol = WOLFCERT_PROTO_SCEP,
+        .server_url = url,
+        .timeout_ms = 30000,
+    };
     REQUIRE_CLEAN(bootstrap(&cli, "CN=sync-renew-poll", &caps, &ca_pem, &ca_der,
                             &dk, &csr) == 0);
     REQUIRE_CLEAN(wolfcert_scep_session_open(&cli, &sess) == WOLFCERT_OK);
@@ -989,7 +1027,8 @@ static int non_200_path(WolfCertServer* s)
     snprintf(real_url, sizeof(real_url), "http://127.0.0.1:%u/scep",
              wolfcert_server_port(s));
     cli_real = (WolfCertServerCfg){ .protocol = WOLFCERT_PROTO_SCEP,
-                                    .server_url = real_url };
+                                    .server_url = real_url,
+                                    .timeout_ms = 30000 };
     REQUIRE_CLEAN(bootstrap(&cli_real, "CN=sync-500", &caps, &ca_pem, &ca_der,
                             &dk, &csr) == 0);
 
@@ -998,7 +1037,11 @@ static int non_200_path(WolfCertServer* s)
     REQUIRE_CLEAN(pthread_create(&stub, NULL, stub_500_thread, &lfd) == 0);
     stub_started = 1;
     snprintf(stub_url, sizeof(stub_url), "http://127.0.0.1:%u/scep", (unsigned)port);
-    cli = (WolfCertServerCfg){ .protocol = WOLFCERT_PROTO_SCEP, .server_url = stub_url };
+    cli = (WolfCertServerCfg){
+        .protocol = WOLFCERT_PROTO_SCEP,
+        .server_url = stub_url,
+        .timeout_ms = 30000,
+    };
 
     REQUIRE_CLEAN(wolfcert_scep_session_open(&cli, &sess) == WOLFCERT_OK);
     REQUIRE_CLEAN(wolfcert_scep_session_pkcs_req(sess, &caps,
@@ -1040,7 +1083,11 @@ static int negative_args_path(WolfCertServer* s)
     int ret = 1;
 
     snprintf(url, sizeof(url), "http://127.0.0.1:%u/scep", wolfcert_server_port(s));
-    cli = (WolfCertServerCfg){ .protocol = WOLFCERT_PROTO_SCEP, .server_url = url };
+    cli = (WolfCertServerCfg){
+        .protocol = WOLFCERT_PROTO_SCEP,
+        .server_url = url,
+        .timeout_ms = 30000,
+    };
     REQUIRE_CLEAN(bootstrap(&cli, "CN=negargs", &caps, &ca_pem, &ca_der, &dk, &csr) == 0);
     REQUIRE_CLEAN(wolfcert_scep_session_open(&cli, &sess) == WOLFCERT_OK);
     ca = ca_der->buffer;
@@ -1117,7 +1164,11 @@ static int session_get_ops_path(WolfCertServer* s)
     int ret = 1;
 
     snprintf(url, sizeof(url), "http://127.0.0.1:%u/scep", wolfcert_server_port(s));
-    cli = (WolfCertServerCfg){ .protocol = WOLFCERT_PROTO_SCEP, .server_url = url };
+    cli = (WolfCertServerCfg){
+        .protocol = WOLFCERT_PROTO_SCEP,
+        .server_url = url,
+        .timeout_ms = 30000,
+    };
     REQUIRE_CLEAN(bootstrap(&cli, "CN=session-get-ops", &caps, &ca_pem, &ca_der,
                             &dk, &csr) == 0);
 

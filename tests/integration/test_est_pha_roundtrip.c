@@ -170,6 +170,7 @@ int main(void)
             .client_key        = cli_key,
             .client_key_len    = cli_key_len,
             .proto_opts.est    = { .allow_post_handshake_auth = 1 },
+            .timeout_ms        = 30000,
         };
         WolfCertEstSession* s = NULL;
         REQUIRE(wolfcert_est_session_open(&cli, &s) == WOLFCERT_OK);
@@ -223,6 +224,7 @@ int main(void)
             .trust_anchors_len = tls_cert_len,
             .verify_server     = 1,
             .proto_opts.est    = { .allow_post_handshake_auth = 1 },
+            .timeout_ms        = 30000,
         };
         REQUIRE(expect_enroll_refused(&cli, "CN=pha-negative") == 0);
     }
@@ -239,6 +241,7 @@ int main(void)
             .client_cert_len   = cli_cert_len,
             .client_key        = cli_key,
             .client_key_len    = cli_key_len,
+            .timeout_ms        = 30000,
         };
         REQUIRE(expect_enroll_refused(&cli, "CN=pha-no-opt-in") == 0);
     }
@@ -256,6 +259,7 @@ int main(void)
             .client_key        = cli_key,
             .client_key_len    = cli_key_len,
             .proto_opts.est    = { .allow_post_handshake_auth = 1 },
+            .timeout_ms        = 30000,
         };
         WolfCertKeyCfg kcfg = { .type = TEST_ENROLL_KEY_TYPE, .param = TEST_ENROLL_KEY_PARAM,
                                 .dev_id = INVALID_DEVID };

@@ -241,7 +241,9 @@ typedef struct {
     const uint8_t*   trust_anchors;
     size_t           trust_anchors_len;
     int              verify_server;  /* must be 1 for EST and https:// SCEP */
-    int              timeout_ms;     /* per-request timeout; 0 = default */
+    /* Bounds each connect, read and write wait of a blocking call. Every
+     * call that connects requires > 0, else WOLFCERT_ERR_BAD_ARG. */
+    int              timeout_ms;
 
     /* Optional mutual-TLS client identity (both set), PEM or DER. For EST, a
      * session's identity is the cert its /simplereenroll renews. client_cert

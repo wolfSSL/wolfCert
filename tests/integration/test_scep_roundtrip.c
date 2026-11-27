@@ -863,7 +863,11 @@ static int test_caps_token_matching(void)
     REQUIRE(start_canned(canned_srv_thread, &cc, &cc.listen_fd, &tid, url,
                          sizeof(url)) == 0);
 
-    WolfCertServerCfg cli = { .protocol = WOLFCERT_PROTO_SCEP, .server_url = url };
+    WolfCertServerCfg cli = {
+        .protocol = WOLFCERT_PROTO_SCEP,
+        .server_url = url,
+        .timeout_ms = 30000,
+    };
     WolfCertScepCaps caps = { 0 };
     int rc = wolfcert_scep_get_ca_caps(&cli, &caps);
     pthread_join(tid, NULL);
@@ -887,7 +891,11 @@ static int test_caps_scep_standard(void)
     REQUIRE(start_canned(canned_srv_thread, &cc, &cc.listen_fd, &tid, url,
                          sizeof(url)) == 0);
 
-    WolfCertServerCfg cli = { .protocol = WOLFCERT_PROTO_SCEP, .server_url = url };
+    WolfCertServerCfg cli = {
+        .protocol = WOLFCERT_PROTO_SCEP,
+        .server_url = url,
+        .timeout_ms = 30000,
+    };
     WolfCertScepCaps caps = { 0 };
     int rc = wolfcert_scep_get_ca_caps(&cli, &caps);
     pthread_join(tid, NULL);
@@ -916,7 +924,11 @@ static int fetch_ca(const char* content_type, const uint8_t* body,
     REQUIRE(start_canned(canned_srv_thread, &cc, &cc.listen_fd, &tid, url,
                          sizeof(url)) == 0);
 
-    WolfCertServerCfg cli = { .protocol = WOLFCERT_PROTO_SCEP, .server_url = url };
+    WolfCertServerCfg cli = {
+        .protocol = WOLFCERT_PROTO_SCEP,
+        .server_url = url,
+        .timeout_ms = 30000,
+    };
     int rc = wolfcert_scep_get_ca_cert(&cli, enc, out);
     pthread_join(tid, NULL);
     return rc;
@@ -1158,7 +1170,8 @@ static int fetch_ca_oom(WolfCertEncoding enc, int n, int* failed)
 {
     struct sweep_ctx sc = { .cc = { .listen_fd = -1, .body = crit_ext_cert,
                                     .body_len = sizeof(crit_ext_cert) } };
-    WolfCertServerCfg cli = { .protocol = WOLFCERT_PROTO_SCEP };
+    WolfCertServerCfg cli = { .protocol = WOLFCERT_PROTO_SCEP,
+                              .timeout_ms = 30000 };
     WolfCertBuffer ca = { 0 };
     pthread_t tid;
     char url[128];
@@ -1403,6 +1416,7 @@ static int check_content_cipher_wire(const WolfCertScepCaps* caps,
         .protocol   = WOLFCERT_PROTO_SCEP,
         .server_url = url,
         .proto_opts.scep = { .content_cipher = cipher },
+        .timeout_ms      = 30000,
     };
 
     WolfCertCertMeta meta = { .subject_dn = "CN=device-cipher-wire" };
@@ -1442,6 +1456,7 @@ static int check_signing_hash_wire(const WolfCertScepCaps* caps, int sha512,
         .protocol   = WOLFCERT_PROTO_SCEP,
         .server_url = url,
         .proto_opts.scep = { .signing_hash = hash },
+        .timeout_ms      = 30000,
     };
     hc.sha512 = sha512;
     hc.sha384 = sha384;
@@ -1479,6 +1494,7 @@ static int check_renewal_msg_type(const WolfCertScepCaps* caps,
         .protocol   = WOLFCERT_PROTO_SCEP,
         .server_url = url,
         .proto_opts.scep = { .renewal_msg_type = mode },
+        .timeout_ms      = 30000,
     };
 
     WolfCertScepResult r = { 0 };
@@ -1520,7 +1536,11 @@ static int check_pki_status(const WolfCertScepCaps* caps,
     char url[128];
     REQUIRE(start_canned(msgtype_srv_thread, &mc, &mc.listen_fd, &tid, url,
                          sizeof(url)) == 0);
-    WolfCertServerCfg cli = { .protocol = WOLFCERT_PROTO_SCEP, .server_url = url };
+    WolfCertServerCfg cli = {
+        .protocol = WOLFCERT_PROTO_SCEP,
+        .server_url = url,
+        .timeout_ms = 30000,
+    };
 
     WolfCertScepResult r = { 0 };
     int rc = wolfcert_scep_pkcs_req(&cli, caps, signer_cert, signer_cert_len,
@@ -1565,6 +1585,7 @@ static int check_session_opts_capture(const WolfCertScepCaps* caps,
             .renewal_msg_type = WOLFCERT_SCEP_RENEWAL_MSG_PKCS_REQ,
             .signing_hash     = WOLFCERT_SCEP_HASH_SHA256,
         },
+        .timeout_ms = 30000,
     };
     WolfCertScepCaps hc = *caps;
     hc.sha512 = 1;
@@ -1600,6 +1621,7 @@ static int check_getnextca_ca_id(const uint8_t* ca_der_buf, size_t ca_der_len)
         .protocol   = WOLFCERT_PROTO_SCEP,
         .server_url = url,
         .proto_opts.scep = { .ca_id = "RolloverCA" },
+        .timeout_ms      = 30000,
     };
 
     WolfCertBuffer next = { 0 };
@@ -2244,7 +2266,8 @@ static int test_split_ra(void)
     snprintf(url, sizeof(url), "http://127.0.0.1:%u/scep",
              wolfcert_server_port(s));
     WolfCertServerCfg cli = { .protocol = WOLFCERT_PROTO_SCEP,
-                              .server_url = url };
+                              .server_url = url,
+                              .timeout_ms = 30000 };
 
     rc = wolfcert_scep_get_ca_caps(&cli, &caps);
     if (rc == WOLFCERT_OK)
@@ -2379,7 +2402,11 @@ int main(void)
 
     char url[128];
     snprintf(url, sizeof(url), "http://127.0.0.1:%u/scep", wolfcert_server_port(s));
-    WolfCertServerCfg cli = { .protocol = WOLFCERT_PROTO_SCEP, .server_url = url };
+    WolfCertServerCfg cli = {
+        .protocol = WOLFCERT_PROTO_SCEP,
+        .server_url = url,
+        .timeout_ms = 30000,
+    };
 
     WolfCertScepCaps caps = { 0 };
     REQUIRE(wolfcert_scep_get_ca_caps(&cli, &caps) == WOLFCERT_OK);
@@ -2593,7 +2620,8 @@ int main(void)
     /* GetCACaps and GetCACert to https:// with verify_server 0 get ERR_TLS. */
     {
         WolfCertServerCfg tls_cli = { .protocol = WOLFCERT_PROTO_SCEP,
-                                      .server_url = "https://127.0.0.1:1/scep" };
+                                      .server_url = "https://127.0.0.1:1/scep",
+                                      .timeout_ms = 30000 };
         WolfCertScepCaps tls_caps = { 0 };
         WolfCertBuffer   tls_ca = { 0 };
         REQUIRE(wolfcert_scep_get_ca_caps(&tls_cli, &tls_caps) == WOLFCERT_ERR_TLS);
@@ -2687,7 +2715,11 @@ int main(void)
 
     char url2[128];
     snprintf(url2, sizeof(url2), "http://127.0.0.1:%u/scep", wolfcert_server_port(s2));
-    WolfCertServerCfg cli2 = { .protocol = WOLFCERT_PROTO_SCEP, .server_url = url2 };
+    WolfCertServerCfg cli2 = {
+        .protocol = WOLFCERT_PROTO_SCEP,
+        .server_url = url2,
+        .timeout_ms = 30000,
+    };
 
     WolfCertScepCaps caps2 = { 0 };
     REQUIRE(wolfcert_scep_get_ca_caps(&cli2, &caps2) == WOLFCERT_OK);
@@ -2821,7 +2853,11 @@ int main(void)
 
     char url3[128];
     snprintf(url3, sizeof(url3), "http://127.0.0.1:%u/scep", wolfcert_server_port(s3));
-    WolfCertServerCfg cli3 = { .protocol = WOLFCERT_PROTO_SCEP, .server_url = url3 };
+    WolfCertServerCfg cli3 = {
+        .protocol = WOLFCERT_PROTO_SCEP,
+        .server_url = url3,
+        .timeout_ms = 30000,
+    };
 
     WolfCertScepCaps caps3 = { 0 };
     REQUIRE(wolfcert_scep_get_ca_caps(&cli3, &caps3) == WOLFCERT_OK);
@@ -2864,7 +2900,11 @@ int main(void)
 
     char url4[128];
     snprintf(url4, sizeof(url4), "http://127.0.0.1:%u/scep", wolfcert_server_port(s4));
-    WolfCertServerCfg cli4 = { .protocol = WOLFCERT_PROTO_SCEP, .server_url = url4 };
+    WolfCertServerCfg cli4 = {
+        .protocol = WOLFCERT_PROTO_SCEP,
+        .server_url = url4,
+        .timeout_ms = 30000,
+    };
 
     WolfCertScepCaps caps4 = { 0 };
     REQUIRE(wolfcert_scep_get_ca_caps(&cli4, &caps4) == WOLFCERT_OK);
@@ -2907,7 +2947,11 @@ int main(void)
 
     char url5[128];
     snprintf(url5, sizeof(url5), "http://127.0.0.1:%u/scep", wolfcert_server_port(s5));
-    WolfCertServerCfg cli5 = { .protocol = WOLFCERT_PROTO_SCEP, .server_url = url5 };
+    WolfCertServerCfg cli5 = {
+        .protocol = WOLFCERT_PROTO_SCEP,
+        .server_url = url5,
+        .timeout_ms = 30000,
+    };
 
     WolfCertScepCaps caps5 = { 0 };
     REQUIRE(wolfcert_scep_get_ca_caps(&cli5, &caps5) == WOLFCERT_OK);

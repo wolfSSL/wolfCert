@@ -81,7 +81,11 @@ int main(int argc, char** argv)
     if (wolfcert_csr_build(key, &meta, &csr) != WOLFCERT_OK)
         return 2;
 
-    WolfCertServerCfg srv = { .protocol = WOLFCERT_PROTO_EST, .server_url = argv[1] };
+    WolfCertServerCfg srv = {
+        .protocol = WOLFCERT_PROTO_EST,
+        .server_url = argv[1],
+        .timeout_ms = 30000,
+    };
     WolfCertEstResult res = { 0 };
     int rc = wolfcert_est_simple_enroll(&srv, csr.data, csr.len, &res);
     if (rc != WOLFCERT_OK) {

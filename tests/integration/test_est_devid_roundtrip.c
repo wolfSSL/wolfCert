@@ -488,6 +488,7 @@ static int run_key_type(const char* url, WolfCertKeyType type, int param,
         .client_cert_len   = boot_cert_len,
         .client_key        = boot_key,
         .client_key_len    = boot_key_len,
+        .timeout_ms        = 30000,
     };
     WolfCertKey* key = NULL;
     WolfCertKey* reloaded = NULL;
@@ -537,6 +538,7 @@ static int run_key_type(const char* url, WolfCertKeyType type, int param,
         const WolfCertServerCfg scep = {
             .protocol   = WOLFCERT_PROTO_SCEP,
             .server_url = "http://127.0.0.1:9/scep",
+            .timeout_ms = 30000,
         };
         WolfCertScepResult res;
         int before = mock_private_ops;
@@ -755,6 +757,7 @@ static int test_client_key_obj(const char* url,
         .client_cert_len   = boot_cert_len,
         .client_key        = boot_key,
         .client_key_len    = boot_key_len,
+        .timeout_ms        = 30000,
     };
     WolfCertKey* key = NULL;
     WolfCertBuffer csr = { 0 };
@@ -846,6 +849,7 @@ static int test_default_dev_id(const char* url,
         .client_cert_len   = boot_cert_len,
         .client_key        = boot_key,
         .client_key_len    = boot_key_len,
+        .timeout_ms        = 30000,
     };
     WolfCertKey* key = NULL;
     WolfCertBuffer csr = { 0 };
@@ -981,6 +985,7 @@ static int test_failure_keeps_key(const char* url, const uint8_t* tls_cert,
         .trust_anchors     = tls_cert,
         .trust_anchors_len = tls_cert_len,
         .verify_server     = 1,
+        .timeout_ms        = 30000,
     };
     WolfCertKey* key = NULL;
     WolfCertKey* cur = NULL;

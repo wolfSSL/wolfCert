@@ -137,6 +137,7 @@ static int auto_apply_pins_everything(WolfCertServer* s)
         .proto_opts.est = { .auto_csrattrs = 1 },
         .trust_anchors = g_ca, .trust_anchors_len = g_ca_len,
         .verify_server = 1,
+        .timeout_ms    = 30000,
     };
 
     WolfCertClient* cli = NULL;
@@ -186,6 +187,7 @@ static int explicit_caller_wins(WolfCertServer* s)
         .proto_opts.est = { .auto_csrattrs = 1 },
         .trust_anchors = g_ca, .trust_anchors_len = g_ca_len,
         .verify_server = 1,
+        .timeout_ms    = 30000,
     };
 
     WolfCertClient* cli = NULL;
@@ -230,7 +232,8 @@ static int fetch_meta_overlays_hash(WolfCertServer* s)
                               .server_url = url,
                               .trust_anchors = g_ca,
                               .trust_anchors_len = g_ca_len,
-                              .verify_server = 1 };
+                              .verify_server = 1,
+                              .timeout_ms    = 30000 };
 
     WolfCertClient* cli = NULL;
     REQUIRE(wolfcert_client_new(&cli) == WOLFCERT_OK);

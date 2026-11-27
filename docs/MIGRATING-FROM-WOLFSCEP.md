@@ -81,6 +81,7 @@ The same enrollment in wolfCert; `examples/enroll_scep.c` is a runnable version 
 WolfCertServerCfg srv = {
     .protocol   = WOLFCERT_PROTO_SCEP,
     .server_url = "http://ca.example/certsrv/mscep/mscep.dll",
+    .timeout_ms = 30000,
     .proto_opts.scep = { .ca_id = "CAIdentifier" },
 };
 
@@ -152,7 +153,7 @@ srv.proto_opts.scep.content_cipher = WOLFCERT_SCEP_CIPHER_AES256;
 
 **Fingerprint verification is now the library's job.** Delete your helper and call `wolfcert_scep_verify_ca_fingerprint`, which hashes the DER certificate and compares in constant time.
 
-**Error codes are a different, smaller set.** wolfSCEP's `WS_*` codes map onto `wolfcert/errors.h`: `WS_BAD_ARGUMENT` to `WOLFCERT_ERR_BAD_ARG`, `WS_MEMORY_E` to `WOLFCERT_ERR_MEMORY`, `WS_PARSE_E` to `WOLFCERT_ERR_PARSE`, the `WS_CBIO_ERR_*` family to `WOLFCERT_ERR_IO` and, from the `_nb` calls only, to `WOLFCERT_ERR_WANT_READ` and `WOLFCERT_ERR_WANT_WRITE`. There is no per-call error string; use `wolfcert_strerror` for the code and `wolfcert_last_error_message` for the detail.
+**Error codes are a different, smaller set.** wolfSCEP's `WS_*` codes map onto `wolfcert/errors.h`: `WS_BAD_ARGUMENT` to `WOLFCERT_ERR_BAD_ARG`, `WS_MEMORY_E` to `WOLFCERT_ERR_MEMORY`, `WS_PARSE_E` to `WOLFCERT_ERR_PARSE`, the `WS_CBIO_ERR_*` family to `WOLFCERT_ERR_IO`, to `WOLFCERT_ERR_TIMEOUT` when a wait outlasts `timeout_ms` or the transport's own limit and, from the `_nb` calls only, to `WOLFCERT_ERR_WANT_READ` and `WOLFCERT_ERR_WANT_WRITE`. There is no per-call error string; use `wolfcert_strerror` for the code and `wolfcert_last_error_message` for the detail.
 
 **TLS is optional for SCEP and mandatory for EST.** SCEP authenticates inside the pkiMessage, so a plaintext `http://` endpoint is accepted. An `https://` endpoint requires `srv.verify_server`: every SCEP entry point, one-shot and session alike, refuses to run unverified rather than completing a silent anonymous handshake, because `verify_server` is the only peer-verification switch in the transport.
 

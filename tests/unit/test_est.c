@@ -312,7 +312,8 @@ static int test_est_require_server_auth(void)
     WolfCertServerCfg srv = {
         .protocol      = WOLFCERT_PROTO_EST,
         .server_url    = "https://127.0.0.1:1/.well-known/est",
-        .verify_server = 0
+        .verify_server = 0,
+        .timeout_ms    = 30000,
     };
     WolfCertBuffer out = { 0 };
     WolfCertEstResult res = { 0 };
@@ -370,7 +371,8 @@ static int test_est_rejects_bad_encoding(void)
     WolfCertServerCfg srv = {
         .protocol      = WOLFCERT_PROTO_EST,
         .server_url    = "https://127.0.0.1:1/.well-known/est",
-        .verify_server = 1
+        .verify_server = 1,
+        .timeout_ms    = 30000,
     };
     WolfCertBuffer out;
 
@@ -393,7 +395,8 @@ static int test_est_rejects_scep_cfg(void)
             .ca_id          = "RolloverCA",
             .txid_mode      = WOLFCERT_SCEP_TXID_PUBKEY_HASH,
             .content_cipher = WOLFCERT_SCEP_CIPHER_AES256
-        }
+        },
+        .timeout_ms = 30000,
     };
     WolfCertBuffer out = { 0 };
     WolfCertEstResult res = { 0 };
@@ -539,7 +542,8 @@ static int test_est_uses_cfg_transport(void)
     WolfCertServerCfg srv = {
         .protocol      = WOLFCERT_PROTO_EST,
         .server_url    = "https://127.0.0.1:1/.well-known/est",
-        .verify_server = 1
+        .verify_server = 1,
+        .timeout_ms    = 30000,
     };
     WolfCertBuffer out = { 0 };
 
@@ -1008,7 +1012,8 @@ int main(void)
     WolfCertServerCfg srv = { .protocol = WOLFCERT_PROTO_EST, .server_url = url,
                               .trust_anchors = tls_cert,
                               .trust_anchors_len = tls_cert_len,
-                              .verify_server = 1 };
+                              .verify_server = 1,
+                              .timeout_ms    = 30000 };
 
     WolfCertBuffer ca_pem = { 0 };
     REQUIRE(wolfcert_est_get_cacerts(&srv, WOLFCERT_ENCODING_PEM,

@@ -293,6 +293,7 @@ EXTRA_DIST = \
     tests/test_certs.h \
     tests/test_static_mem.h \
     tests/http_test_util.h \
+    tests/net_test_util.h \
     tests/integration/tls_test_util.h \
     tests/integration/est_client_cases.h \
     tests/integration/cli_proto_scoping.sh

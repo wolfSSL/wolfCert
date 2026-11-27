@@ -70,6 +70,7 @@ static int enroll(void)
         .trust_anchors     = ca_cert_pem,
         .trust_anchors_len = sizeof(ca_cert_pem),
         .verify_server     = 1,
+        .timeout_ms        = 30000,
     };
     WolfCertKeyCfg key_cfg = { .type = WOLFCERT_KEY_ECC, .param = 256,
                                .dev_id = INVALID_DEVID };

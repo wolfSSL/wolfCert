@@ -998,7 +998,8 @@ static int test_zero_length_args_rejected(void)
     WolfCertScepResult r;
     WolfCertScepCaps   caps = { 0 };
     WolfCertServerCfg  srv  = { .protocol = WOLFCERT_PROTO_SCEP,
-                                .server_url = "http://127.0.0.1:1/scep" };
+                                .server_url = "http://127.0.0.1:1/scep",
+                                .timeout_ms = 30000 };
     uint8_t            blob[4] = { 1, 2, 3, 4 };
     uint8_t            txid[4] = { 'T', 'X', 'I', 'D' };
     WolfCertKey*       key = NULL;
@@ -2027,7 +2028,8 @@ static int test_getca_url(void)
 static int test_scep_builds_before_dial(void)
 {
     WolfCertServerCfg srv = { .protocol = WOLFCERT_PROTO_SCEP,
-                              .server_url = "http://127.0.0.1:1/scep" };
+                              .server_url = "http://127.0.0.1:1/scep",
+                              .timeout_ms = 30000 };
     uint8_t blob[4] = { 1, 2, 3, 4 };
     WolfCertScepResult r;
     WolfCertKey* key = NULL;
@@ -2049,7 +2051,8 @@ static int test_scep_rejects_bad_encoding(void)
 {
     static const uint8_t dummy_ca[] = { 0x30, 0x03, 0x02, 0x01, 0x00 };
     WolfCertServerCfg srv = { .protocol = WOLFCERT_PROTO_SCEP,
-                              .server_url = "http://127.0.0.1:1/scep" };
+                              .server_url = "http://127.0.0.1:1/scep",
+                              .timeout_ms = 30000 };
     WolfCertBuffer out;
 
     memset(&out, 0xA5, sizeof(out));
@@ -2082,7 +2085,8 @@ static int test_scep_rejects_est_cfg(void)
         .protocol      = WOLFCERT_PROTO_EST,
         .server_url    = "http://127.0.0.1:1/scep",
         .verify_server = 0,
-        .proto_opts.est = { .username = "alice", .password = "hunter2" }
+        .proto_opts.est = { .username = "alice", .password = "hunter2" },
+        .timeout_ms     = 30000,
     };
     WolfCertScepCaps caps = { 0 };
     WolfCertBuffer out = { 0 };

@@ -110,7 +110,8 @@ static int enroll_with_challenge(WolfCertServer* s)
                               .server_url = url,
                               .trust_anchors = g_ca,
                               .trust_anchors_len = g_ca_len,
-                              .verify_server = 1 };
+                              .verify_server = 1,
+                              .timeout_ms    = 30000 };
 
     WolfCertClient* cli = NULL;
     REQUIRE(wolfcert_client_new(&cli) == WOLFCERT_OK);
@@ -144,7 +145,8 @@ static int enroll_without_challenge(WolfCertServer* s)
                               .server_url = url,
                               .trust_anchors = g_ca,
                               .trust_anchors_len = g_ca_len,
-                              .verify_server = 1 };
+                              .verify_server = 1,
+                              .timeout_ms    = 30000 };
 
     WolfCertClient* cli = NULL;
     REQUIRE(wolfcert_client_new(&cli) == WOLFCERT_OK);
@@ -328,7 +330,8 @@ static int values_only_policy_does_not_block(WolfCertServer* s)
                               .server_url = url,
                               .trust_anchors = g_ca,
                               .trust_anchors_len = g_ca_len,
-                              .verify_server = 1 };
+                              .verify_server = 1,
+                              .timeout_ms    = 30000 };
 
     WolfCertClient* cli = NULL;
     REQUIRE(wolfcert_client_new(&cli) == WOLFCERT_OK);

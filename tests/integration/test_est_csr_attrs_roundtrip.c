@@ -120,7 +120,8 @@ int main(void)
     WolfCertServerCfg cli = { .protocol = WOLFCERT_PROTO_EST, .server_url = url,
                               .trust_anchors = tls_cert,
                               .trust_anchors_len = tls_cert_len,
-                              .verify_server = 1 };
+                              .verify_server = 1,
+                              .timeout_ms    = 30000 };
 
     WolfCertBuffer raw = { 0 };
     REQUIRE(wolfcert_est_get_csr_attrs(&cli, &raw) == WOLFCERT_OK);
@@ -194,7 +195,8 @@ int main(void)
     WolfCertServerCfg cli2 = { .protocol = WOLFCERT_PROTO_EST, .server_url = url2,
                                .trust_anchors = tls_cert,
                                .trust_anchors_len = tls_cert_len,
-                               .verify_server = 1 };
+                               .verify_server = 1,
+                               .timeout_ms    = 30000 };
 
     WolfCertBuffer empty = { 0 };
     REQUIRE(wolfcert_est_get_csr_attrs(&cli2, &empty) == WOLFCERT_OK);
@@ -218,7 +220,8 @@ int main(void)
                                  .server_url = url404,
                                  .trust_anchors = tls_cert,
                                  .trust_anchors_len = tls_cert_len,
-                                 .verify_server = 1 };
+                                 .verify_server = 1,
+                                 .timeout_ms    = 30000 };
 
     WolfCertBuffer notfound = { 0 };
     REQUIRE(wolfcert_est_get_csr_attrs(&cli404, &notfound) == WOLFCERT_OK);

@@ -77,6 +77,7 @@ struct srv_ctx {
     size_t client_ca_len;
     int tls13;      /* serve TLS 1.3 only */
     const uint8_t* alert;   /* answer the ClientHello with this level, code */
+    int stall;      /* read the request but never answer it */
 };
 
 #ifdef HAVE_SNI
@@ -218,8 +219,14 @@ static void* srv_thread(void* arg)
         while (n > 0 && strstr(req, "\r\n\r\n") == NULL);
         const char* resp = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n"
                            "Content-Length: 2\r\nConnection: close\r\n\r\nok";
-        wolfSSL_write(ssl, resp, (int)strlen(resp));
-        wolfSSL_shutdown(ssl);
+        if (sc->stall) {
+            while (wolfSSL_read(ssl, req, sizeof(req)) > 0)
+                ;
+        }
+        else {
+            wolfSSL_write(ssl, resp, (int)strlen(resp));
+            wolfSSL_shutdown(ssl);
+        }
     }
     else {
         drain(cs);
@@ -261,7 +268,8 @@ static int get_once(struct srv_ctx* sc, const uint8_t* ta, size_t ta_len,
                     int* open_rc, WolfCertHttpResponse* resp)
 {
     WolfCertHttpRequest req = { .method = "GET" };
-    WolfCertHttpSessionCfg cfg = { .verify_server = 1 };
+    WolfCertHttpSessionCfg cfg = { .verify_server = 1,
+                                   .timeout_ms = 30000 };
     WolfCertHttpSession* s = NULL;
     pthread_t tid;
     char url[128];
@@ -329,7 +337,8 @@ static int get_as(struct srv_ctx* sc, const char* host, int verify,
                   int* open_rc)
 {
     WolfCertTransport t = lo_transport();
-    WolfCertHttpSessionCfg cfg = { .verify_server = verify };
+    WolfCertHttpSessionCfg cfg = { .verify_server = verify,
+                                   .timeout_ms = 30000 };
     WolfCertHttpRequest req = { .method = "GET" };
     WolfCertHttpResponse resp = { 0 };
     WolfCertHttpSession* s = NULL;
@@ -360,11 +369,46 @@ static int get_as(struct srv_ctx* sc, const char* host, int verify,
     return rc;
 }
 
+/* A peer that completes the handshake and then never answers fails the
+ * request with TIMEOUT from the TLS read. */
+static int stalled_peer_case(struct srv_ctx* sc)
+{
+    WolfCertHttpSessionCfg cfg = { .verify_server = 1, .timeout_ms = 300 };
+    WolfCertHttpRequest req = { .method = "GET" };
+    WolfCertHttpResponse resp = { 0 };
+    WolfCertHttpSession* s = NULL;
+    pthread_t tid;
+    char url[128];
+    int rc;
+
+    sc->stall   = 1;
+    sc->version = NULL;
+    rc = start_srv(sc, &tid, url, sizeof(url));
+    if (rc == 0) {
+        cfg.base_url          = url;
+        cfg.trust_anchors     = sc->cert_pem;
+        cfg.trust_anchors_len = sc->cert_pem_len;
+        req.url               = url;
+        rc = wolfcert_http_session_open(&cfg, &s);
+        if (rc == WOLFCERT_OK)
+            rc = wolfcert_http_session_request(s, &req, &resp);
+        wolfcert_http_response_free(&resp);
+        wolfcert_http_session_close(s);
+        pthread_join(tid, NULL);
+    }
+    sc->stall = 0;
+
+    REQUIRE(rc == WOLFCERT_ERR_TIMEOUT);
+    REQUIRE(sc->version != NULL);
+    return 0;
+}
+
 /* GET from srv_thread presenting cert/key (none if NULL). */
 static int get_with_id(struct srv_ctx* sc, const uint8_t* cert,
                        size_t cert_len, const uint8_t* key, size_t key_len)
 {
-    WolfCertHttpSessionCfg cfg = { .verify_server = 1 };
+    WolfCertHttpSessionCfg cfg = { .verify_server = 1,
+                                   .timeout_ms = 30000 };
     WolfCertHttpRequest req = { .method = "GET" };
     WolfCertHttpResponse resp = { 0 };
     WolfCertHttpSession* s = NULL;
@@ -455,12 +499,14 @@ static int test_forged_alert(struct srv_ctx* sc, const struct srv_ctx* other)
     return 0;
 }
 
-/* Fails every write of 4 KiB or more with WOLFCERT_ERR_IO. */
+static int big_write_rc;
+
+/* Fails every write of 4 KiB or more with big_write_rc. */
 static int big_write(void* ctx, void* conn, const uint8_t* buf, size_t len,
                      int timeout_ms)
 {
     if (len >= 4096)
-        return WOLFCERT_ERR_IO;
+        return big_write_rc;
     return wolfcert_posix_transport.write(ctx, conn, buf, len, timeout_ms);
 }
 
@@ -468,7 +514,8 @@ static int big_write(void* ctx, void* conn, const uint8_t* buf, size_t len,
 static int post_refused(struct srv_ctx* sc)
 {
     static uint8_t body[8000];
-    WolfCertHttpSessionCfg cfg = { .verify_server = 1 };
+    WolfCertHttpSessionCfg cfg = { .verify_server = 1,
+                                   .timeout_ms = 30000 };
     WolfCertHttpRequest req = { .method = "POST" };
     WolfCertHttpResponse resp = { 0 };
     WolfCertHttpSession* s = NULL;
@@ -501,11 +548,16 @@ static int post_refused(struct srv_ctx* sc)
     return rc;
 }
 
+/* A TLS record write the transport fails with IO, or with TIMEOUT, fails
+ * the request with that code. */
 static int test_refused_write(struct srv_ctx* sc)
 {
     wolfcert_clear_error();
+    big_write_rc = WOLFCERT_ERR_IO;
     REQUIRE(post_refused(sc) == WOLFCERT_ERR_IO);
     REQUIRE(strstr(wolfcert_last_error_message(), "wolfSSL_write") != NULL);
+    big_write_rc = WOLFCERT_ERR_TIMEOUT;
+    REQUIRE(post_refused(sc) == WOLFCERT_ERR_TIMEOUT);
     return 0;
 }
 
@@ -527,7 +579,8 @@ static int test_setup_failure_detail(struct srv_ctx* sc)
     int der_len;
     int i;
 #endif
-    WolfCertHttpSessionCfg cfg = { .verify_server = 1 };
+    WolfCertHttpSessionCfg cfg = { .verify_server = 1,
+                                   .timeout_ms = 30000 };
     WolfCertHttpSession* s = NULL;
     uint16_t port;
     char url[64];
@@ -648,7 +701,8 @@ static int oom_disarm(void)
  * blocking (nb 0) or non-blocking. */
 static int handshake_oom_case(struct srv_ctx* sc, int nb)
 {
-    WolfCertHttpSessionCfg cfg = { .verify_server = 1 };
+    WolfCertHttpSessionCfg cfg = { .verify_server = 1,
+                                   .timeout_ms = 30000 };
     WolfCertHttpRequest req = { .method = "GET" };
     WolfCertHttpResponse resp = { 0 };
     WolfCertHttpSession* s = NULL;
@@ -696,7 +750,8 @@ static int handshake_oom_case(struct srv_ctx* sc, int nb)
 static int name_check_oom_case(struct srv_ctx* sc)
 {
     WolfCertTransport t = lo_transport();
-    WolfCertHttpSessionCfg cfg = { .verify_server = 1 };
+    WolfCertHttpSessionCfg cfg = { .verify_server = 1,
+                                   .timeout_ms = 30000 };
     WolfCertHttpSession* s = NULL;
     struct pollfd pfd;
     uint16_t port;
@@ -832,6 +887,7 @@ int main(void)
     REQUIRE(get_as(&dns, "ca.example.", 1, &open_rc) == WOLFCERT_OK);
     /* wolfSSL exempts localhost from its two-label rule. */
     REQUIRE(get_as(&lh, "localhost", 1, &open_rc) == WOLFCERT_OK);
+    REQUIRE(stalled_peer_case(&sc) == 0);
 
     REQUIRE(test_client_cert_rejected(&sc, &other) == 0);
     REQUIRE(test_forged_alert(&sc, &other) == 0);

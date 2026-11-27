@@ -147,6 +147,7 @@ WolfCertServerCfg srv = {
     .trust_anchors     = ca_pem,        /* PEM or DER */
     .trust_anchors_len = ca_pem_len,
     .verify_server     = 1,
+    .timeout_ms        = 30000,
 };
 WolfCertKeyCfg   kcfg = { .type = WOLFCERT_KEY_ECC, .param = 256,
                           .dev_id = INVALID_DEVID };
@@ -240,6 +241,9 @@ contract, alone or in a group comment.
   which every EST call and SCEP over `https://` refuse with
   `WOLFCERT_ERR_TLS`. Plain-HTTP SCEP ignores it and relies on the CA
   fingerprint check instead.
+- **Set `timeout_ms` above 0.** It bounds each connect, read and write
+  wait, not the whole request. A zero-initialized config leaves it at 0,
+  which every call that connects refuses with `WOLFCERT_ERR_BAD_ARG`.
 - **Set `dev_id` on every `WolfCertKeyCfg`.** `INVALID_DEVID` is software;
   a zero-initialized config names CryptoCb device 0, which keygen refuses
   with `WOLFCERT_ERR_BAD_ARG` unless such a device is registered.
@@ -285,9 +289,9 @@ contract, alone or in a group comment.
   refusal arrives before the server is authenticated and can be forged, so
   it comes back as `WOLFCERT_ERR_TLS` with the alert named in
   `wolfcert_last_error_message()`.
-  `WOLFCERT_ERR_MEMORY`: wolfSSL ran out of memory. Anything else, including
-  a connection dropped mid-handshake, is `WOLFCERT_ERR_TLS` or
-  `WOLFCERT_ERR_IO`.
+  `WOLFCERT_ERR_MEMORY`: wolfSSL ran out of memory. `WOLFCERT_ERR_TIMEOUT`:
+  the peer stalled past `timeout_ms`. Anything else, including a connection
+  dropped mid-handshake, is `WOLFCERT_ERR_TLS` or `WOLFCERT_ERR_IO`.
 - **Error detail:** `wolfcert_strerror(rc)` names the code;
   `wolfcert_last_error_message()` and `wolfcert_last_wolfssl_err()` give the
   detail behind it, per thread when wolfSSL's `THREAD_LS_T` is thread-local
